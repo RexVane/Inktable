@@ -381,7 +381,11 @@ function renderHits(result, q) {
       '<span style="font-size:11px">试试其他关键词，或检查文档是否已完成索引</span></div>';
     return;
   }
-  let h = '<div class="mode">全文搜索 · 命中 ' + result.total + ' 个文件</div>';
+  let h = '<div class="mode">全文搜索 · 命中 ' + result.total + ' 个文件' +
+          (result.routes && result.routes.vector ? ' · 含语义匹配' : '') + '</div>';
+  if (result.hedge) {
+    h += '<div class="mode" style="color:var(--warn)">⚠ ' + esc(result.hedge) + '</div>';
+  }
   h += result.files.map(function (f) {
     const snips = f.snippets.map(function (s) {
       const loc = s.page ? ('第 ' + s.page + ' 页')

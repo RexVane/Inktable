@@ -120,11 +120,44 @@ def _check_chinese_search() -> dict:
         db.close()
 
 
+def _check_embedding() -> dict:
+    """本地嵌入模型（V1.5）。
+
+    真实加载 + 编码 + 语义自检，不只 import —— 冻结环境下最易翻车的是
+    tokenizers 的原生库与模型数据文件的路径收集。
+    模型不可用不算失败（is_available=False 时纯关键词检索仍可用），
+    但**加载失败**（文件在却读不了）必须暴露。
+    """
+    try:
+        from app.index import embedding as emb
+    except ImportError as e:
+        return {"ok": False, "error": f"import failed: {e}"}
+
+    if not emb.is_available():
+        return {"ok": True, "available": False, "note": "模型未安装，语义检索关闭"}
+
+    try:
+        import numpy as np
+
+        m = emb.get_embedder()
+        v = m.encode(["汝窑天青釉", "宿舍电费充值", "汝窑瓷器的釉色"])
+        sim_related = float(v[0] @ v[2])
+        sim_unrelated = float(v[0] @ v[1])
+        if sim_related <= sim_unrelated:
+            return {"ok": False, "available": True,
+                    "error": f"语义自检失败：相关 {sim_related:.2f} ≤ 无关 {sim_unrelated:.2f}"}
+        return {"ok": True, "available": True, "model": m.model_id,
+                "dim": m.dim, "loaded": emb.is_loaded()}
+    except Exception as e:
+        return {"ok": False, "available": True, "error": str(e)}
+
+
 def collect_health() -> dict:
     checks = {
         "sqlite_vec": _check_sqlite_vec(),
         "fts5": _check_fts5(),
         "chinese_search": _check_chinese_search(),
+        "embedding": _check_embedding(),
     }
     return {
         "status": "ok" if all(c["ok"] for c in checks.values()) else "degraded",

@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import threading
 from collections.abc import Iterable, Iterator
 from pathlib import Path
@@ -52,11 +53,18 @@ DIM = 256
 # 256 条 × 平均 500 字符 ≈ 单批峰值几 MB，安全。
 BATCH = 256
 
-_MODEL_DIRS = [
-    Path(os.environ.get("INKTABLE_EMBED_MODEL", "")),
-    Path(__file__).resolve().parents[4] / "models" / "potion-zh-trimmed",
-    Path.home() / "Documents/Agent/Inktable/models/potion-zh-trimmed",
-]
+
+def _candidate_dirs() -> list[Path]:
+    dirs = [Path(os.environ.get("INKTABLE_EMBED_MODEL", ""))]
+    if getattr(sys, "frozen", False):
+        # 打包后：sidecar 在 Contents/Resources/sidecar/，模型在 Resources/models/
+        exe = Path(sys.executable).resolve()
+        dirs.append(exe.parent.parent / "models" / "potion-zh-trimmed")
+    dirs += [
+        Path(__file__).resolve().parents[4] / "models" / "potion-zh-trimmed",
+        Path.home() / "Documents/Agent/Inktable/models/potion-zh-trimmed",
+    ]
+    return dirs
 
 
 class EmbeddingUnavailable(RuntimeError):
@@ -64,7 +72,7 @@ class EmbeddingUnavailable(RuntimeError):
 
 
 def _resolve_model_dir() -> Path:
-    for p in _MODEL_DIRS:
+    for p in _candidate_dirs():
         if p and (p / "model.safetensors").is_file():
             return p
     raise EmbeddingUnavailable(

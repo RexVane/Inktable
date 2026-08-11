@@ -15,6 +15,9 @@ files:
 extraResources:
   - from: ../../services/api/dist/inktable-sidecar
     to: sidecar/inktable-sidecar
+  # 嵌入模型（V1.5）：119 MB，sidecar 冻结后从 ../models/ 相对定位
+  - from: ../../models/potion-zh-trimmed
+    to: models/potion-zh-trimmed
 
 mac:
   category: public.app-category.productivity
