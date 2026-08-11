@@ -91,3 +91,54 @@ class TestChineseSearch:
     def test_empty_query_safe(self, db):
         """空查询不能抛异常。"""
         assert _hits(db, "   ") == set()
+
+
+class TestSegmentationFailureFallback:
+    """分词切错词边界时的兜底。
+
+    统计分词器必然在未登录词（专有名词、新词）上切错，这不是能靠
+    换分词器或调参解决的问题。实测 jieba 把「汝窑天青釉」切成
+    `汝窑天 / 青釉` —— 于是：
+      · jieba 路：索引里没有「汝窑」词元 → 0 命中
+      · trigram 路：「汝窑」2 字，短于 3 字符组 → 0 命中
+    两路同时失效，一个明明在文档里的词完全搜不到。
+    """
+
+    @pytest.fixture
+    def db(self, tmp_path):
+        from app.db.database import connect, init_db
+        from app.index.search import index_chunk
+
+        conn = connect(":memory:")
+        init_db(conn)
+        conn.execute(
+            "INSERT INTO contents (id, sha256, size) VALUES (1, 'x', 1)"
+        )
+        conn.execute(
+            "INSERT INTO chunks (id, content_id, ordinal, text, text_hash, section_path) "
+            "VALUES (1, 1, 0, ?, 'h', ?)",
+            ("汝窑天青釉的玛瑙入釉说法缺乏实证。", "宋代五大名窑概述"),
+        )
+        index_chunk(conn, 1, "汝窑天青釉的玛瑙入釉说法缺乏实证。", "宋代五大名窑概述")
+        conn.commit()
+        yield conn
+        conn.close()
+
+    def test_mis_segmented_term_still_found(self, db):
+        """jieba 切错边界的词必须靠子串兜底找到。"""
+        assert 1 in _hits(db, "汝窑")
+
+    def test_mis_segmented_multi_term(self, db):
+        assert 1 in _hits(db, "汝窑 天青釉")
+
+    def test_heading_text_is_searchable(self, db):
+        """标题里的词必须能搜到。
+
+        标题文字只存在 chunks.section_path，不在 text 里。
+        漏掉它意味着用户搜自己文档的标题却没有结果 —— 最刺眼的检索盲区。
+        """
+        assert 1 in _hits(db, "五大名窑")
+
+    def test_fallback_does_not_create_false_positives(self, db):
+        """兜底不能把不存在的词也匹配上。"""
+        assert _hits(db, "完全不存在的词XYZQ") == set()

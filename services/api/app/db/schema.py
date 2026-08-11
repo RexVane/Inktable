@@ -177,12 +177,18 @@ CREATE TABLE IF NOT EXISTS settings (
 -- FTS5 默认 unicode61 对中文零命中：整段汉字被当作一个 token。
 -- jieba 主索引负责成词查询，trigram 副索引兜底子串、编号、错别字。
 -- 两个都是 content='' 的外部内容表，rowid 对齐 chunks.id。
+--
+-- contentless_delete=1 不可省：content='' 的表默认**不支持 DELETE**
+-- （SQLite 报 "cannot DELETE from contentless fts5 table"）。缺了它，
+-- 删除文件或来源时索引清不掉，搜索会命中已消失的分片 —— 库只能进不能出。
+-- 替代方案 INSERT INTO t(t,rowid,text) VALUES('delete',...) 要求提供
+-- 被删行的原文，而删除时原文往往已不存在，不可行。
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
-    text, content='', tokenize='unicode61'
+    text, content='', contentless_delete=1, tokenize='unicode61'
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts_tri USING fts5(
-    text, content='', tokenize='trigram'
+    text, content='', contentless_delete=1, tokenize='trigram'
 );
 """
 

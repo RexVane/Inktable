@@ -93,7 +93,7 @@ def index_content(conn: sqlite3.Connection, content_id: int, path: Path) -> dict
                 json.dumps(c.locator.to_dict(), ensure_ascii=False),
             ),
         )
-        index_chunk(conn, cur.lastrowid, c.text)
+        index_chunk(conn, cur.lastrowid, c.text, c.section_path)
 
     conn.execute(
         "UPDATE contents SET parse_state = 'indexed', chunk_count = ?, indexed_at = ? "

@@ -12,6 +12,7 @@ import os
 import secrets
 import sys
 import threading
+from pathlib import Path
 import time
 
 import uvicorn
@@ -58,7 +59,11 @@ def _shutdown() -> None:
         _watch.stop()
 
 # 令牌优先从 stdin 读取；缺省时自生成（开发态）
-SESSION_TOKEN = os.environ.pop("INKTABLE_TOKEN", None) or secrets.token_urlsafe(32)
+#
+# 用 get 而非 pop：pop 会把环境变量删掉，导致模块重载时读不到
+# （测试里 reload 后第二次就拿不到同一个令牌，全部请求 401）。
+# 真正的隔离靠"不把令牌写进日志与响应"，而不是靠删环境变量。
+SESSION_TOKEN = os.environ.get("INKTABLE_TOKEN") or secrets.token_urlsafe(32)
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -147,6 +152,136 @@ def enable_source(req: EnableRequest) -> dict:
             "errors": stats.errors,
         },
     }
+
+
+@app.get("/sources", dependencies=[Depends(require_token)])
+def list_sources() -> dict:
+    """已配置的来源及其实时状态（PLAN §7）。
+
+    每条附带：是否正在被监听、目录是否还存在、已收录多少文件。
+    "目录还在不在"必须实时 stat —— 外置盘拔了、微信换了路径，
+    库里的记录不会自己失效，只有查了才知道（§8.3 重定位的前提）。
+    """
+    conn = db()
+    watched = set(watch_service().status["watched"])
+    rows = conn.execute(
+        """SELECT s.id, s.name, s.path, s.kind, s.volatile, s.enabled,
+                  s.permission_ok, s.created_at,
+                  (SELECT count(*) FROM files f WHERE f.source_id = s.id) AS file_count
+           FROM sources s ORDER BY s.enabled DESC, file_count DESC"""
+    ).fetchall()
+
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["volatile"] = bool(r["volatile"])
+        d["enabled"] = bool(r["enabled"])
+        d["watching"] = r["path"] in watched
+        d["exists"] = Path(r["path"]).is_dir()
+        out.append(d)
+    return {"sources": out}
+
+
+class SourceIdRequest(BaseModel):
+    source_id: int
+
+
+@app.post("/sources/disable", dependencies=[Depends(require_token)])
+def disable_source(req: SourceIdRequest) -> dict:
+    """停用来源：摘掉监听，但**保留已收录的文件与索引**。
+
+    停用不等于删除 —— 用户可能只是暂时不想让某个目录继续进新文件，
+    已经索引好的内容不该跟着消失。想彻底清掉走 /sources/remove。
+    """
+    with _db_lock:
+        conn = db()
+        row = conn.execute(
+            "SELECT path FROM sources WHERE id = ?", (req.source_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="来源不存在")
+        conn.execute("UPDATE sources SET enabled = 0 WHERE id = ?", (req.source_id,))
+        conn.commit()
+
+    watch_service().unwatch(row["path"])
+    return {"disabled": True, "path": row["path"]}
+
+
+@app.post("/sources/remove", dependencies=[Depends(require_token)])
+def remove_source(req: SourceIdRequest) -> dict:
+    """移除来源，连带清掉它的文件记录与索引。
+
+    **绝不触碰磁盘上的原文件**（§1 约束 1）—— 只删库里的记录。
+    孤立的 content（没有任何 file 指向）一并清理，否则 chunks 会永久滞留。
+    """
+    with _db_lock:
+        conn = db()
+        row = conn.execute(
+            "SELECT path, name FROM sources WHERE id = ?", (req.source_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="来源不存在")
+
+        n_files = conn.execute(
+            "SELECT count(*) c FROM files WHERE source_id = ?", (req.source_id,)
+        ).fetchone()["c"]
+
+        conn.execute("DELETE FROM files WHERE source_id = ?", (req.source_id,))
+        # 清理不再被引用的内容及其分片（FTS5 靠触发器或显式删除同步）
+        orphans = conn.execute(
+            """SELECT id FROM contents
+               WHERE id NOT IN (SELECT content_id FROM files WHERE content_id IS NOT NULL)"""
+        ).fetchall()
+        for o in orphans:
+            _delete_content(conn, o["id"])
+        conn.execute("DELETE FROM sources WHERE id = ?", (req.source_id,))
+        conn.commit()
+
+    watch_service().unwatch(row["path"])
+    return {"removed": True, "name": row["name"],
+            "files_removed": n_files, "contents_removed": len(orphans)}
+
+
+def _delete_content(conn, content_id: int) -> None:
+    """删除内容及其全部分片，两个 FTS5 索引一并清。
+
+    FTS5 是 content='' 的外部内容表，不会自动跟随主表删除 ——
+    漏删会让搜索命中已消失的分片，点开报错。
+    """
+    ids = [r["id"] for r in conn.execute(
+        "SELECT id FROM chunks WHERE content_id = ?", (content_id,)
+    )]
+    if ids:
+        marks = ",".join("?" * len(ids))
+        conn.execute(f"DELETE FROM chunks_fts WHERE rowid IN ({marks})", ids)
+        conn.execute(f"DELETE FROM chunks_fts_tri WHERE rowid IN ({marks})", ids)
+        conn.execute("DELETE FROM chunks WHERE content_id = ?", (content_id,))
+    conn.execute("DELETE FROM contents WHERE id = ?", (content_id,))
+
+
+class AddSourceRequest(BaseModel):
+    path: str
+    name: str | None = None
+
+
+@app.post("/sources/add", dependencies=[Depends(require_token)])
+def add_source(req: AddSourceRequest) -> dict:
+    """手动添加目录（PLAN §7.6）。
+
+    自动发现覆盖不到的场景：NAS 挂载点、外置盘、自定义工作目录。
+    """
+    p = Path(req.path).expanduser()
+    if not p.is_dir():
+        raise HTTPException(status_code=400, detail="目录不存在")
+    try:
+        next(iter(os.scandir(p)), None)
+    except (PermissionError, OSError) as e:
+        raise HTTPException(status_code=403, detail=f"无法读取该目录：{e}") from e
+
+    return enable_source(EnableRequest(
+        name=req.name or p.name, path=str(p),
+        kind="manual", discovered_by="manual", volatile=False,
+    ))
 
 
 @app.get("/files", dependencies=[Depends(require_token)])
