@@ -24,6 +24,7 @@ from app.db.database import connect, init_db, quick_check
 from app.discovery.sources import discover_all
 from app.health import collect_health
 from app.index.pipeline import index_pending, indexable_exts
+from app.index.confidence import assess as assess_confidence
 from app.index.search import search as fts_search
 from app.watcher.scanner import preview_source, scan_source
 from app.watcher.service import WatchService
@@ -243,10 +244,11 @@ def remove_source(req: SourceIdRequest) -> dict:
 
 
 def _delete_content(conn, content_id: int) -> None:
-    """删除内容及其全部分片，两个 FTS5 索引一并清。
+    """删除内容及其全部分片，FTS5 两索引与向量表一并清。
 
-    FTS5 是 content='' 的外部内容表，不会自动跟随主表删除 ——
-    漏删会让搜索命中已消失的分片，点开报错。
+    FTS5 是 content='' 的外部内容表、chunks_vec 是独立虚拟表 ——
+    都不会自动跟随主表删除。漏删任何一个都会让搜索命中已消失的分片，
+    点开报错；向量表漏删还会让语义检索永远"记得"已删除的内容。
     """
     ids = [r["id"] for r in conn.execute(
         "SELECT id FROM chunks WHERE content_id = ?", (content_id,)
@@ -255,6 +257,10 @@ def _delete_content(conn, content_id: int) -> None:
         marks = ",".join("?" * len(ids))
         conn.execute(f"DELETE FROM chunks_fts WHERE rowid IN ({marks})", ids)
         conn.execute(f"DELETE FROM chunks_fts_tri WHERE rowid IN ({marks})", ids)
+        try:
+            conn.execute(f"DELETE FROM chunks_vec WHERE rowid IN ({marks})", ids)
+        except Exception:
+            pass  # 向量表不存在（扩展未加载）时忽略
         conn.execute("DELETE FROM chunks WHERE content_id = ?", (content_id,))
     conn.execute("DELETE FROM contents WHERE id = ?", (content_id,))
 
@@ -312,8 +318,8 @@ class SearchRequest(BaseModel):
 def search_content(req: SearchRequest) -> dict:
     """全文检索 —— 搜内容而非文件名（PLAN §12.3）。
 
-    双路召回后用 RRF 融合（§12.3b ④）。这里是 V1.0 的词法双路；
-    向量路在 V1.5 接入后并入同一个融合函数，公式不变。
+    四路召回后 RRF 融合（§12.3b ④）：jieba / trigram / 子串兜底 / 向量。
+    向量路不可用时自动省略，其余三路照常 —— 语义检索是增强而非依赖。
 
     结果按文件聚合：用户要看的是"哪些文件里有"，
     而不是一堆散落的分片。
@@ -328,8 +334,13 @@ def search_content(req: SearchRequest) -> dict:
         for rank, (chunk_id, _score) in enumerate(hits):
             fused[chunk_id] = fused.get(chunk_id, 0.0) + 1.0 / (K + rank + 1)
 
+    # 向量路的最高余弦是唯一有绝对含义的信号，用于置信度判定（§12.3c）
+    top_cosine = routes["vector"][0][1] if routes.get("vector") else 0.0
+    conf = assess_confidence(conn, req.q, top_cosine)
+
     if not fused:
-        return {"query": req.q, "total": 0, "files": []}
+        return {"query": req.q, "total": 0, "files": [],
+                "confidence": conf.level, "hedge": conf.hedge}
 
     top = sorted(fused.items(), key=lambda kv: kv[1], reverse=True)[: req.limit * 3]
     ids = [cid for cid, _ in top]
@@ -372,7 +383,16 @@ def search_content(req: SearchRequest) -> dict:
     for f in files:
         f["snippets"].sort(key=lambda s: s["score"], reverse=True)
 
-    return {"query": req.q, "total": len(files), "files": files}
+    return {
+        "query": req.q,
+        "total": len(files),
+        "files": files,
+        # 置信度与提示语：低置信时前端显示一行说明，但**不阻断结果**
+        # （§12.3c —— 硬拒答会误伤真实问题，代价比多给结果高）
+        "confidence": conf.level,
+        "hedge": conf.hedge,
+        "routes": {k: len(v) for k, v in routes.items() if v},
+    }
 
 
 class IndexRequest(BaseModel):

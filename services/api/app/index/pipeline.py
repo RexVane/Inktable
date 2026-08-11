@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import time
 from pathlib import Path
@@ -66,7 +67,8 @@ def index_content(conn: sqlite3.Connection, content_id: int, path: Path) -> dict
         )
         return {"state": "no_text", "chunks": 0, "warnings": doc.warnings}
 
-    # 重新索引前先清掉旧片（幂等，支持增量重建）
+    # 重新索引前先清掉旧片（幂等，支持增量重建）。
+    # FTS5 两索引与向量表都不随主表删除，漏一个就留悬挂条目。
     old = conn.execute(
         "SELECT id FROM chunks WHERE content_id = ?", (content_id,)
     ).fetchall()
@@ -75,8 +77,13 @@ def index_content(conn: sqlite3.Connection, content_id: int, path: Path) -> dict
         marks = ",".join("?" * len(ids))
         conn.execute(f"DELETE FROM chunks_fts WHERE rowid IN ({marks})", ids)
         conn.execute(f"DELETE FROM chunks_fts_tri WHERE rowid IN ({marks})", ids)
+        try:
+            conn.execute(f"DELETE FROM chunks_vec WHERE rowid IN ({marks})", ids)
+        except sqlite3.Error:
+            pass  # 向量表不存在（扩展未加载）
         conn.execute("DELETE FROM chunks WHERE content_id = ?", (content_id,))
 
+    inserted: list[tuple[int, object]] = []  # (chunk_id, Chunk) 供向量编码
     for c in chunks:
         cur = conn.execute(
             "INSERT INTO chunks (content_id, layer, page, section_path, ordinal, "
@@ -94,13 +101,42 @@ def index_content(conn: sqlite3.Connection, content_id: int, path: Path) -> dict
             ),
         )
         index_chunk(conn, cur.lastrowid, c.text, c.section_path)
+        inserted.append((cur.lastrowid, c))
+
+    # 向量与 chunks/FTS5 同事务写入（§12.2 ④ 三表原子）。
+    # 模型不可用时静默跳过 —— 语义检索是增强而非依赖（§16.1a 降级链）。
+    embedded = _embed_chunks(conn, inserted)
 
     conn.execute(
-        "UPDATE contents SET parse_state = 'indexed', chunk_count = ?, indexed_at = ? "
-        "WHERE id = ?",
-        (len(chunks), time.time(), content_id),
+        "UPDATE contents SET parse_state = 'indexed', chunk_count = ?, "
+        "embedding_model_id = ?, indexed_at = ? WHERE id = ?",
+        (len(chunks), embedded, time.time(), content_id),
     )
     return {"state": "indexed", "chunks": len(chunks), "warnings": doc.warnings}
+
+
+def _embed_chunks(conn, inserted: list[tuple[int, object]]) -> str | None:
+    """给刚入库的分片编码向量。返回模型 id（未编码则 None）。
+
+    编码在这里内联做而不是丢队列：model2vec 约 9000 片/秒，
+    单文档几十片的开销是毫秒级，不值得为它引入异步复杂度。
+    """
+    if not inserted:
+        return None
+    try:
+        from app.index import embedding as emb
+        from app.index import vector as vec
+
+        if not emb.is_available():
+            return None
+        m = emb.get_embedder()
+        texts = [emb.embed_text_for(c.text, c.section_path) for _, c in inserted]
+        vectors = m.encode(texts)
+        vec.upsert(conn, [(cid, v) for (cid, _), v in zip(inserted, vectors)])
+        return m.model_id
+    except Exception:  # noqa: BLE001 - 向量失败绝不拖垮索引主流程
+        logging.getLogger("inktable.pipeline").exception("向量编码失败，已跳过")
+        return None
 
 
 def index_pending(conn: sqlite3.Connection, limit: int = 500, progress=None) -> dict:

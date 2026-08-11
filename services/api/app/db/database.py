@@ -50,14 +50,53 @@ def connect(path: Path | str | None = None) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA synchronous = NORMAL")
+    _load_vec_extension(conn)
     return conn
+
+
+def _load_vec_extension(conn: sqlite3.Connection) -> bool:
+    """加载 sqlite-vec 扩展。
+
+    **必须对每个新连接都做一次** —— SQLite 扩展是连接级的，不随数据库
+    文件持久化。漏掉会静默失效：`chunks_vec` 表看起来是空的（count 返回 0），
+    向量检索路直接跳过，整个语义检索悄悄退化成纯关键词，
+    而日志里什么都不会报。所以放在 connect() 里统一处理，
+    不指望每个调用方自己记得。
+    """
+    try:
+        import sqlite_vec
+
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
+        return True
+    except Exception:
+        # 扩展不可用不是致命错误：纯关键词检索仍然可用（§16.1a 降级链）
+        return False
 
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    _init_vec_table(conn)
     for k, v in DEFAULT_SETTINGS.items():
         conn.execute("INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)", (k, v))
     conn.commit()
+
+
+def _init_vec_table(conn: sqlite3.Connection) -> None:
+    """建向量表。放在这里而不是 SCHEMA 里，因为它依赖扩展是否加载成功。
+
+    扩展不可用时静默跳过 —— 纯关键词检索仍然可用（§16.1a 降级链）。
+    """
+    from app.index.embedding import DIM
+
+    try:
+        conn.execute(
+            f"CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec "
+            f"USING vec0(embedding float[{DIM}])"
+        )
+    except sqlite3.Error:
+        pass
 
 
 def quick_check(conn: sqlite3.Connection) -> bool:

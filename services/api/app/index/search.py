@@ -54,19 +54,22 @@ def quote_fts_query(text: str) -> str:
 def build_fts_query(query: str, *, segment: bool) -> str:
     """把用户输入编译成 FTS5 表达式。
 
-    **每个词各自成短语，词之间用 AND** —— 这是关键。
+    **每个词各自成短语，词之间用 AND**。
 
-    曾经的写法是把整串包成一个短语，结果搜「庞贝蠕虫 共生菌」返回 0 条：
-    短语要求所有词元在原文里连续出现，而这两个词中间隔着别的字。
-    单独搜「庞贝」「蠕虫」却都能命中 —— 典型的"分开能搜、合起来搜不到"。
+    两轮实测教训：
 
-    现在：
-        庞贝蠕虫 共生菌
-      → "庞贝 蠕虫" AND "共生 共生菌"
-        └ 词内相邻（保完整性）  └ 词间不限位置（AND）
+    ① 曾把整串包成一个短语 → 搜「庞贝蠕虫 共生菌」返回 0 条：
+       短语要求所有词元在原文里连续出现，而这两个词中间隔着别的字。
+       单独搜任一个都能命中 —— 典型的"分开能搜、合起来搜不到"。
 
-    segment=True 走 jieba 主索引（词元需与索引侧对齐），
-    False 走 trigram 副索引（直接用原文，兜底编号与未登录词）。
+    ② 改成按空格切词后仍有同样问题，只是场景更隐蔽：
+       **中文句子没有空格**。「银行家算法用到哪些数据结构」被当成一个词，
+       要求这 12 个字连续出现 → 0 条。而用户输入的恰恰就是整句自然语言。
+       所以对超过 CJK_SPLIT_LEN 的中文串必须先分词再 AND。
+
+    分词后的词元用 OR 而非 AND：自然语言问句里含大量非检索词
+    （「哪些」「怎么」「为什么」），全部 AND 会把结果清零。
+    OR + BM25 排序天然让命中词多的片排前面。
     """
     terms = [t for t in query.split() if t.strip()]
     if not terms:
@@ -74,12 +77,56 @@ def build_fts_query(query: str, *, segment: bool) -> str:
 
     parts = []
     for term in terms:
+        # 长中文串先切成词，否则整串会被当作一个必须连续出现的短语
+        if _needs_split(term):
+            words = [w for w in segment_for_query(term).split() if _is_meaningful(w)]
+            if words:
+                # 同一个原始 term 内部用 OR：问句里的虚词不该成为必要条件
+                inner = " OR ".join(quote_fts_query(w) for w in words)
+                parts.append(f"({inner})")
+                continue
+
         piece = segment_for_query(term) if segment else term
         piece = piece.strip()
         if piece:
             parts.append(quote_fts_query(piece))
 
     return " AND ".join(parts)
+
+
+# 超过这个长度的连续中文串视为"句子"，需要先分词
+CJK_SPLIT_LEN = 6
+
+# 中文停用词：出现在几乎所有文档里，作为检索条件毫无区分度，
+# 还会把 OR 的结果集撑到全库。
+_STOPWORDS = {
+    "的", "了", "和", "是", "在", "有", "为", "与", "及", "或", "也", "都",
+    "这", "那", "哪", "些", "哪些", "什么", "怎么", "怎样", "如何", "为什么",
+    "可以", "能否", "是否", "多少", "几个", "一个", "我们", "你们", "他们",
+    "对于", "关于", "根据", "通过", "由于", "因为", "所以", "但是", "而且",
+    "需要", "应该", "可能", "已经", "还是", "以及", "其中", "同时",
+}
+
+
+def _needs_split(term: str) -> bool:
+    """判断是否是需要分词的中文长串。"""
+    if len(term) <= CJK_SPLIT_LEN:
+        return False
+    cjk = sum(1 for ch in term if "一" <= ch <= "鿿")
+    return cjk >= CJK_SPLIT_LEN
+
+
+def _is_meaningful(word: str) -> bool:
+    """过滤停用词与单字虚词。
+
+    单个汉字通常区分度太低（且 trigram 路已覆盖子串匹配），
+    但保留单个字母数字（如型号里的 "Ni"、"8M"）。
+    """
+    if word in _STOPWORDS:
+        return False
+    if len(word) == 1 and "一" <= word <= "鿿":
+        return False
+    return bool(word.strip())
 
 
 # FTS5 建表语句的唯一来源是 app/db/schema.py（init_db 执行它）。
@@ -112,31 +159,35 @@ def index_chunk(conn, chunk_id: int, text: str, section_path: str = "") -> None:
 
 
 def search(conn, query: str, limit: int = 100) -> dict[str, list[tuple[int, float]]]:
-    """三路检索，返回各路的 (chunk_id, 分数) 排名列表。
+    """多路检索，返回各路的 (chunk_id, 分数) 排名列表。
 
-    不在这里融合 —— 融合是 §12.3b ④ 两级 RRF 的职责，
-    它还要合并向量路的结果。
+    不在这里融合 —— 融合是 §12.3b ④ 两级 RRF 的职责。
 
-    **为什么需要第三路（LIKE 子串）**：
+    四路各有不可替代的职责：
 
-    前两路都会在同一种情况下失效 —— 统计分词器切错专有名词的边界。
-    实测 jieba 把「汝窑天青釉」切成 `汝窑天 / 青釉`：
-      · jieba 路：索引里没有「汝窑」这个词元 → 0 命中
-      · trigram 路：「汝窑」只有 2 字，短于 3 字符组 → 0 命中
-    结果是一个明明在文档里的词完全搜不到。
+      jieba    中文成词查询，主力
+      trigram  编号、错别字、子串（「HT-2024-0023」靠它）
+      substr   前两路都失效时兜底（分词切错词边界，见下）
+      vector   语义改写（查询词与原文完全不重合时唯一可行的路）
 
-    这不是换分词器能解决的（任何统计分词都会在未登录词上切错），
-    也不是调参数能解决的（trigram 的 3 字符是其定义）。
-    只能靠子串匹配兜底：慢，但保证不漏。
+    **为什么词法三路仍不够**：
+    统计分词器必然在未登录词上切错边界。实测 jieba 把「汝窑天青釉」
+    切成 `汝窑天 / 青釉`，于是 jieba 路无「汝窑」词元、trigram 路因
+    2 字短于 3 字符组也不命中。substr 能兜住这个，但它只做字面匹配 ——
+    用户问「怎么避免进程互相等待资源卡死」而原文写「死锁」时，
+    四路里只有 vector 能命中。
 
-    LIKE 没有索引、是全表扫描，所以放在最后且只在前两路结果不足时才跑 ——
-    正常查询走不到这里，代价为零。
+    向量路不可用（模型未装、sqlite-vec 加载失败）时自动省略，
+    其余三路照常工作 —— 语义检索是增强而非依赖。
     """
     jieba_q = build_fts_query(query, segment=True)
     raw_q = build_fts_query(query, segment=False)
 
+    out: dict[str, list[tuple[int, float]]] = {
+        "jieba": [], "trigram": [], "substr": [], "vector": [],
+    }
     if not jieba_q and not raw_q:
-        return {"jieba": [], "trigram": [], "substr": []}
+        return out
 
     def run(table: str, q: str, k: int) -> list[tuple[int, float]]:
         if not q:
@@ -153,11 +204,8 @@ def search(conn, query: str, limit: int = 100) -> dict[str, list[tuple[int, floa
         except sqlite3.Error:
             return []
 
-    out = {
-        "jieba": run("chunks_fts", jieba_q, limit),
-        "trigram": run("chunks_fts_tri", raw_q, limit),
-        "substr": [],
-    }
+    out["jieba"] = run("chunks_fts", jieba_q, limit)
+    out["trigram"] = run("chunks_fts_tri", raw_q, limit)
 
     # 前两路结果太少时补子串兜底。
     #
@@ -168,25 +216,63 @@ def search(conn, query: str, limit: int = 100) -> dict[str, list[tuple[int, floa
     if found < min(3, limit):
         out["substr"] = _substring_search(conn, query, limit)
 
+    out["vector"] = _vector_search(conn, query, limit)
     return out
 
 
+def _vector_search(conn, query: str, limit: int) -> list[tuple[int, float]]:
+    """语义检索路。模型或扩展不可用时静默返回空 —— 不能让整次检索失败。"""
+    try:
+        from app.index import embedding as emb
+        from app.index import vector as vec
+
+        if not emb.is_available():
+            return []
+        if vec.count(conn) == 0:
+            return []
+        qv = emb.get_embedder().encode_one(query)
+        return vec.search(conn, qv, limit=limit)
+    except Exception as e:  # noqa: BLE001 - 任何异常都只降级，不冒泡
+        import logging
+        logging.getLogger("inktable.search").debug("向量路跳过：%s", e)
+        return []
+
+
 def _substring_search(conn, query: str, limit: int) -> list[tuple[int, float]]:
-    """LIKE 子串兜底。所有词都必须出现（AND 语义，与 FTS5 路一致）。"""
-    terms = [t for t in query.split() if t.strip()]
+    """LIKE 子串兜底。
+
+    长中文句子同样要先分词 —— `LIKE '%银行家算法用到哪些数据结构%'`
+    永远不会命中。分词后按"命中词数最多"排序，近似相关性。
+    """
+    raw_terms = [t for t in query.split() if t.strip()]
+    if not raw_terms:
+        return []
+
+    terms: list[str] = []
+    for t in raw_terms:
+        if _needs_split(t):
+            terms += [w for w in segment_for_query(t).split() if _is_meaningful(w)]
+        else:
+            terms.append(t)
+    terms = list(dict.fromkeys(terms))[:8]   # 去重并限长，避免 SQL 过长
     if not terms:
         return []
 
-    # 与 index_chunk 保持一致：标题路径也参与匹配
-    where = " AND ".join(["(text LIKE ? OR section_path LIKE ?)"] * len(terms))
-    params: list[str] = []
+    # 按命中词数排序：全 AND 会让长问句清零，纯 OR 又没有相关性区分
+    score_expr = " + ".join(
+        ["(CASE WHEN text LIKE ? OR section_path LIKE ? THEN 1 ELSE 0 END)"] * len(terms)
+    )
+    where = " OR ".join(["(text LIKE ? OR section_path LIKE ?)"] * len(terms))
+    like = []
     for t in terms:
-        params += [f"%{t}%", f"%{t}%"]
+        like += [f"%{t}%", f"%{t}%"]
+
     try:
         rows = conn.execute(
-            f"SELECT id FROM chunks WHERE {where} LIMIT ?", [*params, limit]
+            f"SELECT id, ({score_expr}) AS hits FROM chunks "
+            f"WHERE {where} ORDER BY hits DESC LIMIT ?",
+            [*like, *like, limit],
         ).fetchall()
     except sqlite3.Error:
         return []
-    # 无相关性分数可用，按主键顺序给递减分，让 RRF 至少有个稳定排名
-    return [(r[0], 1.0 / (i + 1)) for i, r in enumerate(rows)]
+    return [(r["id"], float(r["hits"])) for r in rows if r["hits"] > 0]
