@@ -9,7 +9,7 @@
  * 退出路径必须收敛：主进程崩溃不能留下孤儿 Python 进程占着端口。
  */
 
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
 const { spawn } = require('child_process');
 const crypto = require('crypto');
 const path = require('path');
@@ -122,6 +122,17 @@ function createWindow() {
 ipcMain.handle('sidecar:info', () => sidecarInfo);
 ipcMain.handle('shell:reveal', (_e, filePath) => {
   if (typeof filePath === 'string' && filePath) shell.showItemInFolder(filePath);
+});
+
+// 目录选择走原生对话框：这是 macOS 上让用户授予目录访问权的正规途径，
+// 用户手动选过的目录，沙盒会记住授权（§6.4 TCC）。
+ipcMain.handle('dialog:pickDirectory', async () => {
+  const r = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory', 'createDirectory'],
+    title: '选择要索引的目录',
+    buttonLabel: '添加',
+  });
+  return r.canceled || !r.filePaths.length ? null : r.filePaths[0];
 });
 
 app.whenReady().then(async () => {

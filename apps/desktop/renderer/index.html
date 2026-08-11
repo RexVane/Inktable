@@ -152,6 +152,61 @@
     max-width: 70vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  /* 设置面板 */
+  .gear {
+    -webkit-app-region: no-drag; cursor: pointer; flex-shrink: 0;
+    color: var(--text-secondary); font-size: 14px; padding: 2px 4px;
+    border-radius: 4px; line-height: 1;
+  }
+  .gear:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+  .sheet {
+    position: fixed; inset: 0; background: rgba(0,0,0,.28);
+    display: none; align-items: center; justify-content: center; z-index: 30;
+  }
+  .sheet.show { display: flex; }
+  .sheet-box {
+    background: var(--bg-app); border-radius: 10px; width: 560px;
+    max-width: 92vw; max-height: 78vh; display: flex; flex-direction: column;
+    box-shadow: 0 12px 48px rgba(0,0,0,.3); overflow: hidden;
+  }
+  .sheet-head {
+    padding: 14px 18px 10px; display: flex; align-items: baseline; gap: 10px;
+    border-bottom: 1px solid var(--separator);
+  }
+  .sheet-head h2 { font-size: 15px; margin: 0; font-weight: 600; }
+  .sheet-head .sub { color: var(--text-secondary); font-size: 11px; }
+  .sheet-body { flex: 1; overflow-y: auto; padding: 4px 18px 14px; }
+  .sheet-foot {
+    padding: 12px 18px; border-top: 1px solid var(--separator);
+    display: flex; gap: 8px; align-items: center;
+  }
+  .srow {
+    display: flex; align-items: center; gap: 10px; padding: 11px 0;
+    border-bottom: 1px solid var(--separator);
+  }
+  .srow:last-child { border-bottom: none; }
+  .srow .info { flex: 1; min-width: 0; }
+  .srow .nm { font-weight: 500; display: flex; align-items: center; gap: 6px; }
+  .srow .pth {
+    color: var(--text-secondary); font-size: 11px; margin-top: 2px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .srow .acts { display: flex; gap: 6px; flex-shrink: 0; }
+  .mini {
+    font: inherit; font-size: 11px; padding: 3px 9px; border-radius: 5px;
+    border: 1px solid var(--separator); background: transparent;
+    color: var(--text-secondary); cursor: pointer;
+  }
+  .mini:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .mini.danger:hover { background: rgba(255,59,48,.12); color: #ff3b30; border-color: #ff3b30; }
+  .tag {
+    font-size: 10px; padding: 1px 5px; border-radius: 3px;
+    background: var(--bg-hover); color: var(--text-secondary);
+  }
+  .tag.live { background: rgba(29,185,84,.16); color: var(--accent); }
+  .tag.gone { background: rgba(255,59,48,.14); color: #ff3b30; }
 </style>
 </head>
 <body>
@@ -164,10 +219,27 @@
       <input class="search" id="q" placeholder="搜索文件内容或文件名…" />
       <span class="count" id="count"></span>
       <span class="live off" id="live" title=""><span class="dot"></span><span id="liveText"></span></span>
+      <span class="gear" id="gear" title="设置">⚙</span>
     </div>
     <div class="rows" id="rows"><div class="empty">加载中…</div></div>
   </div>
   <div class="toast" id="toast"></div>
+
+  <div class="sheet" id="sheet">
+    <div class="sheet-box">
+      <div class="sheet-head">
+        <h2>文件来源</h2>
+        <span class="sub" id="sheetSub"></span>
+      </div>
+      <div class="sheet-body" id="sheetBody"></div>
+      <div class="sheet-foot">
+        <button class="mini" id="btnAdd">添加目录…</button>
+        <button class="mini" id="btnRescan">重新发现</button>
+        <span class="hint" id="sheetHint" style="margin-left:auto"></span>
+        <button class="mini" id="btnClose">完成</button>
+      </div>
+    </div>
+  </div>
 
   <div class="setup" id="setup" style="display:none">
     <div class="drag"></div>
@@ -479,6 +551,154 @@ function startWatchPolling() {
   pollWatch();
   livePollTimer = setInterval(pollWatch, 3000);
 }
+
+/* ---------- 设置：来源管理 ---------- */
+function sheetOpen(on) {
+  document.getElementById('sheet').classList.toggle('show', on);
+  if (on) renderSources();
+}
+
+async function renderSources() {
+  const body = document.getElementById('sheetBody');
+  body.innerHTML = '<div class="empty" style="padding:30px">加载中…</div>';
+  let list;
+  try {
+    list = (await api('/sources')).sources;
+  } catch (e) {
+    body.innerHTML = '<div class="empty" style="padding:30px">加载失败：' + esc(e.message) + '</div>';
+    return;
+  }
+
+  const on = list.filter(function (s) { return s.enabled; }).length;
+  document.getElementById('sheetSub').textContent =
+    list.length + ' 个来源 · ' + on + ' 个正在监听';
+
+  if (!list.length) {
+    body.innerHTML = '<div class="empty" style="padding:30px">还没有来源<br>' +
+      '<span style="font-size:11px">点「重新发现」自动查找，或手动添加目录</span></div>';
+    return;
+  }
+
+  body.innerHTML = list.map(function (s) {
+    const tags = [];
+    if (!s.exists) tags.push('<span class="tag gone">目录不存在</span>');
+    else if (s.watching) tags.push('<span class="tag live">监听中</span>');
+    else if (s.enabled) tags.push('<span class="tag">已启用</span>');
+    else tags.push('<span class="tag">已停用</span>');
+    if (s.volatile) tags.push('<span class="badge">易失</span>');
+
+    const acts = s.enabled
+      ? '<button class="mini" data-act="disable" data-id="' + s.id + '">停用</button>'
+      : '<button class="mini" data-act="enable" data-id="' + s.id +
+        '" data-path="' + encodeURIComponent(s.path) + '" data-name="' + esc(s.name) + '">启用</button>';
+
+    return '<div class="srow">' +
+      '<div class="info">' +
+        '<div class="nm">' + esc(s.name) + tags.join('') + '</div>' +
+        '<div class="pth">' + esc(s.path.replace(new RegExp('^/Users/[^/]+'), '~')) +
+          ' · ' + s.file_count + ' 个文件</div>' +
+      '</div>' +
+      '<div class="acts">' + acts +
+        '<button class="mini danger" data-act="remove" data-id="' + s.id +
+        '" data-name="' + esc(s.name) + '">移除</button>' +
+      '</div></div>';
+  }).join('');
+
+  body.querySelectorAll('button[data-act]').forEach(function (b) {
+    b.onclick = function () { onSourceAction(b); };
+  });
+}
+
+async function onSourceAction(btn) {
+  const act = btn.dataset.act;
+  const hint = document.getElementById('sheetHint');
+
+  if (act === 'remove') {
+    // 破坏性操作要说清后果：会清索引，但不会动磁盘上的文件
+    const ok = confirm('移除「' + btn.dataset.name + '」？\n\n' +
+      '将清除它的文件记录与搜索索引。\n磁盘上的原文件不会被删除。');
+    if (!ok) return;
+  }
+
+  btn.disabled = true;
+  hint.textContent = '处理中…';
+  try {
+    if (act === 'disable') {
+      await api('/sources/disable', { method: 'POST', body: JSON.stringify({ source_id: +btn.dataset.id }) });
+    } else if (act === 'remove') {
+      await api('/sources/remove', { method: 'POST', body: JSON.stringify({ source_id: +btn.dataset.id }) });
+    } else if (act === 'enable') {
+      await api('/sources/enable', { method: 'POST', body: JSON.stringify({
+        name: btn.dataset.name, path: decodeURIComponent(btn.dataset.path) }) });
+      runIndexing();
+    }
+    hint.textContent = '';
+    await renderSources();
+    stats = await api('/stats');
+    renderNav();
+    await load(document.getElementById('q').value.trim());
+    pollWatch();
+  } catch (e) {
+    hint.textContent = '失败：' + e.message;
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('gear').onclick = function () { sheetOpen(true); };
+document.getElementById('btnClose').onclick = function () { sheetOpen(false); };
+document.getElementById('sheet').onclick = function (e) {
+  if (e.target.id === 'sheet') sheetOpen(false);   // 点遮罩关闭
+};
+
+document.getElementById('btnAdd').onclick = async function () {
+  const dir = await window.inktable.pickDirectory();
+  if (!dir) return;
+  const hint = document.getElementById('sheetHint');
+  hint.textContent = '正在扫描…';
+  try {
+    await api('/sources/add', { method: 'POST', body: JSON.stringify({ path: dir }) });
+    hint.textContent = '';
+    await renderSources();
+    stats = await api('/stats');
+    renderNav();
+    await load('');
+    runIndexing();
+    pollWatch();
+  } catch (e) {
+    hint.textContent = '添加失败：' + e.message;
+  }
+};
+
+document.getElementById('btnRescan').onclick = async function () {
+  const hint = document.getElementById('sheetHint');
+  hint.textContent = '正在查找…';
+  try {
+    const found = (await api('/sources/discover', { method: 'POST' })).sources;
+    const known = new Set((await api('/sources')).sources.map(function (s) { return s.path; }));
+    const fresh = found.filter(function (s) { return !known.has(s.path) && s.doc_count > 0; });
+    if (!fresh.length) {
+      hint.textContent = '没有发现新来源';
+      return;
+    }
+    // 发现结果不自动启用 —— §1 约束 4：用户没同意的目录不监听
+    sources = fresh;
+    sheetOpen(false);
+    document.getElementById('setup').style.display = 'flex';
+    renderSetup();
+  } catch (e) {
+    hint.textContent = '查找失败：' + e.message;
+  }
+};
+
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape') sheetOpen(false);
+  if ((e.metaKey || e.ctrlKey) && e.key === ',') { e.preventDefault(); sheetOpen(true); }
+  if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+    e.preventDefault();
+    document.getElementById('q').focus();
+    document.getElementById('q').select();
+  }
+});
 
 async function boot() {
   stats = await api('/stats');
