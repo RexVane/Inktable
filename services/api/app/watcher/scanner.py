@@ -35,22 +35,39 @@ PACKAGE_EXTS = {
 }
 
 # 解析正文 + 建全文索引
+#
+# 只放**用户会用自然语言去搜内容**的格式。源码/配置不在此列 —— 见下方 CODE_EXTS。
 FULLTEXT_EXTS = {
-    ".pdf", ".docx", ".md", ".markdown", ".txt",
-    # 纯文本类：解析成本近乎为零，且用户确实会在里面搜东西
-    ".html", ".htm", ".json", ".xml", ".yaml", ".yml", ".csv",
-    ".log", ".sql", ".sh", ".py", ".js", ".ts", ".java", ".c", ".cpp", ".h",
+    ".pdf", ".docx", ".md", ".markdown", ".txt", ".rtf",
+}
+
+# 源码与配置：**只登记元数据，不解析正文**
+#
+# 实测（本机 ~/Documents）：源码类占入库文件的 59%，把它们降级后
+# 需要解析正文的文件减少 78%，而用户并无实际损失 ——
+# 文件仍可按文件名搜到，而搜代码内容本就该用 ripgrep / IDE 全局搜索。
+#
+# 注意 .md **不在此列**：它既是文档格式又常驻代码库（README、设计文档），
+# 按扩展名归入文档类是正确的 —— 用路径判断"是否在代码目录里"会误杀
+# ~/Documents/code/*/PLAN.md 这类真文档。
+CODE_EXTS = {
+    ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".c", ".cpp", ".cc", ".h", ".hpp",
+    ".go", ".rs", ".rb", ".php", ".swift", ".kt", ".scala", ".m", ".mm",
+    ".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat",
+    ".sql", ".json", ".xml", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
+    ".html", ".htm", ".css", ".scss", ".less", ".vue", ".svelte",
+    ".lock", ".gradle", ".cmake", ".mk",
 }
 
 # 只登记元数据，不解析正文
 METADATA_EXTS = {
-    ".xlsx", ".xls", ".pptx", ".ppt", ".doc", ".rtf",
-    ".png", ".jpg", ".jpeg", ".heic", ".gif", ".webp", ".svg",
-    ".mp4", ".mov", ".mp3", ".m4a", ".wav",
-    ".zip", ".rar", ".7z", ".dmg", ".pkg", ".img", ".iso",
-    ".pages", ".numbers", ".key", ".dwg", ".psd", ".ai", ".sketch",
-    ".epub", ".mobi", ".apk", ".ipa",
-}
+    ".xlsx", ".xls", ".pptx", ".ppt", ".doc", ".csv",
+    ".png", ".jpg", ".jpeg", ".heic", ".gif", ".webp", ".svg", ".bmp", ".tiff",
+    ".mp4", ".mov", ".avi", ".mkv", ".mp3", ".m4a", ".wav", ".flac",
+    ".zip", ".rar", ".7z", ".tar", ".gz", ".dmg", ".pkg", ".img", ".iso",
+    ".pages", ".numbers", ".key", ".dwg", ".psd", ".ai", ".sketch", ".fig",
+    ".epub", ".mobi", ".apk", ".ipa", ".log",
+} | CODE_EXTS
 
 MAX_FULLTEXT_SIZE = 200 * 1024 * 1024   # 超过只登记元数据（§7.7 ④）
 MAX_DEPTH = 12
