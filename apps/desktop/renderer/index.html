@@ -162,6 +162,36 @@
   }
   .gear:hover { background: var(--bg-hover); color: var(--text-primary); }
 
+  /* AI 答案卡 */
+  .ans { padding: 14px 16px; border-bottom: 1px solid var(--separator); }
+  .ans .atext { line-height: 1.7; -webkit-user-select: text; }
+  .ans .cite-chip {
+    display: inline-block; font-size: 10px; color: var(--accent);
+    background: var(--bg-selected); border-radius: 3px; padding: 0 4px;
+    margin: 0 1px; vertical-align: 1px; cursor: pointer;
+  }
+  .ans .ahedge { color: var(--warn); font-size: 11px; margin-bottom: 8px; }
+  .ans .refs { margin-top: 10px; border-top: 1px solid var(--separator); padding-top: 8px; }
+  .ans .ref { display: flex; gap: 8px; padding: 5px 0; font-size: 12px; cursor: default; }
+  .ans .ref:hover { background: var(--bg-hover); }
+  .ans .ref .rtag { color: var(--accent); font-weight: 600; flex-shrink: 0; }
+  .ans .ref .rname { font-weight: 500; flex-shrink: 0; max-width: 200px;
+                     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ans .ref .rsnip { color: var(--text-secondary); overflow: hidden;
+                     text-overflow: ellipsis; white-space: nowrap; }
+  .askbar {
+    padding: 8px 16px; border-bottom: 1px solid var(--separator);
+    color: var(--accent); font-size: 12px; cursor: pointer;
+  }
+  .askbar:hover { background: var(--bg-hover); }
+  .llm-form { padding: 12px 0 4px; border-top: 1px solid var(--separator); margin-top: 8px; }
+  .llm-form .lf-title { font-weight: 600; font-size: 12px; margin-bottom: 8px; }
+  .llm-form input {
+    width: 100%; font: inherit; font-size: 12px; margin-bottom: 6px;
+    background: var(--bg-hover); border: 1px solid var(--separator);
+    border-radius: 5px; padding: 5px 8px; color: var(--text-primary); outline: none;
+  }
+
   /* 右键归类菜单 */
   .ctx {
     position: fixed; z-index: 40; min-width: 150px; max-height: 320px; overflow-y: auto;
@@ -282,6 +312,9 @@
 let sources = [], files = [], activeSource = null, stats = null;
 let categories = { tree: [], unclassified: 0 };
 let activeCategory = null;   // 数字=分类id, 'none'=未分类, null=不过滤
+let books = [];
+let activeBook = null;
+let llmInfo = { configured: false };
 
 async function api(path, opts = {}) {
   const info = await window.inktable.getSidecarInfo();
@@ -339,6 +372,13 @@ function renderNav() {
   h += '<div class="nav-item' + (activeCategory === 'none' ? ' on' : '') + '" data-cat="none">' +
        '<span class="label">未分类</span><span class="n">' + categories.unclassified + '</span></div>';
 
+  h += '<div class="nav-group">文件书 <span class="nav-add" id="bookAdd" title="新建文件书">＋</span></div>';
+  h += '<div id="bookInputWrap"></div>';
+  books.forEach(function (b) {
+    h += '<div class="nav-item' + (activeBook === b.id ? ' on' : '') + '" data-book="' + b.id + '">' +
+         '<span class="label">' + esc(b.name) + '</span><span class="n">' + (b.n || '') + '</span></div>';
+  });
+
   if (stats && stats.by_source.length) {
     h += '<div class="nav-group">来源</div>';
     stats.by_source.forEach(function (s) {
@@ -356,18 +396,22 @@ function renderNav() {
   el.innerHTML = h;
   el.querySelectorAll('.nav-item').forEach(function (it) {
     it.onclick = function () {
-      if (it.dataset.cat !== undefined) {
+      if (it.dataset.book !== undefined) {
+        activeBook = +it.dataset.book;
+        activeCategory = null; activeSource = null;
+      } else if (it.dataset.cat !== undefined) {
         var v = it.dataset.cat;
         activeCategory = (v === 'none') ? 'none' : +v;
-        activeSource = null;
+        activeSource = null; activeBook = null;
       } else {
         activeSource = it.dataset.src || null;
-        activeCategory = null;
+        activeCategory = null; activeBook = null;
       }
       renderNav();
       load(document.getElementById('q').value);
     };
   });
+  bindBookAdd();
   var addBtn = document.getElementById('catAdd');
   if (addBtn) addBtn.onclick = function (e) {
     e.stopPropagation();
@@ -392,6 +436,30 @@ function renderNav() {
 
 async function refreshCats() {
   try { categories = await api('/categories'); } catch (e) {}
+  try { books = (await api('/books')).books; } catch (e) {}
+}
+
+function bindBookAdd() {
+  var b = document.getElementById('bookAdd');
+  if (!b) return;
+  b.onclick = function (e) {
+    e.stopPropagation();
+    var wrap = document.getElementById('bookInputWrap');
+    wrap.innerHTML = '<input class="nav-input" id="bookInput" placeholder="书名，回车创建">';
+    var inp = document.getElementById('bookInput');
+    inp.focus();
+    inp.onkeydown = async function (ev) {
+      if (ev.key === 'Escape') { wrap.innerHTML = ''; return; }
+      if (ev.key !== 'Enter') return;
+      var name = inp.value.trim();
+      if (!name) { wrap.innerHTML = ''; return; }
+      try {
+        await api('/books', { method: 'POST', body: JSON.stringify({ name: name }) });
+        wrap.innerHTML = '';
+        await refreshCats(); renderNav();
+      } catch (e2) { inp.value = ''; inp.placeholder = '创建失败'; }
+    };
+  };
 }
 
 function renderRows() {
@@ -439,11 +507,28 @@ function openCtxMenu(x, y, file) {
   h += '<div class="sep"></div>' +
        '<div class="ci" data-cid="__learn">归类并记住规则（同来源同类型）</div>' +
        '<div class="ci" data-cid="__clear">移出分类</div>';
+  if (books.length) {
+    h += '<div class="sep"></div>';
+    books.forEach(function (b) {
+      h += '<div class="ci" data-book="' + b.id + '">加入书：' + esc(b.name) + '</div>';
+    });
+  }
   el.innerHTML = h;
   el.classList.add('show');
   el.style.left = Math.min(x, window.innerWidth - 220) + 'px';
   el.style.top = Math.min(y, window.innerHeight - el.offsetHeight - 10) + 'px';
 
+  el.querySelectorAll('.ci[data-book]').forEach(function (it) {
+    it.onclick = async function () {
+      closeCtx();
+      try {
+        await api('/books/add', { method: 'POST', body: JSON.stringify({
+          book_id: +it.dataset.book, file_ids: [file.file_id || file.id] }) });
+        toast('已加入文件书');
+        await refreshCats(); renderNav();
+      } catch (e) { toast('加入失败：' + e.message); }
+    };
+  });
   el.querySelectorAll('.ci[data-cid]').forEach(function (it) {
     it.onclick = async function () {
       closeCtx();
@@ -504,6 +589,7 @@ async function load(q) {
   if (q) params.set('q', q);
   if (activeCategory === 'none') params.set('unclassified', 'true');
   else if (activeCategory !== null) params.set('category_id', String(activeCategory));
+  if (activeBook !== null) params.set('book_id', String(activeBook));
   const d = await api('/files?' + params);
   files = d.files;
   if (activeSource) files = files.filter(function (f) { return f.source_name === activeSource; });
@@ -528,6 +614,17 @@ function highlight(text, q) {
   return out;
 }
 
+function askEntryHtml(q) {
+  if (!q) return '';
+  return '<div class="askbar" id="askEntry">⌘↵ 向 AI 提问「' + esc(q) + '」' +
+         (llmInfo.configured ? '' : '（需先在设置里配置模型）') + '</div>';
+}
+
+function bindAskEntry(q) {
+  var e = document.getElementById('askEntry');
+  if (e) e.onclick = function () { runAsk(q); };
+}
+
 function renderHits(result, q) {
   const el = document.getElementById('rows');
   if (!result.files.length) {
@@ -535,7 +632,8 @@ function renderHits(result, q) {
       '<span style="font-size:11px">试试其他关键词，或检查文档是否已完成索引</span></div>';
     return;
   }
-  let h = '<div class="mode">全文搜索 · 命中 ' + result.total + ' 个文件' +
+  let h = askEntryHtml(q);
+  h += '<div class="mode">全文搜索 · 命中 ' + result.total + ' 个文件' +
           (result.routes && result.routes.vector ? ' · 含语义匹配' : '') + '</div>';
   if (result.hedge) {
     h += '<div class="mode" style="color:var(--warn)">⚠ ' + esc(result.hedge) + '</div>';
@@ -561,6 +659,74 @@ function renderHits(result, q) {
       window.inktable.revealInFinder(decodeURIComponent(r.dataset.path));
     };
   });
+  bindAskEntry(q);
+}
+
+/* ---------- AI 问答（B6） ---------- */
+async function runAsk(q) {
+  const el = document.getElementById('rows');
+  el.innerHTML = '<div class="ans"><div class="atext" style="color:var(--text-secondary)">' +
+                 '正在依据文件库作答…</div></div>';
+  document.getElementById('count').textContent = '';
+  try {
+    const a = await api('/ask', { method: 'POST', body: JSON.stringify({
+      question: q, book_id: activeBook }) });
+    renderAnswer(a, q);
+  } catch (e) {
+    el.innerHTML = '<div class="ans"><div class="ahedge">提问失败：' + esc(e.message) + '</div></div>';
+  }
+}
+
+function renderAnswer(a, q) {
+  const el = document.getElementById('rows');
+  let h = '<div class="ans">';
+
+  if (a.status === 'not_configured') {
+    h += '<div class="atext" style="color:var(--text-secondary)">还没有配置模型服务。' +
+         '</div><div class="askbar" id="openSet" style="border:none;padding:8px 0 0">' +
+         '打开设置 → AI 问答</div></div>';
+    el.innerHTML = h;
+    document.getElementById('openSet').onclick = function () { sheetOpen(true); };
+    return;
+  }
+
+  if (a.hedge) h += '<div class="ahedge">⚠ ' + esc(a.hedge) + '</div>';
+
+  if (a.status === 'answered') {
+    var body = esc(a.answer).replace(/\[C(\d{1,2})\]/g, function (_m, n) {
+      return '<span class="cite-chip" data-tag="C' + n + '">C' + n + '</span>';
+    });
+    h += '<div class="atext">' + body + '</div>';
+    h += '<div class="refs">' + a.citations.map(refHtml).join('') + '</div>';
+  } else if (a.status === 'refused') {
+    h += '<div class="atext" style="color:var(--text-secondary)">' + esc(a.answer) + '</div>';
+  } else if (a.status === 'fallback') {
+    h += '<div class="refs">' + a.retrieved.map(refHtml).join('') + '</div>';
+  }
+  h += '</div>';
+  el.innerHTML = h;
+
+  el.querySelectorAll('.ref').forEach(function (r) {
+    r.ondblclick = function () {
+      window.inktable.revealInFinder(decodeURIComponent(r.dataset.path));
+    };
+  });
+  el.querySelectorAll('.cite-chip').forEach(function (c) {
+    c.onclick = function () {
+      var ref = el.querySelector('.ref[data-tag="' + c.dataset.tag + '"]');
+      if (ref) { ref.scrollIntoView({ block: 'center' }); ref.style.background = 'var(--bg-selected)';
+                 setTimeout(function () { ref.style.background = ''; }, 900); }
+    };
+  });
+}
+
+function refHtml(c) {
+  var loc = c.page ? ('第 ' + c.page + ' 页')
+          : (c.section_path ? c.section_path.split(' › ').slice(-1)[0] : '');
+  return '<div class="ref" data-tag="' + c.tag + '" data-path="' + encodeURIComponent(c.file_path) + '">' +
+    '<span class="rtag">[' + c.tag + ']</span>' +
+    '<span class="rname">' + esc(c.file_name) + (loc ? ' · ' + esc(loc) : '') + '</span>' +
+    '<span class="rsnip">' + esc(c.snippet || '') + '</span></div>';
 }
 
 async function doSearch(q) {
@@ -770,6 +936,50 @@ async function renderSources() {
   body.querySelectorAll('button[data-act]').forEach(function (b) {
     b.onclick = function () { onSourceAction(b); };
   });
+
+  // AI 问答配置（密钥经主进程 safeStorage 加密，渲染进程只见"已保存"）
+  var saved = await window.inktable.llmGet();
+  body.insertAdjacentHTML('beforeend',
+    '<div class="llm-form"><div class="lf-title">AI 问答（OpenAI 兼容接口）</div>' +
+    '<input id="llmEp" placeholder="接口地址，如 https://api.xxx.com/v1" value="' + esc(saved.endpoint) + '">' +
+    '<input id="llmModel" placeholder="模型名" value="' + esc(saved.model) + '">' +
+    '<input id="llmKey" type="password" placeholder="' +
+      (saved.has_key ? 'API 密钥（已保存，留空表示不变）' : 'API 密钥') + '">' +
+    '<div style="display:flex;gap:8px;align-items:center">' +
+    '<button class="mini" id="llmSave">保存</button>' +
+    (llmInfo.configured ? '<button class="mini" id="llmClassify">AI 归类未分类文件</button>' : '') +
+    '<button class="mini danger" id="llmClear">清除</button>' +
+    '<span class="hint" id="llmHint">' +
+      (llmInfo.configured ? '已启用 —— 搜索框输入问题后按 ⌘↵ 提问' : '未配置时问答不可用，其余功能不受影响') +
+    '</span></div></div>');
+
+  document.getElementById('llmSave').onclick = async function () {
+    var hint = document.getElementById('llmHint');
+    hint.textContent = '保存中…';
+    await window.inktable.llmSet({
+      endpoint: document.getElementById('llmEp').value,
+      model: document.getElementById('llmModel').value,
+      api_key: document.getElementById('llmKey').value,
+    });
+    try { llmInfo = await api('/settings/llm'); } catch (e) {}
+    hint.textContent = llmInfo.configured ? '已启用 ✓' : '配置不完整（三项都要填）';
+  };
+  var lc = document.getElementById('llmClassify');
+  if (lc) lc.onclick = async function () {
+    var hint = document.getElementById('llmHint');
+    hint.textContent = '模型归类中…（发送文件名与正文开头）';
+    try {
+      var r = await api('/classify/llm', { method: 'POST' });
+      hint.textContent = r.error ? r.error : ('已归类 ' + r.classified + ' 个，跳过 ' + r.skipped + ' 个');
+      await refreshCats(); renderNav();
+      await load(document.getElementById('q').value.trim());
+    } catch (e) { hint.textContent = '失败：' + e.message; }
+  };
+  document.getElementById('llmClear').onclick = async function () {
+    await window.inktable.llmSet({ endpoint: '', model: '', api_key: '' });
+    try { llmInfo = await api('/settings/llm'); } catch (e) {}
+    await renderSources();
+  };
 }
 
 async function onSourceAction(btn) {
@@ -869,6 +1079,10 @@ document.getElementById('btnRescan').onclick = async function () {
 document.addEventListener('keydown', function (e) {
   if (e.key === 'Escape') sheetOpen(false);
   if ((e.metaKey || e.ctrlKey) && e.key === ',') { e.preventDefault(); sheetOpen(true); }
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+    var q = document.getElementById('q').value.trim();
+    if (q) { e.preventDefault(); runAsk(q); }
+  }
   if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
     e.preventDefault();
     document.getElementById('q').focus();
@@ -879,6 +1093,7 @@ document.addEventListener('keydown', function (e) {
 async function boot() {
   stats = await api('/stats');
   await refreshCats();
+  try { llmInfo = await api('/settings/llm'); } catch (e) {}
   if (stats.files === 0) {
     document.getElementById('setup').style.display = 'flex';
     sources = (await api('/sources/discover', { method: 'POST' })).sources;

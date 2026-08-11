@@ -9,7 +9,7 @@
  * 退出路径必须收敛：主进程崩溃不能留下孤儿 Python 进程占着端口。
  */
 
-const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require('electron');
 const { spawn } = require('child_process');
 const crypto = require('crypto');
 const path = require('path');
@@ -20,6 +20,32 @@ let sidecar = null;
 let sidecarInfo = null; // { port, token }
 
 const SESSION_TOKEN = crypto.randomBytes(32).toString('base64url');
+
+// ---- LLM 配置：safeStorage 加密落盘（§6.3），密钥绝不进渲染进程 ----
+const llmConfigPath = () => path.join(app.getPath('userData'), 'llm.enc');
+
+function loadLLMConfig() {
+  try {
+    const blob = fs.readFileSync(llmConfigPath());
+    return JSON.parse(safeStorage.decryptString(blob));
+  } catch { return null; }
+}
+
+function saveLLMConfig(cfg) {
+  fs.writeFileSync(llmConfigPath(), safeStorage.encryptString(JSON.stringify(cfg)));
+}
+
+async function pushLLMToSidecar(cfg) {
+  if (!sidecarInfo) return;
+  try {
+    await fetch(`http://127.0.0.1:${sidecarInfo.port}/settings/llm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json',
+                 Authorization: `Bearer ${sidecarInfo.token}` },
+      body: JSON.stringify(cfg || { endpoint: '', api_key: '', model: '' }),
+    });
+  } catch (e) { console.error('[main] LLM 配置推送失败:', e.message); }
+}
 
 function resolveSidecarPath() {
   // 打包后：Contents/Resources/sidecar/inktable-sidecar
@@ -74,8 +100,11 @@ function startSidecar() {
       reject(err);
     });
 
-    // 令牌经 stdin 传入，避免出现在进程表里
-    sidecar.stdin.write(JSON.stringify({ token: SESSION_TOKEN }) + '\n');
+    // 令牌与模型配置经 stdin 传入，避免出现在进程表里（§6.2/§6.3）
+    const boot = { token: SESSION_TOKEN };
+    const llm = loadLLMConfig();
+    if (llm) boot.llm = llm;
+    sidecar.stdin.write(JSON.stringify(boot) + '\n');
   });
 }
 
@@ -133,6 +162,31 @@ ipcMain.handle('dialog:pickDirectory', async () => {
     buttonLabel: '添加',
   });
   return r.canceled || !r.filePaths.length ? null : r.filePaths[0];
+});
+
+ipcMain.handle('llm:get', () => {
+  const cfg = loadLLMConfig();
+  return cfg
+    ? { endpoint: cfg.endpoint || '', model: cfg.model || '', has_key: !!cfg.api_key }
+    : { endpoint: '', model: '', has_key: false };
+});
+
+ipcMain.handle('llm:set', async (_e, incoming) => {
+  const prev = loadLLMConfig() || {};
+  const cfg = {
+    endpoint: String(incoming.endpoint || '').trim(),
+    // 留空 = 保留已存的密钥（改端点/模型不必重输密钥）
+    api_key: String(incoming.api_key || '').trim() || prev.api_key || '',
+    model: String(incoming.model || '').trim(),
+  };
+  if (!cfg.endpoint && !cfg.api_key && !cfg.model) {
+    try { fs.unlinkSync(llmConfigPath()); } catch {}
+    await pushLLMToSidecar(null);
+    return { endpoint: '', model: '', has_key: false };
+  }
+  saveLLMConfig(cfg);
+  await pushLLMToSidecar(cfg);
+  return { endpoint: cfg.endpoint, model: cfg.model, has_key: !!cfg.api_key };
 });
 
 app.whenReady().then(async () => {

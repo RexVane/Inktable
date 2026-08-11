@@ -185,6 +185,22 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT
 );
 
+-- 文件书（§9 books / B7）：虚拟集合，一个文件可属多本书。
+-- 与分类互补：分类单选表达"是什么"，书多选表达"为哪件事收集"。
+-- 书内可限定检索与问答范围（filters.book_id）。
+CREATE TABLE IF NOT EXISTS books (
+    id         INTEGER PRIMARY KEY,
+    name       TEXT NOT NULL UNIQUE,
+    created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS book_members (
+    book_id  INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    file_id  INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    added_at REAL NOT NULL,
+    PRIMARY KEY (book_id, file_id)
+);
+
 -- 中文全文检索双索引（§9.1，M0 实测确认必须双路）
 --
 -- FTS5 默认 unicode61 对中文零命中：整段汉字被当作一个 token。

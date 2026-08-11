@@ -266,6 +266,163 @@ def _delete_content(conn, content_id: int) -> None:
     conn.execute("DELETE FROM contents WHERE id = ?", (content_id,))
 
 
+# ---------------------------------------------------------------- 问答（B6）与模型配置
+
+class LLMConfigRequest(BaseModel):
+    endpoint: str = ""
+    api_key: str = ""
+    model: str = ""
+
+
+@app.post("/settings/llm", dependencies=[Depends(require_token)])
+def set_llm(req: LLMConfigRequest) -> dict:
+    """配置模型服务。密钥**只进内存**（§6.3）——
+    持久化由 Electron 主进程用 safeStorage 加密保存，每次启动重新推送。
+    全空 = 清除配置，回到纯本地模式。
+    """
+    from app.qa import llm
+
+    llm.configure(req.endpoint, req.api_key, req.model)
+    return llm.status()
+
+
+@app.get("/settings/llm", dependencies=[Depends(require_token)])
+def get_llm() -> dict:
+    from app.qa import llm
+
+    return llm.status()
+
+
+class AskRequest(BaseModel):
+    question: str
+    book_id: int | None = None
+
+
+@app.post("/ask", dependencies=[Depends(require_token)])
+def post_ask(req: AskRequest) -> dict:
+    """带引用问答（§12.4）。非流式 —— 后置校验会改写答案，流式收不回。"""
+    from app.qa.answer import ask
+    from app.qa.llm import LLMError
+
+    q = req.question.strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="问题为空")
+    with _db_lock:
+        conn = db()
+        try:
+            a = ask(conn, q, req.book_id)
+        except LLMError as e:
+            raise HTTPException(status_code=502, detail=str(e)) from e
+    return {
+        "status": a.status, "answer": a.answer, "citations": a.citations,
+        "retrieved": a.retrieved, "hedge": a.hedge, "validation": a.validation,
+    }
+
+
+@app.post("/classify/llm", dependencies=[Depends(require_token)])
+def post_llm_classify() -> dict:
+    """让模型归类未分类文件（B1）。手动触发 —— 每次点击即一次云端授权。"""
+    from app.qa.classify_llm import llm_classify_unclassified
+    from app.qa.llm import LLMError
+
+    with _db_lock:
+        conn = db()
+        try:
+            r = llm_classify_unclassified(conn)
+            conn.commit()
+        except LLMError as e:
+            conn.rollback()
+            raise HTTPException(status_code=502, detail=str(e)) from e
+    return r
+
+
+# ---------------------------------------------------------------- 文件书（B7）
+
+class BookCreate(BaseModel):
+    name: str
+
+
+class BookMember(BaseModel):
+    book_id: int
+    file_ids: list[int]
+
+
+@app.get("/books", dependencies=[Depends(require_token)])
+def get_books() -> dict:
+    conn = db()
+    rows = conn.execute(
+        """SELECT b.id, b.name,
+                  (SELECT count(*) FROM book_members m WHERE m.book_id = b.id) AS n
+           FROM books b ORDER BY b.name"""
+    ).fetchall()
+    return {"books": [dict(r) for r in rows]}
+
+
+@app.post("/books", dependencies=[Depends(require_token)])
+def post_book(req: BookCreate) -> dict:
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="书名不能为空")
+    with _db_lock:
+        conn = db()
+        try:
+            cur = conn.execute(
+                "INSERT INTO books (name, created_at) VALUES (?, ?)",
+                (name, time.time()),
+            )
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise HTTPException(status_code=400, detail=f"已有同名文件书") from e
+    return {"id": cur.lastrowid}
+
+
+@app.post("/books/add", dependencies=[Depends(require_token)])
+def book_add(req: BookMember) -> dict:
+    with _db_lock:
+        conn = db()
+        n = 0
+        for fid in req.file_ids:
+            try:
+                conn.execute(
+                    "INSERT OR IGNORE INTO book_members (book_id, file_id, added_at) "
+                    "VALUES (?,?,?)", (req.book_id, fid, time.time()),
+                )
+                n += 1
+            except Exception:
+                pass
+        conn.commit()
+    return {"added": n}
+
+
+@app.post("/books/remove_member", dependencies=[Depends(require_token)])
+def book_remove_member(req: BookMember) -> dict:
+    with _db_lock:
+        conn = db()
+        marks = ",".join("?" * len(req.file_ids))
+        conn.execute(
+            f"DELETE FROM book_members WHERE book_id = ? AND file_id IN ({marks})",
+            [req.book_id, *req.file_ids],
+        )
+        conn.commit()
+    return {"ok": True}
+
+
+class BookId(BaseModel):
+    book_id: int
+
+
+@app.post("/books/delete", dependencies=[Depends(require_token)])
+def book_delete(req: BookId) -> dict:
+    """删书只删集合关系，**文件与索引一概不动** —— 书是虚拟的。"""
+    with _db_lock:
+        conn = db()
+        if conn.execute("DELETE FROM books WHERE id = ?", (req.book_id,)).rowcount == 0:
+            raise HTTPException(status_code=404, detail="文件书不存在")
+        conn.commit()
+    return {"ok": True}
+
+
 # ---------------------------------------------------------------- 分类（信息层）
 
 class CategoryCreate(BaseModel):
@@ -460,7 +617,8 @@ def add_source(req: AddSourceRequest) -> dict:
 
 @app.get("/files", dependencies=[Depends(require_token)])
 def list_files(limit: int = 100, offset: int = 0, q: str | None = None,
-               category_id: int | None = None, unclassified: bool = False) -> dict:
+               category_id: int | None = None, unclassified: bool = False,
+               book_id: int | None = None) -> dict:
     conn = db()
     conds, params = [], []
     if q:
@@ -478,6 +636,9 @@ def list_files(limit: int = 100, offset: int = 0, q: str | None = None,
         params.append(category_id)
     if unclassified:
         conds.append("f.category_id IS NULL")
+    if book_id is not None:
+        conds.append("f.id IN (SELECT file_id FROM book_members WHERE book_id = ?)")
+        params.append(book_id)
     where = ("WHERE " + " AND ".join(conds)) if conds else ""
 
     total = conn.execute(f"SELECT count(*) c FROM files f {where}", params).fetchone()["c"]
@@ -687,6 +848,11 @@ def _read_stdin_secrets() -> None:
         payload = json.loads(line)
         if tok := payload.get("token"):
             SESSION_TOKEN = tok
+        if cfg := payload.get("llm"):
+            from app.qa import llm as _llm
+
+            _llm.configure(cfg.get("endpoint", ""), cfg.get("api_key", ""),
+                           cfg.get("model", ""))
     except Exception:
         pass  # 开发态无 stdin 输入，使用自生成令牌
 

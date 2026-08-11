@@ -23,7 +23,11 @@ V1.0 已可用。`dist/Inktable-0.1.0-arm64.dmg`（295 MB，含 119 MB 本地嵌
 | 保全副本（易失来源防微信清缓存，复制绝不移动） | ✅ |
 | 信息层分类（虚拟树 + 规则回流学习，磁盘无目录） | ✅ |
 | 增量嵌入（text_hash 内容寻址，改 1 片只编 1 片） | ✅ |
-| LLM 问答与引用（B6，需 API 密钥） | ⬜ |
+| 带引用问答（B6：四条后置校验 + 引用跳转） | ✅ |
+| 文件书（B7：虚拟集合，书内检索/问答） | ✅ |
+| AI 归类（B1：手动触发，模型只能选既有分类 id） | ✅ |
+| 应用图标 | ✅ |
+| 代码签名（需 Apple 开发者账号） | ⬜ |
 
 ## 开发
 
@@ -31,7 +35,7 @@ V1.0 已可用。`dist/Inktable-0.1.0-arm64.dmg`（295 MB，含 119 MB 本地嵌
 # 后端
 cd services/api
 uv sync
-uv run pytest                      # 61 项测试
+uv run pytest                      # 72 项测试
 uv run python tests/e2e_watch.py   # 端到端：投放文件 → 自动入库 → 搜内容
 
 # 打包
@@ -92,6 +96,16 @@ Electron 主进程 ──stdin: {token}──▶ Python sidecar (FastAPI)
 - `docs/PLAN.md` —— 完整方案（v6）
 - `docs/HANDOFF.md` —— 18 条硬约束，改动前必读
 - `docs/M0-RESULTS.md` —— 实测结果与决策记录
+
+## AI 问答（B6）
+
+设置 → AI 问答 里填 OpenAI 兼容接口的地址 / 模型名 / 密钥即可启用；
+搜索框输入问题后按 **⌘↵** 提问。密钥经 Electron safeStorage 加密落盘，
+sidecar 侧只存内存 —— 不进数据库、不进日志、不回显（72 项测试中有专项断言）。
+
+生成后四条硬校验（prompt 是建议，校验才是执行）：
+虚构引用剔除 → 零引用重生成一次 → 仍零引用降级为纯检索结果 →
+拒答句夹带事实则截断。答案里的 [Cn] 可点击跳到引用，双击引用在 Finder 定位原文。
 
 ## 已知限制
 
