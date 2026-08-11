@@ -24,8 +24,26 @@ def indexable_exts() -> set[str]:
     return set(PARSERS.keys())
 
 
+# 单文档全文索引上限。超过的只登记元数据，不解析正文。
+#
+# 实测触发：~/Documents 下一个 339MB 的 all_files.txt（机器生成的文件清单）
+# 独自产生 19847 个分片，占全库 54%。这类日志/清单/导出文件没人会用
+# 自然语言去搜，却会淹没检索结果、拖慢索引、撑大数据库。
+MAX_INDEX_BYTES = 10 * 1024 * 1024
+
+
 def index_content(conn: sqlite3.Connection, content_id: int, path: Path) -> dict:
     """解析并索引单个 content。返回结果摘要。"""
+    try:
+        if path.stat().st_size > MAX_INDEX_BYTES:
+            conn.execute(
+                "UPDATE contents SET parse_state = 'too_large' WHERE id = ?",
+                (content_id,),
+            )
+            return {"state": "too_large", "chunks": 0}
+    except OSError:
+        pass
+
     try:
         doc = parse(path)
     except UnsupportedFormat:
@@ -93,6 +111,21 @@ def index_pending(conn: sqlite3.Connection, limit: int = 500, progress=None) -> 
     """
     exts = indexable_exts()
     marks = ",".join("?" * len(exts))
+
+    # 先把不可解析的一次性出队（源码、媒体、压缩包等）。
+    # 否则它们永远停在 pending，让"待索引 N 个"这个数字永远降不下去，
+    # 而调用方会据此反复重试 —— 队列不收敛。
+    conn.execute(
+        f"""UPDATE contents SET parse_state = 'unsupported'
+            WHERE parse_state = 'pending' AND id IN (
+                SELECT c.id FROM contents c JOIN files f ON f.content_id = c.id
+                GROUP BY c.id
+                HAVING lower(MIN(f.ext)) NOT IN ({marks})
+            )""",
+        list(exts),
+    )
+    conn.commit()
+
     rows = conn.execute(
         f"""SELECT c.id, MIN(f.path) AS path
             FROM contents c
@@ -105,7 +138,8 @@ def index_pending(conn: sqlite3.Connection, limit: int = 500, progress=None) -> 
         [*exts, limit],
     ).fetchall()
 
-    summary = {"indexed": 0, "chunks": 0, "no_text": 0, "failed": 0, "unsupported": 0}
+    summary = {"indexed": 0, "chunks": 0, "no_text": 0, "failed": 0,
+               "unsupported": 0, "too_large": 0}
 
     for i, row in enumerate(rows):
         p = Path(row["path"])
@@ -121,10 +155,8 @@ def index_pending(conn: sqlite3.Connection, limit: int = 500, progress=None) -> 
         if state == "indexed":
             summary["indexed"] += 1
             summary["chunks"] += result["chunks"]
-        elif state == "no_text":
-            summary["no_text"] += 1
-        elif state == "unsupported":
-            summary["unsupported"] += 1
+        elif state in summary:
+            summary[state] += 1
         else:
             summary["failed"] += 1
 

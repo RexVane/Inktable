@@ -22,6 +22,8 @@ from pydantic import BaseModel
 from app.db.database import connect, init_db, quick_check
 from app.discovery.sources import discover_all
 from app.health import collect_health
+from app.index.pipeline import index_pending, indexable_exts
+from app.index.search import search as fts_search
 from app.watcher.scanner import preview_source, scan_source
 
 app = FastAPI(title="Inktable API", version="0.1.0")
@@ -146,6 +148,136 @@ def list_files(limit: int = 100, offset: int = 0, q: str | None = None) -> dict:
         [*params, limit, offset],
     ).fetchall()
     return {"total": total, "files": [dict(r) for r in rows]}
+
+
+class SearchRequest(BaseModel):
+    q: str
+    limit: int = 40
+
+
+@app.post("/search", dependencies=[Depends(require_token)])
+def search_content(req: SearchRequest) -> dict:
+    """全文检索 —— 搜内容而非文件名（PLAN §12.3）。
+
+    双路召回后用 RRF 融合（§12.3b ④）。这里是 V1.0 的词法双路；
+    向量路在 V1.5 接入后并入同一个融合函数，公式不变。
+
+    结果按文件聚合：用户要看的是"哪些文件里有"，
+    而不是一堆散落的分片。
+    """
+    conn = db()
+    routes = fts_search(conn, req.q, limit=req.limit * 3)
+
+    # RRF 融合（§12.3b ④）：只用排名，免去 BM25 与余弦分数的量纲归一化
+    K = 60
+    fused: dict[int, float] = {}
+    for hits in routes.values():
+        for rank, (chunk_id, _score) in enumerate(hits):
+            fused[chunk_id] = fused.get(chunk_id, 0.0) + 1.0 / (K + rank + 1)
+
+    if not fused:
+        return {"query": req.q, "total": 0, "files": []}
+
+    top = sorted(fused.items(), key=lambda kv: kv[1], reverse=True)[: req.limit * 3]
+    ids = [cid for cid, _ in top]
+    marks = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"""SELECT ch.id, ch.content_id, ch.text, ch.section_path, ch.page, ch.ordinal,
+                   f.id AS file_id, f.name, f.path, f.ext, f.mtime,
+                   s.name AS source_name, s.volatile
+            FROM chunks ch
+            JOIN files f ON f.content_id = ch.content_id
+            LEFT JOIN sources s ON f.source_id = s.id
+            WHERE ch.id IN ({marks})""",
+        ids,
+    ).fetchall()
+
+    # 按文件聚合，每个文件保留最相关的几个片段
+    by_file: dict[int, dict] = {}
+    for r in rows:
+        score = fused.get(r["id"], 0)
+        entry = by_file.setdefault(
+            r["file_id"],
+            {
+                "file_id": r["file_id"], "name": r["name"], "path": r["path"],
+                "ext": r["ext"], "mtime": r["mtime"],
+                "source_name": r["source_name"], "volatile": bool(r["volatile"]),
+                "score": 0.0, "snippets": [],
+            },
+        )
+        entry["score"] = max(entry["score"], score)
+        if len(entry["snippets"]) < 3:
+            entry["snippets"].append({
+                "chunk_id": r["id"],
+                "text": r["text"][:220],
+                "section_path": r["section_path"],
+                "page": r["page"],
+                "score": score,
+            })
+
+    files = sorted(by_file.values(), key=lambda e: e["score"], reverse=True)[: req.limit]
+    for f in files:
+        f["snippets"].sort(key=lambda s: s["score"], reverse=True)
+
+    return {"query": req.q, "total": len(files), "files": files}
+
+
+class IndexRequest(BaseModel):
+    limit: int = 500
+
+
+@app.post("/index/run", dependencies=[Depends(require_token)])
+def run_index(req: IndexRequest) -> dict:
+    """解析并索引待处理内容（PLAN §12.2）。
+
+    循环直到没有 pending —— 单次调用就把队列清空，避免前端需要
+    反复轮询调用。每批之间 commit，中断也不丢已完成的部分。
+    """
+    with _db_lock:
+        conn = db()
+        total = {"indexed": 0, "chunks": 0, "no_text": 0, "failed": 0,
+                 "unsupported": 0, "total": 0}
+        while True:
+            r = index_pending(conn, limit=min(req.limit, 200))
+            if r["total"] == 0:
+                break
+            for k in total:
+                total[k] += r.get(k, 0)
+            if total["total"] >= req.limit:
+                break
+        return total
+
+
+@app.get("/index/status", dependencies=[Depends(require_token)])
+def index_status() -> dict:
+    conn = db()
+    rows = conn.execute(
+        "SELECT parse_state, count(*) c FROM contents GROUP BY parse_state"
+    ).fetchall()
+    by_state = {r["parse_state"]: r["c"] for r in rows}
+    chunks = conn.execute("SELECT count(*) c FROM chunks").fetchone()["c"]
+
+    # pending 只算**真正会被解析的** —— 源码/媒体虽然也是 pending 状态，
+    # 但永远不会进解析流水线。把它们算进去会让界面显示一个永降不到 0
+    # 的数字，用户以为卡住了。
+    exts = indexable_exts()
+    marks = ",".join("?" * len(exts))
+    real_pending = conn.execute(
+        f"""SELECT count(DISTINCT c.id) c
+            FROM contents c JOIN files f ON f.content_id = c.id
+            WHERE c.parse_state = 'pending'
+              AND f.state != 'missing'
+              AND lower(f.ext) IN ({marks})""",
+        list(exts),
+    ).fetchone()["c"]
+
+    return {
+        "by_state": by_state,
+        "pending": real_pending,
+        "pending_raw": by_state.get("pending", 0),
+        "indexed": by_state.get("indexed", 0),
+        "chunks": chunks,
+    }
 
 
 @app.get("/stats", dependencies=[Depends(require_token)])

@@ -71,6 +71,30 @@
   .fdate { width: 66px; text-align: right; }
   .vol { color: var(--warn); }
 
+  /* 全文搜索结果：文件 + 命中片段 */
+  .hit { padding: 10px 16px; border-bottom: 1px solid var(--separator); cursor: default; }
+  .hit:hover { background: var(--bg-hover); }
+  .hit-head { display: flex; align-items: center; gap: 8px; }
+  .hit-name { font-weight: 500; flex: 1; overflow: hidden;
+              text-overflow: ellipsis; white-space: nowrap; }
+  .hit-meta { color: var(--text-secondary); font-size: 11px; flex-shrink: 0; }
+  .snip {
+    margin: 6px 0 0 24px; padding-left: 10px;
+    border-left: 2px solid var(--separator);
+    color: var(--text-secondary); font-size: 12px; line-height: 1.55;
+  }
+  .snip .loc {
+    display: inline-block; font-size: 10px; color: var(--accent);
+    background: var(--bg-selected); padding: 0 5px; border-radius: 3px;
+    margin-right: 6px; vertical-align: 1px;
+  }
+  .snip em { font-style: normal; color: var(--text-primary);
+             background: rgba(29,185,84,.2); border-radius: 2px; padding: 0 1px; }
+  .mode {
+    font-size: 11px; color: var(--text-secondary); padding: 8px 16px;
+    border-bottom: 1px solid var(--separator);
+  }
+
   .empty { padding: 60px 20px; text-align: center; color: var(--text-secondary); }
   .empty button {
     font: inherit; margin-top: 14px; padding: 6px 16px; border: none; border-radius: 6px;
@@ -235,10 +259,73 @@ async function load(q) {
   renderRows();
 }
 
+/* 全文搜索：搜内容而非文件名。文件名匹配与内容匹配合并展示 */
+function esc(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function highlight(text, q) {
+  const safe = esc(text);
+  if (!q) return safe;
+  // 逐字符高亮：中文没有词边界，按查询串里的字符片段匹配
+  const terms = q.split(/\s+/).filter(Boolean).map(esc);
+  let out = safe;
+  terms.forEach(function (t) {
+    if (t.length < 1) return;
+    out = out.split(t).join('<em>' + t + '</em>');
+  });
+  return out;
+}
+
+function renderHits(result, q) {
+  const el = document.getElementById('rows');
+  if (!result.files.length) {
+    el.innerHTML = '<div class="empty">没有匹配的内容<br>' +
+      '<span style="font-size:11px">试试其他关键词，或检查文档是否已完成索引</span></div>';
+    return;
+  }
+  let h = '<div class="mode">全文搜索 · 命中 ' + result.total + ' 个文件</div>';
+  h += result.files.map(function (f) {
+    const snips = f.snippets.map(function (s) {
+      const loc = s.page ? ('第 ' + s.page + ' 页')
+                : (s.section_path ? s.section_path.split(' › ').slice(-1)[0] : '');
+      return '<div class="snip">' + (loc ? '<span class="loc">' + esc(loc) + '</span>' : '') +
+             highlight(s.text, q) + '</div>';
+    }).join('');
+    return '<div class="hit" data-path="' + encodeURIComponent(f.path) + '">' +
+      '<div class="hit-head">' +
+        '<span class="icon">' + (ICONS[f.ext] || '▢') + '</span>' +
+        '<span class="hit-name">' + esc(f.name) + '</span>' +
+        '<span class="hit-meta' + (f.volatile ? ' vol' : '') + '">' +
+          esc(f.source_name || '') + '</span>' +
+      '</div>' + snips + '</div>';
+  }).join('');
+  el.innerHTML = h;
+  el.querySelectorAll('.hit').forEach(function (r) {
+    r.ondblclick = function () {
+      window.inktable.revealInFinder(decodeURIComponent(r.dataset.path));
+    };
+  });
+}
+
+async function doSearch(q) {
+  if (!q) { await load(''); return; }
+  document.getElementById('count').textContent = '搜索中…';
+  try {
+    const r = await api('/search', { method: 'POST', body: JSON.stringify({ q: q, limit: 40 }) });
+    if (r.total > 0) {
+      document.getElementById('count').textContent = r.total + ' 个文件';
+      renderHits(r, q);
+      return;
+    }
+  } catch (e) { /* 全文搜索失败时退回文件名搜索 */ }
+  await load(q);   // 内容没命中就按文件名找
+}
+
 let timer;
 document.getElementById('q').oninput = function (e) {
   clearTimeout(timer);
-  timer = setTimeout(function () { load(e.target.value); }, 150);
+  const v = e.target.value.trim();
+  timer = setTimeout(function () { doSearch(v); }, 200);
 };
 
 /* ---------- 首次启动引导 ---------- */
@@ -276,16 +363,34 @@ document.getElementById('btnEnable').onclick = async function () {
     .map(function (cb) { return sources[cb.dataset.i]; });
   for (let i = 0; i < chosen.length; i++) {
     const s = chosen[i];
-    btn.textContent = '正在索引 ' + (i + 1) + '/' + chosen.length + '…';
+    btn.textContent = '正在扫描 ' + (i + 1) + '/' + chosen.length + '…';
     try {
       await api('/sources/enable', { method: 'POST', body: JSON.stringify({
         name: s.name, path: s.path, kind: s.kind,
         discovered_by: s.discovered_by, volatile: s.volatile }) });
     } catch (e) { /* 单个来源失败不阻断其余 */ }
   }
+  // 扫描只登记文件，正文索引另起一步 —— 让用户先看到文件列表
+  btn.textContent = '正在解析文档内容…';
   document.getElementById('setup').style.display = 'none';
   await boot();
+  runIndexing();
 };
+
+/* 后台索引：解析正文并建全文索引，完成前顶部显示进度 */
+async function runIndexing() {
+  const countEl = document.getElementById('count');
+  try {
+    const st = await api('/index/status');
+    if (!st.pending) return;
+    countEl.textContent = '正在解析 ' + st.pending + ' 个文档…';
+    const r = await api('/index/run', { method: 'POST', body: JSON.stringify({ limit: 2000 }) });
+    countEl.textContent = '已索引 ' + r.indexed + ' 个文档，可搜索内容了';
+    setTimeout(function () {
+      if (!document.getElementById('q').value) load('');
+    }, 2500);
+  } catch (e) { /* 索引失败不影响文件浏览 */ }
+}
 
 async function boot() {
   stats = await api('/stats');
@@ -299,7 +404,10 @@ async function boot() {
   await load('');
 }
 
-boot().catch(function (e) {
+boot().then(function () {
+  // 上次索引未完成（应用被关掉、新增了文件）时自动续上
+  if (stats && stats.files > 0) runIndexing();
+}).catch(function (e) {
   document.getElementById('rows').innerHTML = '<div class="empty">启动失败：' + e.message + '</div>';
 });
 </script>
