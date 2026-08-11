@@ -1,0 +1,37 @@
+appId: com.inktable.app
+productName: Inktable
+copyright: Inktable
+
+directories:
+  output: ../../dist
+  buildResources: build
+
+files:
+  - electron/**/*
+  - renderer/**/*
+  - package.json
+
+# PyInstaller 产物作为额外资源打进 Contents/Resources/sidecar/
+extraResources:
+  - from: ../../services/api/dist/inktable-sidecar
+    to: sidecar/inktable-sidecar
+
+mac:
+  category: public.app-category.productivity
+  target:
+    - target: dmg
+      arch: [arm64]
+  # 无开发者证书时不签名，本地自用可行（首次打开需右键→打开）
+  identity: null
+  hardenedRuntime: false
+  gatekeeperAssess: false
+
+dmg:
+  title: Inktable
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications

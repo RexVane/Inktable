@@ -1,0 +1,14 @@
+{
+  "name": "inktable-desktop",
+  "version": "0.1.0",
+  "description": "Inktable — 本地文件索引与知识库",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^43.3.0",
+    "electron-builder": "^26.15.3"
+  }
+}

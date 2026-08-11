@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>Inktable</title>
+  <style>
+    body { margin: 0; font: 13px -apple-system, "PingFang SC", sans-serif;
+           background: #faf9f7; color: #1d1d1f; -webkit-user-select: none; }
+    .bar { height: 38px; -webkit-app-region: drag; display: flex; align-items: flex-end;
+           padding: 0 16px 8px; color: #6e6e73; font-size: 11px; }
+    .content { padding: 40px; }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+    .ok { background: #1DB954; }
+    .bad { background: #ff3b30; }
+    #status { font-size: 15px; margin-bottom: 16px; }
+    pre { background: #f0efec; padding: 16px; border-radius: 6px; font-size: 11px; overflow: auto; }
+  </style>
+</head>
+<body>
+  <div class="bar">Inktable</div>
+  <div class="content">
+    <div id="status"><span class="dot bad"></span>正在连接 sidecar…</div>
+    <pre id="detail">等待响应…</pre>
+  </div>
+  <script>
+    const statusEl = document.getElementById('status');
+    const detailEl = document.getElementById('detail');
+    const base = (port) => `http://127.0.0.1:${port}`;
+
+    async function check() {
+      const info = await window.inktable.getSidecarInfo();
+      if (!info) { statusEl.innerHTML = '<span class="dot bad"></span>sidecar 未启动'; return; }
+      const r = await fetch(`${base(info.port)}/health`);
+      const health = await r.json();
+      if (health.status === 'ok') {
+        statusEl.innerHTML = '<span class="dot ok"></span>sidecar 运行正常';
+      } else {
+        statusEl.innerHTML = '<span class="dot bad"></span>sidecar degraded';
+      }
+      detailEl.textContent = JSON.stringify(health, null, 2);
+    }
+    check();
+    setInterval(check, 5000);
+  </script>
+</body>
+</html>
