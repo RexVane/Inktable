@@ -118,6 +118,21 @@ def index_content(conn: sqlite3.Connection, content_id: int, path: Path) -> dict
 def _embed_chunks(conn, inserted: list[tuple[int, object]]) -> str | None:
     """给刚入库的分片编码向量。返回模型 id（未编码则 None）。
 
+    **按 text_hash 内容寻址复用**（§12.5 的落地形态）：
+
+    编辑文件会产生新 sha256 → 新 content → 全部分片都是"新"的。
+    若无脑全量编码，改 200 页合同的一条条款就要重嵌 200 页 ——
+    方案明确说这决定产品在"文件被反复编辑"场景下是否可用。
+
+    这里不追踪"旧版本是谁"（内容寻址模型里没有版本链），而是反过来：
+    每个新分片先查**全库**有没有同 text_hash 且已有向量的旧片，有就直接
+    SQL 复制向量行，只有真正没见过的文字才进编码器。
+    副作用是纯赚的：两个不同文件的相同段落也自动共享向量。
+
+    注：向量编码时前置了 section_path（§12.2 ③），复用忽略前缀差异 ——
+    这是方案 §12.5 的明确取舍："仅位置变的片只更新 section_path"，
+    标题重编号带来的轻微语义漂移是刻意接受的，换来免重嵌。
+
     编码在这里内联做而不是丢队列：model2vec 约 9000 片/秒，
     单文档几十片的开销是毫秒级，不值得为它引入异步复杂度。
     """
@@ -125,18 +140,92 @@ def _embed_chunks(conn, inserted: list[tuple[int, object]]) -> str | None:
         return None
     try:
         from app.index import embedding as emb
-        from app.index import vector as vec
 
         if not emb.is_available():
             return None
         m = emb.get_embedder()
-        texts = [emb.embed_text_for(c.text, c.section_path) for _, c in inserted]
-        vectors = m.encode(texts)
-        vec.upsert(conn, [(cid, v) for (cid, _), v in zip(inserted, vectors)])
+
+        min_new = min(cid for cid, _ in inserted)
+        need: list[tuple[int, object]] = []
+        batch_first: dict[str, int] = {}   # 批内去重：同文字只编一次
+        pending_copy: list[tuple[int, int]] = []  # (新id, 供体id/批内首见id)
+        reused = 0
+
+        for cid, c in inserted:
+            if c.text_hash in batch_first:
+                pending_copy.append((cid, batch_first[c.text_hash]))
+                continue
+            donor = conn.execute(
+                "SELECT id FROM chunks WHERE text_hash = ? AND id < ? "
+                "ORDER BY id DESC LIMIT 1",
+                (c.text_hash, min_new),
+            ).fetchone()
+            copied = 0
+            if donor:
+                copied = conn.execute(
+                    "INSERT INTO chunks_vec(rowid, embedding) "
+                    "SELECT ?, embedding FROM chunks_vec WHERE rowid = ?",
+                    (cid, donor["id"]),
+                ).rowcount
+            if copied:
+                reused += 1
+                batch_first[c.text_hash] = cid
+            else:
+                need.append((cid, c))
+                batch_first[c.text_hash] = cid
+
+        if need:
+            texts = [emb.embed_text_for(c.text, c.section_path) for _, c in need]
+            vectors = m.encode(texts)
+            from app.index import vector as vec
+
+            vec.upsert(conn, [(cid, v) for (cid, _), v in zip(need, vectors)])
+
+        for cid, first_id in pending_copy:
+            conn.execute(
+                "INSERT INTO chunks_vec(rowid, embedding) "
+                "SELECT ?, embedding FROM chunks_vec WHERE rowid = ?",
+                (cid, first_id),
+            )
+
+        if reused:
+            logging.getLogger("inktable.pipeline").info(
+                "向量复用 %d 片，仅编码 %d 片", reused, len(need))
         return m.model_id
     except Exception:  # noqa: BLE001 - 向量失败绝不拖垮索引主流程
         logging.getLogger("inktable.pipeline").exception("向量编码失败，已跳过")
         return None
+
+
+def cleanup_orphan_contents(conn: sqlite3.Connection) -> int:
+    """清理没有任何文件指向的 content 及其索引。
+
+    编辑文件 → 新 sha256 → 新 content，旧 content 随即成为孤儿。
+    不清会让 chunks/FTS/向量三处滞留旧版内容 —— 搜索命中已不存在的段落。
+
+    **必须放在索引批之后**：新 content 的向量复用要从旧 content 抄，
+    先清就抄不到了（清早了只损失复用、不损失正确性，但没必要）。
+    """
+    orphans = conn.execute(
+        """SELECT id FROM contents
+           WHERE id NOT IN (SELECT content_id FROM files
+                            WHERE content_id IS NOT NULL)"""
+    ).fetchall()
+    for o in orphans:
+        ids = [r["id"] for r in conn.execute(
+            "SELECT id FROM chunks WHERE content_id = ?", (o["id"],)
+        )]
+        if ids:
+            marks = ",".join("?" * len(ids))
+            conn.execute(f"DELETE FROM chunks_fts WHERE rowid IN ({marks})", ids)
+            conn.execute(f"DELETE FROM chunks_fts_tri WHERE rowid IN ({marks})", ids)
+            try:
+                conn.execute(f"DELETE FROM chunks_vec WHERE rowid IN ({marks})", ids)
+            except sqlite3.Error:
+                pass
+            conn.execute("DELETE FROM chunks WHERE content_id = ?", (o["id"],))
+        conn.execute("DELETE FROM contents WHERE id = ?", (o["id"],))
+    return len(orphans)
 
 
 def index_pending(conn: sqlite3.Connection, limit: int = 500, progress=None) -> dict:
@@ -201,6 +290,8 @@ def index_pending(conn: sqlite3.Connection, limit: int = 500, progress=None) -> 
             if progress:
                 progress(i + 1, len(rows))
 
+    # 孤儿清扫必须在索引批之后（向量复用要从旧 content 抄，见函数注释）
+    summary["orphans_cleaned"] = cleanup_orphan_contents(conn)
     conn.commit()
     summary["total"] = len(rows)
     return summary
