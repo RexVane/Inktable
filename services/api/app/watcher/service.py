@@ -137,6 +137,9 @@ class WatchService:
             chunks = idx.get("chunks", 0)
             if idx.get("indexed", 0):
                 self._counters["indexed"] += 1
+                # 成功路径也要留痕：排查"文件没进来"时，需要能区分
+                # 「没检测到」「检测到被跳过」「入库了但搜不到」三种情况
+                log.info("自动入库 %s → %d 片", name, chunks)
             self._log_activity(name, path, _register_status(stats), chunks)
             log.info("自动入库：%s（%d 片）", name, chunks)
 

@@ -128,6 +128,30 @@
   .setup button.ghost { background: transparent; color: var(--text-secondary);
                         border: 1px solid var(--separator); }
   .hint { color: var(--text-secondary); font-size: 11px; }
+
+  /* 监听状态：常驻但不喧哗 —— 用户需要知道"它在盯着"，而不是被提示打扰 */
+  .live {
+    display: flex; align-items: center; gap: 5px; flex-shrink: 0;
+    color: var(--text-secondary); font-size: 11px; margin-left: auto;
+  }
+  .live .dot {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+    flex-shrink: 0;
+  }
+  .live.busy .dot { animation: pulse 1.1s ease-in-out infinite; }
+  .live.off .dot { background: var(--text-secondary); opacity: .4; }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
+
+  /* 新文件到达提示：底部浮出，几秒后自己消失 */
+  .toast {
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%) translateY(60px);
+    background: var(--text-primary); color: var(--bg-app);
+    padding: 7px 14px; border-radius: 7px; font-size: 12px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.22); opacity: 0;
+    transition: opacity .22s, transform .22s; pointer-events: none; z-index: 20;
+    max-width: 70vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 </style>
 </head>
 <body>
@@ -137,11 +161,13 @@
   </div>
   <div class="main">
     <div class="topbar">
-      <input class="search" id="q" placeholder="搜索文件名…" />
+      <input class="search" id="q" placeholder="搜索文件内容或文件名…" />
       <span class="count" id="count"></span>
+      <span class="live off" id="live" title=""><span class="dot"></span><span id="liveText"></span></span>
     </div>
     <div class="rows" id="rows"><div class="empty">加载中…</div></div>
   </div>
+  <div class="toast" id="toast"></div>
 
   <div class="setup" id="setup" style="display:none">
     <div class="drag"></div>
@@ -374,6 +400,8 @@ document.getElementById('btnEnable').onclick = async function () {
   btn.textContent = '正在解析文档内容…';
   document.getElementById('setup').style.display = 'none';
   await boot();
+  try { await api('/watch/start', { method: 'POST' }); } catch (e) {}
+  startWatchPolling();
   runIndexing();
 };
 
@@ -392,6 +420,66 @@ async function runIndexing() {
   } catch (e) { /* 索引失败不影响文件浏览 */ }
 }
 
+/* ---------- 实时监听 ----------
+   后端 watcher 在文件落地后自动入库索引（§11.1）。前端做两件事：
+   ① 让"它在盯着"这件事可见 —— 顶栏一个常驻小圆点
+   ② 新文件进来时刷新列表，并提示一句，不打断当前操作
+*/
+let liveSeen = 0;          // 上次看到的已入库计数
+let livePollTimer = null;
+
+function setLive(state, text, title) {
+  const el = document.getElementById('live');
+  el.className = 'live' + (state ? ' ' + state : '');
+  document.getElementById('liveText').textContent = text || '';
+  el.title = title || '';
+}
+
+let toastTimer;
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { el.classList.remove('show'); }, 3200);
+}
+
+async function pollWatch() {
+  try {
+    const st = await api('/watch/status');
+    const n = st.watched.length;
+    if (!st.running || !n) {
+      setLive('off', '未监听', '没有已启用的来源');
+    } else {
+      setLive('', '监听中', n + ' 个目录 · 已自动入库 ' + st.counters.indexed + ' 个文件');
+    }
+
+    const done = st.counters.indexed;
+    if (liveSeen !== 0 && done > liveSeen) {
+      // 有新文件被自动索引了 —— 刷新当前视图并提示
+      const latest = st.activity[0];
+      const added = done - liveSeen;
+      toast(latest && added === 1
+        ? '已收录「' + latest.name + '」'
+        : '已收录 ' + added + ' 个新文件');
+
+      stats = await api('/stats');
+      renderNav();
+      const q = document.getElementById('q').value.trim();
+      if (q) { doSearch(q); } else { load(''); }
+    }
+    liveSeen = done;
+  } catch (e) {
+    setLive('off', '', '监听状态获取失败');
+  }
+}
+
+function startWatchPolling() {
+  if (livePollTimer) return;
+  pollWatch();
+  livePollTimer = setInterval(pollWatch, 3000);
+}
+
 async function boot() {
   stats = await api('/stats');
   if (stats.files === 0) {
@@ -404,9 +492,13 @@ async function boot() {
   await load('');
 }
 
-boot().then(function () {
-  // 上次索引未完成（应用被关掉、新增了文件）时自动续上
-  if (stats && stats.files > 0) runIndexing();
+boot().then(async function () {
+  if (!stats || stats.files === 0) return;
+  // 挂上所有已启用来源的监听（幂等，重复调用安全）
+  try { await api('/watch/start', { method: 'POST' }); } catch (e) {}
+  startWatchPolling();
+  // 上次索引未完成（应用被关掉、期间新增了文件）时自动续上
+  runIndexing();
 }).catch(function (e) {
   document.getElementById('rows').innerHTML = '<div class="empty">启动失败：' + e.message + '</div>';
 });
