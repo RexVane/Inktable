@@ -29,13 +29,16 @@ log = logging.getLogger("inktable.watcher")
 
 QUIET_PERIOD = 1.5      # 路径静默多久后才开始稳定性检测
 POLL_INTERVAL = 0.5     # 工作线程扫队列的间隔
+GONE_QUIET = 3.0        # deleted 事件后等这么久才确认消失 ——
+                        # 原子替换（删+建）与编辑器的保存舞步都在此窗口内完成
 
 
 class _Handler(FileSystemEventHandler):
     """只做入队，绝不做重活。"""
 
-    def __init__(self, enqueue):
+    def __init__(self, enqueue, enqueue_gone):
         self._enqueue = enqueue
+        self._enqueue_gone = enqueue_gone
 
     def on_created(self, event):
         if not event.is_directory:
@@ -46,11 +49,21 @@ class _Handler(FileSystemEventHandler):
         # 漏掉 on_moved 就等于漏掉两种主流下载方式。
         if not event.is_directory:
             self._enqueue(event.dest_path, moved_in=True)
+            # 树内移动：旧路径消失了。交给 gone 队列判定 ——
+            # register_file 靠 inode 命中会把新路径写回，旧路径不会误标 missing
+            # （gone 判定时会先查库里该路径对应的文件是否已在别处找到）。
+            self._enqueue_gone(event.src_path)
 
     def on_modified(self, event):
         # 已入库文件被改写 → 需要重新索引（§12.5 增量更新）
         if not event.is_directory:
             self._enqueue(event.src_path, moved_in=False)
+
+    def on_deleted(self, event):
+        # 文件消失 —— 可能是真删除，也可能是原子替换（删+建）或
+        # 移到监听树外。**不能立刻动库**：静默期后确认还不在才算 gone。
+        if not event.is_directory:
+            self._enqueue_gone(event.src_path)
 
 
 class Watcher:
@@ -60,16 +73,19 @@ class Watcher:
     避免把 SQLite 单写线程约束（§19 R9）扩散到这一层。
     """
 
-    def __init__(self, on_stable):
+    def __init__(self, on_stable, on_gone=None):
         self._on_stable = on_stable
+        self._on_gone = on_gone          # 路径确认消失后的回调（可选）
         self._observer: Observer | None = None
         self._pending: dict[str, tuple[float, bool]] = {}  # path -> (最后事件时间, moved_in)
+        self._gone: dict[str, float] = {}                  # path -> 最后 deleted 事件时间
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._worker: threading.Thread | None = None
         self._watched: dict[str, object] = {}
         self._done: dict[str, tuple[int, int]] = {}  # path -> (mtime_ns, size)，去重指纹
-        self.stats = {"events": 0, "stable": 0, "deduped": 0, "skipped_temp": 0, "timeout": 0}
+        self.stats = {"events": 0, "stable": 0, "deduped": 0,
+                      "skipped_temp": 0, "timeout": 0, "gone": 0}
 
     # ---------------------------------------------------------------- 生命周期
 
@@ -102,7 +118,9 @@ class Watcher:
         if not p.is_dir() or path in self._watched:
             return False
         try:
-            handle = self._observer.schedule(_Handler(self._enqueue), path, recursive=True)
+            handle = self._observer.schedule(
+                _Handler(self._enqueue, self._enqueue_gone), path, recursive=True
+            )
         except OSError as e:
             log.warning("无法监听 %s：%s", path, e)
             return False
@@ -122,6 +140,15 @@ class Watcher:
 
     # ---------------------------------------------------------------- 内部
 
+    def _enqueue_gone(self, path: str) -> None:
+        """watchdog 线程调用 —— 记录"路径可能消失了"，稍后确认。"""
+        if looks_like_temp(Path(path).name):
+            return
+        with self._lock:
+            self._gone[path] = time.monotonic()
+            # 同一路径若还有 pending 的稳定检测，撤掉 —— 文件都没了
+            self._pending.pop(path, None)
+
     def _enqueue(self, path: str, moved_in: bool) -> None:
         """watchdog 线程调用 —— 必须立刻返回。"""
         self.stats["events"] += 1
@@ -129,6 +156,8 @@ class Watcher:
             self.stats["skipped_temp"] += 1
             return
         with self._lock:
+            # 文件又出现了 —— 撤销待确认的消失（原子替换是"删 + 建"两个事件）
+            self._gone.pop(path, None)
             # moved_in 一旦为真就保持为真：同一路径可能先 created 再 moved
             prev = self._pending.get(path)
             self._pending[path] = (time.monotonic(), moved_in or (prev[1] if prev else False))
@@ -186,5 +215,22 @@ class Watcher:
                     else:
                         with self._lock:
                             self._pending[path] = (time.monotonic(), moved_in)
+
+            # 消失确认：deleted 后静默 GONE_QUIET 秒、且磁盘上确实不在了
+            if self._on_gone is not None:
+                with self._lock:
+                    gone_ready = [p for p, t in self._gone.items()
+                                  if now - t >= GONE_QUIET]
+                    for p in gone_ready:
+                        self._gone.pop(p, None)
+                for path in gone_ready:
+                    if Path(path).exists():
+                        continue  # 又回来了（慢速原子替换），不算消失
+                    self._done.pop(path, None)   # 指纹作废，重现时能再触发
+                    self.stats["gone"] += 1
+                    try:
+                        self._on_gone(path)
+                    except Exception:
+                        log.exception("消失回调失败：%s", path)
 
             self._stop.wait(POLL_INTERVAL)

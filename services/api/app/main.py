@@ -167,7 +167,7 @@ def list_sources() -> dict:
     watched = set(watch_service().status["watched"])
     rows = conn.execute(
         """SELECT s.id, s.name, s.path, s.kind, s.volatile, s.enabled,
-                  s.permission_ok, s.created_at,
+                  s.auto_preserve, s.permission_ok, s.created_at,
                   (SELECT count(*) FROM files f WHERE f.source_id = s.id) AS file_count
            FROM sources s ORDER BY s.enabled DESC, file_count DESC"""
     ).fetchall()
@@ -177,6 +177,7 @@ def list_sources() -> dict:
         d = dict(r)
         d["volatile"] = bool(r["volatile"])
         d["enabled"] = bool(r["enabled"])
+        d["auto_preserve"] = bool(r["auto_preserve"])
         d["watching"] = r["path"] in watched
         d["exists"] = Path(r["path"]).is_dir()
         out.append(d)
@@ -265,6 +266,173 @@ def _delete_content(conn, content_id: int) -> None:
     conn.execute("DELETE FROM contents WHERE id = ?", (content_id,))
 
 
+# ---------------------------------------------------------------- 分类（信息层）
+
+class CategoryCreate(BaseModel):
+    name: str
+    parent_id: int | None = None
+
+
+class CategoryRename(BaseModel):
+    category_id: int
+    name: str
+
+
+class CategoryId(BaseModel):
+    category_id: int
+
+
+class AssignRequest(BaseModel):
+    file_ids: list[int]
+    category_id: int | None = None
+    # 顺手建规则：同来源同扩展名以后自动归到此分类（§11.4 回流学习）
+    learn_rule: bool = False
+
+
+@app.get("/categories", dependencies=[Depends(require_token)])
+def get_categories() -> dict:
+    from app.organize.classify import category_tree
+
+    conn = db()
+    unclassified = conn.execute(
+        "SELECT count(*) c FROM files WHERE category_id IS NULL "
+        "AND state != 'missing'"
+    ).fetchone()["c"]
+    return {"tree": category_tree(conn), "unclassified": unclassified}
+
+
+@app.post("/categories", dependencies=[Depends(require_token)])
+def post_category(req: CategoryCreate) -> dict:
+    from app.organize.classify import CategoryError, create_category
+
+    with _db_lock:
+        conn = db()
+        try:
+            cid = create_category(conn, req.name, req.parent_id)
+            conn.commit()
+        except CategoryError as e:
+            conn.rollback()
+            raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"id": cid}
+
+
+@app.post("/categories/rename", dependencies=[Depends(require_token)])
+def post_category_rename(req: CategoryRename) -> dict:
+    from app.organize.classify import CategoryError, rename_category
+
+    with _db_lock:
+        conn = db()
+        try:
+            rename_category(conn, req.category_id, req.name)
+            conn.commit()
+        except CategoryError as e:
+            conn.rollback()
+            raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"ok": True}
+
+
+@app.post("/categories/delete", dependencies=[Depends(require_token)])
+def post_category_delete(req: CategoryId) -> dict:
+    from app.organize.classify import CategoryError, delete_category
+
+    with _db_lock:
+        conn = db()
+        try:
+            delete_category(conn, req.category_id)
+            conn.commit()
+        except CategoryError as e:
+            conn.rollback()
+            raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"ok": True}
+
+
+@app.post("/files/classify", dependencies=[Depends(require_token)])
+def post_classify(req: AssignRequest) -> dict:
+    """批量归类。learn_rule=True 时顺手生成规则并回溯存量（§11.4）。
+
+    规则从**第一个文件**的来源+扩展名归纳 —— 用户勾了"以后都这样"，
+    指的就是"这一类"。
+    """
+    from app.organize.classify import (
+        CategoryError, assign_category, backfill_rule, create_rule,
+    )
+
+    with _db_lock:
+        conn = db()
+        try:
+            n = assign_category(conn, req.file_ids, req.category_id, by="user")
+            learned = backfilled = 0
+            if req.learn_rule and req.category_id is not None and req.file_ids:
+                f = conn.execute(
+                    "SELECT ext, source_id FROM files WHERE id = ?",
+                    (req.file_ids[0],),
+                ).fetchone()
+                if f and f["ext"]:
+                    rid = create_rule(
+                        conn, req.category_id, match_ext=f["ext"],
+                        match_source_id=f["source_id"],
+                        learned_from=req.file_ids[0],
+                    )
+                    learned = 1
+                    backfilled = backfill_rule(conn, rid)
+            conn.commit()
+        except CategoryError as e:
+            conn.rollback()
+            raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"assigned": n, "rule_created": learned, "backfilled": backfilled}
+
+
+class FileIdRequest(BaseModel):
+    file_id: int
+
+
+@app.post("/files/preserve", dependencies=[Depends(require_token)])
+def preserve_one(req: FileIdRequest) -> dict:
+    """保全单个文件（§2.5）：复制到应用空间，原文件不动。"""
+    from app.organize.preserve import PreserveError, preserve_file
+
+    with _db_lock:
+        conn = db()
+        try:
+            result = preserve_file(conn, req.file_id)
+            conn.commit()
+            return result
+        except PreserveError as e:
+            conn.rollback()
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/sources/preserve_all", dependencies=[Depends(require_token)])
+def preserve_all(req: SourceIdRequest) -> dict:
+    """保全来源下全部文件。微信随时可能清缓存 —— 一键兜底。"""
+    from app.organize.preserve import preserve_source
+
+    with _db_lock:
+        conn = db()
+        result = preserve_source(conn, req.source_id)
+    return result
+
+
+class AutoPreserveRequest(BaseModel):
+    source_id: int
+    enabled: bool
+
+
+@app.post("/sources/auto_preserve", dependencies=[Depends(require_token)])
+def set_auto_preserve(req: AutoPreserveRequest) -> dict:
+    """开关易失来源的自动保全：新文件入库即复制（§2.5，默认关）。"""
+    with _db_lock:
+        conn = db()
+        cur = conn.execute(
+            "UPDATE sources SET auto_preserve = ? WHERE id = ?",
+            (int(req.enabled), req.source_id),
+        )
+        conn.commit()
+    if cur.rowcount == 0:
+        raise HTTPException(status_code=404, detail="来源不存在")
+    return {"source_id": req.source_id, "auto_preserve": req.enabled}
+
+
 class AddSourceRequest(BaseModel):
     path: str
     name: str | None = None
@@ -291,16 +459,30 @@ def add_source(req: AddSourceRequest) -> dict:
 
 
 @app.get("/files", dependencies=[Depends(require_token)])
-def list_files(limit: int = 100, offset: int = 0, q: str | None = None) -> dict:
+def list_files(limit: int = 100, offset: int = 0, q: str | None = None,
+               category_id: int | None = None, unclassified: bool = False) -> dict:
     conn = db()
-    where, params = "", []
+    conds, params = [], []
     if q:
-        where = "WHERE f.name LIKE ?"
+        conds.append("f.name LIKE ?")
         params.append(f"%{q}%")
+    if category_id is not None:
+        # 含子分类：分类树很浅（个人库），递归 CTE 一次取全
+        conds.append(
+            """f.category_id IN (
+                 WITH RECURSIVE sub(id) AS (
+                   SELECT ? UNION ALL
+                   SELECT c.id FROM categories c JOIN sub ON c.parent_id = sub.id
+                 ) SELECT id FROM sub)"""
+        )
+        params.append(category_id)
+    if unclassified:
+        conds.append("f.category_id IS NULL")
+    where = ("WHERE " + " AND ".join(conds)) if conds else ""
 
     total = conn.execute(f"SELECT count(*) c FROM files f {where}", params).fetchone()["c"]
     rows = conn.execute(
-        f"SELECT f.id, f.name, f.path, f.ext, f.size, f.state, f.mtime, "
+        f"SELECT f.id, f.name, f.path, f.ext, f.size, f.state, f.mtime, f.preserved_path, "
         f"s.name AS source_name, s.volatile "
         f"FROM files f LEFT JOIN sources s ON f.source_id = s.id {where} "
         f"ORDER BY f.mtime DESC LIMIT ? OFFSET ?",

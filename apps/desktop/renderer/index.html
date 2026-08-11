@@ -63,6 +63,7 @@
   }
   .row:hover { background: var(--bg-hover); }
   .row.on { background: var(--bg-selected); }
+  .row.gone .fname, .row.gone .icon { opacity: .45; }
   .icon { width: 16px; text-align: center; flex-shrink: 0; opacity: .75; font-size: 12px; }
   .fname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .fsrc, .fsize, .fdate { color: var(--text-secondary); font-size: 11px; flex-shrink: 0; }
@@ -161,6 +162,27 @@
   }
   .gear:hover { background: var(--bg-hover); color: var(--text-primary); }
 
+  /* 右键归类菜单 */
+  .ctx {
+    position: fixed; z-index: 40; min-width: 150px; max-height: 320px; overflow-y: auto;
+    background: var(--bg-app); border: 1px solid var(--separator); border-radius: 7px;
+    box-shadow: 0 8px 28px rgba(0,0,0,.25); padding: 4px; display: none;
+  }
+  .ctx.show { display: block; }
+  .ctx .ci { padding: 5px 10px; border-radius: 4px; cursor: default; white-space: nowrap; }
+  .ctx .ci:hover { background: var(--bg-selected); }
+  .ctx .ci.dim { color: var(--text-secondary); font-size: 11px; }
+  .ctx .sep { height: 1px; background: var(--separator); margin: 4px 6px; }
+  .nav-add {
+    cursor: pointer; color: var(--text-secondary); padding: 0 4px; border-radius: 3px;
+  }
+  .nav-add:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .nav-input {
+    width: 100%; font: inherit; font-size: 12px; margin: 2px 0;
+    background: var(--bg-hover); border: 1px solid var(--separator);
+    border-radius: 4px; padding: 3px 7px; color: var(--text-primary); outline: none;
+  }
+
   .sheet {
     position: fixed; inset: 0; background: rgba(0,0,0,.28);
     display: none; align-items: center; justify-content: center; z-index: 30;
@@ -224,6 +246,7 @@
     <div class="rows" id="rows"><div class="empty">加载中…</div></div>
   </div>
   <div class="toast" id="toast"></div>
+  <div class="ctx" id="ctx"></div>
 
   <div class="sheet" id="sheet">
     <div class="sheet-box">
@@ -257,6 +280,8 @@
 
 <script>
 let sources = [], files = [], activeSource = null, stats = null;
+let categories = { tree: [], unclassified: 0 };
+let activeCategory = null;   // 数字=分类id, 'none'=未分类, null=不过滤
 
 async function api(path, opts = {}) {
   const info = await window.inktable.getSidecarInfo();
@@ -302,6 +327,18 @@ function renderNav() {
     h += '<div class="nav-item" data-dup="1"><span class="label">重复内容</span>' +
          '<span class="n">' + stats.deduped + '</span></div>';
   }
+  h += '<div class="nav-group">分类 <span class="nav-add" id="catAdd" title="新建分类">＋</span></div>';
+  h += '<div id="catInputWrap"></div>';
+  categories.tree.forEach(function (c) {
+    var pad = 8 + c.depth * 14;
+    h += '<div class="nav-item' + (activeCategory === c.id ? ' on' : '') + '" data-cat="' + c.id +
+         '" style="padding-left:' + pad + 'px">' +
+         '<span class="label">' + esc(c.name) + '</span>' +
+         '<span class="n">' + (c.total_count || '') + '</span></div>';
+  });
+  h += '<div class="nav-item' + (activeCategory === 'none' ? ' on' : '') + '" data-cat="none">' +
+       '<span class="label">未分类</span><span class="n">' + categories.unclassified + '</span></div>';
+
   if (stats && stats.by_source.length) {
     h += '<div class="nav-group">来源</div>';
     stats.by_source.forEach(function (s) {
@@ -319,10 +356,42 @@ function renderNav() {
   el.innerHTML = h;
   el.querySelectorAll('.nav-item').forEach(function (it) {
     it.onclick = function () {
-      activeSource = it.dataset.src || null;
+      if (it.dataset.cat !== undefined) {
+        var v = it.dataset.cat;
+        activeCategory = (v === 'none') ? 'none' : +v;
+        activeSource = null;
+      } else {
+        activeSource = it.dataset.src || null;
+        activeCategory = null;
+      }
+      renderNav();
       load(document.getElementById('q').value);
     };
   });
+  var addBtn = document.getElementById('catAdd');
+  if (addBtn) addBtn.onclick = function (e) {
+    e.stopPropagation();
+    var wrap = document.getElementById('catInputWrap');
+    wrap.innerHTML = '<input class="nav-input" id="catInput" placeholder="分类名，回车创建">';
+    var inp = document.getElementById('catInput');
+    inp.focus();
+    inp.onkeydown = async function (ev) {
+      if (ev.key === 'Escape') { wrap.innerHTML = ''; return; }
+      if (ev.key !== 'Enter') return;
+      var name = inp.value.trim();
+      if (!name) { wrap.innerHTML = ''; return; }
+      try {
+        await api('/categories', { method: 'POST', body: JSON.stringify({ name: name }) });
+        wrap.innerHTML = '';
+        await refreshCats();
+        renderNav();
+      } catch (e2) { inp.value = ''; inp.placeholder = '创建失败：' + e2.message; }
+    };
+  };
+}
+
+async function refreshCats() {
+  try { categories = await api('/categories'); } catch (e) {}
 }
 
 function renderRows() {
@@ -332,24 +401,109 @@ function renderRows() {
     return;
   }
   el.innerHTML = files.map(function (f) {
-    return '<div class="row" data-path="' + encodeURIComponent(f.path) + '">' +
+    // 原件没了但有副本 → 双击落到副本（保全存在的意义）
+    var openPath = f.path;
+    if (f.state === 'missing' && f.preserved_path) openPath = f.preserved_path;
+    var gone = f.state === 'missing' && !f.preserved_path;
+    return '<div class="row' + (gone ? ' gone' : '') + '" data-path="' + encodeURIComponent(openPath) + '">' +
       '<span class="icon">' + (ICONS[f.ext] || '▢') + '</span>' +
-      '<span class="fname">' + f.name + '</span>' +
+      '<span class="fname">' + f.name +
+        (f.state === 'missing' ? ' <span class="tag' + (f.preserved_path ? '' : ' gone') + '">' +
+          (f.preserved_path ? '已保全' : '原文件已消失') + '</span>' : '') +
+      '</span>' +
       '<span class="fsrc' + (f.volatile ? ' vol' : '') + '">' + (f.source_name || '') + '</span>' +
       '<span class="fsize">' + fmtSize(f.size) + '</span>' +
       '<span class="fdate">' + fmtDate(f.mtime) + '</span>' +
     '</div>';
   }).join('');
-  el.querySelectorAll('.row').forEach(function (r) {
+  el.querySelectorAll('.row').forEach(function (r, idx) {
     r.ondblclick = function () {
       window.inktable.revealInFinder(decodeURIComponent(r.dataset.path));
+    };
+    r.oncontextmenu = function (e) {
+      e.preventDefault();
+      openCtxMenu(e.clientX, e.clientY, files[idx]);
     };
   });
 }
 
+/* 右键归类：列出分类树，点即归；底部可勾"同类型以后自动归" */
+function openCtxMenu(x, y, file) {
+  var el = document.getElementById('ctx');
+  var h = '<div class="ci dim">归类「' + esc(file.name.slice(0, 18)) + '」到…</div>';
+  categories.tree.forEach(function (c) {
+    h += '<div class="ci" data-cid="' + c.id + '" style="padding-left:' + (10 + c.depth * 12) + 'px">' +
+         esc(c.name) + '</div>';
+  });
+  if (!categories.tree.length) h += '<div class="ci dim">（先在侧边栏 ＋ 新建分类）</div>';
+  h += '<div class="sep"></div>' +
+       '<div class="ci" data-cid="__learn">归类并记住规则（同来源同类型）</div>' +
+       '<div class="ci" data-cid="__clear">移出分类</div>';
+  el.innerHTML = h;
+  el.classList.add('show');
+  el.style.left = Math.min(x, window.innerWidth - 220) + 'px';
+  el.style.top = Math.min(y, window.innerHeight - el.offsetHeight - 10) + 'px';
+
+  el.querySelectorAll('.ci[data-cid]').forEach(function (it) {
+    it.onclick = async function () {
+      closeCtx();
+      var cid = it.dataset.cid;
+      try {
+        if (cid === '__clear') {
+          await api('/files/classify', { method: 'POST', body: JSON.stringify({
+            file_ids: [file.file_id || file.id], category_id: null }) });
+        } else if (cid === '__learn') {
+          // 二级选择：再弹一次纯分类列表
+          openCtxLearn(x, y, file);
+          return;
+        } else {
+          await api('/files/classify', { method: 'POST', body: JSON.stringify({
+            file_ids: [file.file_id || file.id], category_id: +cid }) });
+        }
+        await refreshCats();
+        renderNav();
+        await load(document.getElementById('q').value.trim());
+      } catch (e) { toast('归类失败：' + e.message); }
+    };
+  });
+}
+
+function openCtxLearn(x, y, file) {
+  var el = document.getElementById('ctx');
+  var h = '<div class="ci dim">归类并记住规则 → 选分类</div>';
+  categories.tree.forEach(function (c) {
+    h += '<div class="ci" data-cid="' + c.id + '" style="padding-left:' + (10 + c.depth * 12) + 'px">' +
+         esc(c.name) + '</div>';
+  });
+  el.innerHTML = h;
+  el.classList.add('show');
+  el.querySelectorAll('.ci[data-cid]').forEach(function (it) {
+    it.onclick = async function () {
+      closeCtx();
+      try {
+        var r = await api('/files/classify', { method: 'POST', body: JSON.stringify({
+          file_ids: [file.file_id || file.id], category_id: +it.dataset.cid, learn_rule: true }) });
+        toast('已归类' + (r.backfilled ? '，并自动归入 ' + r.backfilled + ' 个同类文件' : '，之后同类文件将自动归入'));
+        await refreshCats();
+        renderNav();
+        await load(document.getElementById('q').value.trim());
+      } catch (e) { toast('归类失败：' + e.message); }
+    };
+  });
+}
+
+function closeCtx() { document.getElementById('ctx').classList.remove('show'); }
+document.addEventListener('click', closeCtx);
+document.addEventListener('contextmenu', function (e) {
+  // 点在空白处右键 → 关掉已开的菜单
+  if (!e.target.closest('.row')) closeCtx();
+});
+
 async function load(q) {
   const params = new URLSearchParams({ limit: '300' });
   if (q) params.set('q', q);
+  if (activeCategory === 'none') params.set('unclassified', 'true');
+  else if (activeCategory !== null) params.set('category_id', String(activeCategory));
   const d = await api('/files?' + params);
   files = d.files;
   if (activeSource) files = files.filter(function (f) { return f.source_name === activeSource; });
@@ -591,10 +745,15 @@ async function renderSources() {
     else tags.push('<span class="tag">已停用</span>');
     if (s.volatile) tags.push('<span class="badge">易失</span>');
 
-    const acts = s.enabled
+    const preserveBtns = s.volatile && s.enabled
+      ? '<button class="mini" data-act="autopreserve" data-id="' + s.id + '" data-on="' + (s.auto_preserve ? 1 : 0) + '">' +
+          (s.auto_preserve ? '自动保全:开' : '自动保全:关') + '</button>' +
+        '<button class="mini" data-act="preserveall" data-id="' + s.id + '">立即保全</button>'
+      : '';
+    const acts = preserveBtns + (s.enabled
       ? '<button class="mini" data-act="disable" data-id="' + s.id + '">停用</button>'
       : '<button class="mini" data-act="enable" data-id="' + s.id +
-        '" data-path="' + encodeURIComponent(s.path) + '" data-name="' + esc(s.name) + '">启用</button>';
+        '" data-path="' + encodeURIComponent(s.path) + '" data-name="' + esc(s.name) + '">启用</button>');
 
     return '<div class="srow">' +
       '<div class="info">' +
@@ -627,7 +786,20 @@ async function onSourceAction(btn) {
   btn.disabled = true;
   hint.textContent = '处理中…';
   try {
-    if (act === 'disable') {
+    if (act === 'autopreserve') {
+      await api('/sources/auto_preserve', { method: 'POST', body: JSON.stringify({
+        source_id: +btn.dataset.id, enabled: btn.dataset.on !== '1' }) });
+      hint.textContent = '';
+      await renderSources();
+      return;
+    } else if (act === 'preserveall') {
+      hint.textContent = '正在复制…';
+      const r = await api('/sources/preserve_all', { method: 'POST', body: JSON.stringify({
+        source_id: +btn.dataset.id }) });
+      hint.textContent = '已保全 ' + r.preserved + ' 个' + (r.failed ? '，失败 ' + r.failed : '');
+      btn.disabled = false;
+      return;
+    } else if (act === 'disable') {
       await api('/sources/disable', { method: 'POST', body: JSON.stringify({ source_id: +btn.dataset.id }) });
     } else if (act === 'remove') {
       await api('/sources/remove', { method: 'POST', body: JSON.stringify({ source_id: +btn.dataset.id }) });
@@ -706,6 +878,7 @@ document.addEventListener('keydown', function (e) {
 
 async function boot() {
   stats = await api('/stats');
+  await refreshCats();
   if (stats.files === 0) {
     document.getElementById('setup').style.display = 'flex';
     sources = (await api('/sources/discover', { method: 'POST' })).sources;

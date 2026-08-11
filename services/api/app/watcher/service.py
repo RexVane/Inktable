@@ -56,9 +56,10 @@ class WatchService:
     def __init__(self, conn_factory, db_lock: threading.Lock):
         self._conn_factory = conn_factory
         self._lock = db_lock
-        self._watcher = Watcher(self._on_stable)
+        self._watcher = Watcher(self._on_stable, on_gone=self._on_gone)
         self._activity: deque[dict] = deque(maxlen=ACTIVITY_LIMIT)
-        self._counters = {"detected": 0, "registered": 0, "indexed": 0, "skipped": 0}
+        self._counters = {"detected": 0, "registered": 0, "indexed": 0,
+                          "skipped": 0, "missing": 0, "preserved": 0}
 
     # ------------------------------------------------------------ 生命周期
 
@@ -143,6 +144,10 @@ class WatchService:
             self._log_activity(name, path, _register_status(stats), chunks)
             log.info("自动入库：%s（%d 片）", name, chunks)
 
+            # 易失来源开了自动保全 → 立刻复制一份（§2.5）。
+            # 微信清缓存不挑时候，等用户手动点就晚了。
+            self._auto_preserve(file_id, source_id)
+
         except sqlite3.Error as e:
             log.error("自动入库失败（数据库）：%s — %s", path, e)
         except Exception as e:
@@ -189,6 +194,51 @@ class WatchService:
             "chunks": chunks,
             "at": time.time(),
         })
+
+    def _on_gone(self, path: str) -> None:
+        """路径确认消失 —— 标 missing，**保留全部索引**（§8.3）。
+
+        树内移动的旧路径不会误伤：register_file 靠 inode 已把新路径
+        写回同一行，按旧路径查不到记录，这里自然 no-op。
+        外置盘整卷拔出是另一回事（卷级批量 gone），missing 状态可自动
+        恢复 —— 文件重现时 register_file 的身份命中会清掉它。
+        """
+        try:
+            with self._lock:
+                conn = self._conn_factory()
+                cur = conn.execute(
+                    """UPDATE files SET state = 'missing', missing_since = ?
+                       WHERE path = ? AND state != 'missing'""",
+                    (time.time(), path),
+                )
+                conn.commit()
+            if cur.rowcount:
+                self._counters["missing"] += 1
+                name = Path(path).name
+                self._log_activity(name, path, "missing", 0)
+                log.info("文件已消失，索引保留：%s", name)
+        except Exception:
+            log.exception("标记消失失败：%s", path)
+
+    def _auto_preserve(self, file_id: int | None, source_id: int | None) -> None:
+        if file_id is None or source_id is None:
+            return
+        try:
+            with self._lock:
+                conn = self._conn_factory()
+                src = conn.execute(
+                    "SELECT volatile, auto_preserve FROM sources WHERE id = ?",
+                    (source_id,),
+                ).fetchone()
+                if not src or not (src["volatile"] and src["auto_preserve"]):
+                    return
+                from app.organize.preserve import preserve_file
+
+                preserve_file(conn, file_id)
+                conn.commit()
+            self._counters["preserved"] += 1
+        except Exception as e:
+            log.warning("自动保全失败 file_id=%s：%s", file_id, e)
 
     # ------------------------------------------------------------ 状态查询
 

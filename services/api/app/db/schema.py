@@ -89,6 +89,19 @@ CREATE TABLE IF NOT EXISTS categories (
     sort_order INTEGER NOT NULL DEFAULT 0
 );
 
+-- 分类规则（§9 rules / §11.4 回流学习）
+-- 三条件 AND，NULL = 不限；priority 小的先匹配，首条命中即停
+CREATE TABLE IF NOT EXISTS rules (
+    id                    INTEGER PRIMARY KEY,
+    priority              INTEGER NOT NULL DEFAULT 100,
+    match_ext             TEXT,
+    match_source_id       INTEGER REFERENCES sources(id) ON DELETE CASCADE,
+    match_name_pattern    TEXT,
+    category_id           INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+    confidence            REAL NOT NULL DEFAULT 0.8,
+    learned_from_file_id  INTEGER
+);
+
 CREATE TABLE IF NOT EXISTS tags (
     id    INTEGER PRIMARY KEY,
     name  TEXT NOT NULL UNIQUE,

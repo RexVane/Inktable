@@ -86,6 +86,7 @@ class ScanStats:
     skipped_ext: int = 0
     skipped_dataless: int = 0
     skipped_too_large: int = 0
+    marked_missing: int = 0      # 全量扫描发现"库里有、磁盘上没"
     errors: int = 0
 
     @property
@@ -161,7 +162,8 @@ def register_file(conn, path: Path, source_id: int | None, stats: ScanStats) -> 
 
     # 已登记过？先按身份查（§8：移动/改名后 inode 不变）
     row = conn.execute(
-        "SELECT id, size, mtime, path FROM files WHERE volume_uuid = ? AND inode = ?",
+        "SELECT id, size, mtime, path, state FROM files "
+        "WHERE volume_uuid = ? AND inode = ?",
         (ident.volume_uuid, ident.inode),
     ).fetchone()
 
@@ -176,6 +178,13 @@ def register_file(conn, path: Path, source_id: int | None, stats: ScanStats) -> 
                 stats.path_updated += 1
             else:
                 stats.unchanged += 1
+            # 曾被标 missing 的文件重现（外置盘插回、误删恢复、移回来）
+            # → 自动复活，索引一直都在（§8.3：missing 非终态）
+            conn.execute(
+                """UPDATE files SET state = 'registered', missing_since = NULL
+                   WHERE id = ? AND state = 'missing'""",
+                (row["id"],),
+            )
             return row["id"]
 
     # iCloud 占位文件：**绝不读取内容**，读了就会触发全量下载（§7.8）
@@ -210,6 +219,15 @@ def register_file(conn, path: Path, source_id: int | None, stats: ScanStats) -> 
          ident.mtime, now),
     )
     stats.registered += 1
+
+    # 新文件跑一遍分类规则（A6）。规则只碰未归类文件，永不覆盖用户决定。
+    try:
+        from app.organize.classify import classify_new_file
+
+        classify_new_file(conn, cur.lastrowid)
+    except Exception:
+        pass  # 分类失败不该影响登记
+
     return cur.lastrowid
 
 
@@ -234,20 +252,47 @@ def _ensure_content(conn, path: Path, ident: FileIdentity, stats: ScanStats) -> 
 
 
 def scan_source(conn, source_id: int, root: Path | str, progress=None) -> ScanStats:
-    """扫描一个来源目录。"""
+    """扫描一个来源目录。
+
+    扫描同时是**消失检测的兜底**（§11.1）：FSEvents 可能漏事件
+    （应用没开着、网络卷、事件缓冲溢出），全量扫描比对"库里有、
+    磁盘上没"的文件并标 missing —— 保留索引，等待重现自动恢复。
+    """
     stats = ScanStats()
     root = Path(root)
 
+    seen_ids: set[int] = set()
     for path, was_excluded in iter_files(root):
         if was_excluded:
             stats.skipped_excluded += 1
             continue
         stats.scanned += 1
-        register_file(conn, path, source_id, stats)
+        fid = register_file(conn, path, source_id, stats)
+        if fid is not None:
+            seen_ids.add(fid)
 
         if progress and stats.scanned % 100 == 0:
             conn.commit()
             progress(stats)
+
+    # 库里属于本来源、这次没扫到、磁盘上也确实不在 → missing。
+    # 双重确认（not exists）防误伤：文件可能刚被移出扫描深度/排除目录，
+    # 但仍在原地 —— 那不算消失。
+    rows = conn.execute(
+        "SELECT id, path FROM files WHERE source_id = ? AND state != 'missing'",
+        (source_id,),
+    ).fetchall()
+    now = time.time()
+    for r in rows:
+        if r["id"] in seen_ids:
+            continue
+        if Path(r["path"]).exists():
+            continue
+        conn.execute(
+            "UPDATE files SET state = 'missing', missing_since = ? WHERE id = ?",
+            (now, r["id"]),
+        )
+        stats.marked_missing += 1
 
     conn.commit()
     return stats
