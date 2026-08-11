@@ -4,156 +4,304 @@
 <meta charset="UTF-8" />
 <title>Inktable</title>
 <style>
-  /* 设计 Token —— PLAN §15 A8 */
+  /* 设计 Token —— PLAN §15 A8：原生极简 */
   :root {
-    --bg-app: #ffffff;
-    --bg-sidebar: #f5f5f7;
-    --bg-card: #f7f7f8;
-    --bg-hover: rgba(0,0,0,.05);
-    --text-primary: #1d1d1f;
-    --text-secondary: #6e6e73;
-    --separator: rgba(0,0,0,.1);
-    --accent: #1DB954;
-    --warn: #ff9f0a;
+    --bg-app: #fff; --bg-sidebar: #f5f5f7; --bg-card: #f7f7f8;
+    --bg-hover: rgba(0,0,0,.05); --bg-selected: rgba(29,185,84,.12);
+    --text-primary: #1d1d1f; --text-secondary: #6e6e73;
+    --separator: rgba(0,0,0,.1); --accent: #1DB954; --warn: #ff9f0a;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg-app: #1e1e1e; --bg-sidebar: #252525; --bg-card: #2a2a2c;
-      --bg-hover: rgba(255,255,255,.05);
-      --text-primary: #f5f5f7; --text-secondary: #98989d;
-      --separator: rgba(255,255,255,.1);
+      --bg-hover: rgba(255,255,255,.06); --text-primary: #f5f5f7;
+      --text-secondary: #98989d; --separator: rgba(255,255,255,.1);
     }
   }
   * { box-sizing: border-box; }
   body {
     margin: 0; font: 13px -apple-system, "SF Pro Text", "PingFang SC", sans-serif;
     background: var(--bg-app); color: var(--text-primary);
-    -webkit-user-select: none; height: 100vh; display: flex; flex-direction: column;
+    -webkit-user-select: none; height: 100vh; display: flex; overflow: hidden;
   }
-  .titlebar { height: 38px; -webkit-app-region: drag; flex-shrink: 0; }
-  .wrap { flex: 1; overflow-y: auto; padding: 0 32px 32px; }
-  h1 { font-size: 20px; font-weight: 600; margin: 0 0 6px; }
-  .sub { color: var(--text-secondary); margin-bottom: 24px; font-size: 13px; }
 
-  .list { border-top: 1px solid var(--separator); }
-  .item {
-    display: flex; align-items: center; gap: 12px;
-    padding: 12px 4px; border-bottom: 1px solid var(--separator);
+  /* 侧边栏 */
+  .sidebar {
+    width: 200px; background: var(--bg-sidebar); flex-shrink: 0;
+    border-right: 1px solid var(--separator); display: flex; flex-direction: column;
   }
-  .item:hover { background: var(--bg-hover); }
-  .cb { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
-  .info { flex: 1; min-width: 0; }
-  .name { font-weight: 500; display: flex; align-items: center; gap: 6px; }
-  .badge {
-    font-size: 10px; padding: 1px 5px; border-radius: 3px;
-    background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn);
+  .drag { height: 38px; -webkit-app-region: drag; flex-shrink: 0; }
+  .nav { flex: 1; overflow-y: auto; padding: 0 8px 12px; }
+  .nav-group { font-size: 11px; color: var(--text-secondary); padding: 12px 8px 4px; font-weight: 500; }
+  .nav-item {
+    padding: 5px 8px; border-radius: 4px; cursor: pointer;
+    display: flex; justify-content: space-between; align-items: center; gap: 6px;
   }
-  .path {
-    color: var(--text-secondary); font-size: 11px; margin-top: 3px;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  .meta { color: var(--text-secondary); font-size: 11px; text-align: right; flex-shrink: 0; }
-  .cnt { color: var(--accent); font-weight: 600; font-size: 14px; }
+  .nav-item:hover { background: var(--bg-hover); }
+  .nav-item.on { background: var(--bg-selected); }
+  .nav-item .n { color: var(--text-secondary); font-size: 11px; }
+  .nav-item .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-  .foot { margin-top: 24px; display: flex; align-items: center; gap: 12px; }
-  button {
-    font: inherit; padding: 6px 16px; border-radius: 6px; border: none;
+  /* 主区 */
+  .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .topbar {
+    height: 38px; -webkit-app-region: drag; display: flex; align-items: center;
+    padding: 0 16px; gap: 12px; border-bottom: 1px solid var(--separator);
+  }
+  .search {
+    -webkit-app-region: no-drag; flex: 1; max-width: 420px;
+    background: var(--bg-hover); border: none; border-radius: 6px;
+    padding: 5px 10px; font: inherit; color: var(--text-primary); outline: none;
+  }
+  .search::placeholder { color: var(--text-secondary); }
+  .count { color: var(--text-secondary); font-size: 11px; margin-left: auto; }
+
+  .rows { flex: 1; overflow-y: auto; }
+  .row {
+    display: flex; align-items: center; gap: 10px; height: 28px;
+    padding: 0 16px; cursor: default;
+  }
+  .row:hover { background: var(--bg-hover); }
+  .row.on { background: var(--bg-selected); }
+  .icon { width: 16px; text-align: center; flex-shrink: 0; opacity: .75; font-size: 12px; }
+  .fname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fsrc, .fsize, .fdate { color: var(--text-secondary); font-size: 11px; flex-shrink: 0; }
+  .fsrc { width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fsize { width: 60px; text-align: right; }
+  .fdate { width: 66px; text-align: right; }
+  .vol { color: var(--warn); }
+
+  .empty { padding: 60px 20px; text-align: center; color: var(--text-secondary); }
+  .empty button {
+    font: inherit; margin-top: 14px; padding: 6px 16px; border: none; border-radius: 6px;
     background: var(--accent); color: #fff; font-weight: 500; cursor: pointer;
   }
-  button:disabled { opacity: .4; cursor: default; }
-  button.ghost { background: transparent; color: var(--text-secondary); border: 1px solid var(--separator); }
+
+  /* 来源引导（首次启动） */
+  .setup { position: absolute; inset: 0; background: var(--bg-app); z-index: 10;
+           display: flex; flex-direction: column; }
+  .setup .body { flex: 1; overflow-y: auto; padding: 0 32px 24px; }
+  .setup h1 { font-size: 19px; margin: 0 0 6px; }
+  .setup .sub { color: var(--text-secondary); margin-bottom: 20px; }
+  .src {
+    display: flex; align-items: center; gap: 12px; padding: 11px 4px;
+    border-bottom: 1px solid var(--separator);
+  }
+  .src input { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
+  .src .info { flex: 1; min-width: 0; }
+  .src .nm { font-weight: 500; display: flex; align-items: center; gap: 6px; }
+  .src .pth { color: var(--text-secondary); font-size: 11px; margin-top: 2px;
+              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .badge { font-size: 10px; padding: 1px 5px; border-radius: 3px;
+           background: rgba(255,159,10,.18); color: var(--warn); }
+  .src .meta { text-align: right; font-size: 11px; color: var(--text-secondary); flex-shrink: 0; }
+  .src .cnt { color: var(--accent); font-weight: 600; font-size: 14px; }
+  .setup .foot { padding: 16px 32px; border-top: 1px solid var(--separator);
+                 display: flex; align-items: center; gap: 12px; }
+  .setup button { font: inherit; padding: 6px 16px; border: none; border-radius: 6px;
+                  background: var(--accent); color: #fff; font-weight: 500; cursor: pointer; }
+  .setup button:disabled { opacity: .4; cursor: default; }
+  .setup button.ghost { background: transparent; color: var(--text-secondary);
+                        border: 1px solid var(--separator); }
   .hint { color: var(--text-secondary); font-size: 11px; }
-  .loading { color: var(--text-secondary); padding: 40px 0; text-align: center; }
 </style>
 </head>
 <body>
-  <div class="titlebar"></div>
-  <div class="wrap">
-    <h1>发现文件来源</h1>
-    <div class="sub" id="sub">正在扫描本机…</div>
-    <div id="list" class="loading">扫描中…</div>
-    <div class="foot" id="foot" style="display:none">
-      <button id="enable">启用选中的来源</button>
-      <button class="ghost" id="skip">全不选</button>
-      <span class="hint" id="hint"></span>
+  <div class="sidebar">
+    <div class="drag"></div>
+    <div class="nav" id="nav"></div>
+  </div>
+  <div class="main">
+    <div class="topbar">
+      <input class="search" id="q" placeholder="搜索文件名…" />
+      <span class="count" id="count"></span>
+    </div>
+    <div class="rows" id="rows"><div class="empty">加载中…</div></div>
+  </div>
+
+  <div class="setup" id="setup" style="display:none">
+    <div class="drag"></div>
+    <div class="body">
+      <h1>发现文件来源</h1>
+      <div class="sub" id="setupSub">正在扫描…</div>
+      <div id="srcList"></div>
+    </div>
+    <div class="foot">
+      <button id="btnEnable" disabled>启用并开始索引</button>
+      <button class="ghost" id="btnSkip">全不选</button>
+      <span class="hint" id="setupHint"></span>
     </div>
   </div>
 
 <script>
-let sources = [];
+let sources = [], files = [], activeSource = null, stats = null;
 
 async function api(path, opts = {}) {
   const info = await window.inktable.getSidecarInfo();
   if (!info) throw new Error('sidecar 未就绪');
-  const r = await fetch(`http://127.0.0.1:${info.port}${path}`, {
+  const r = await fetch('http://127.0.0.1' + ':' + info.port + path, {
     ...opts,
-    headers: { ...(opts.headers || {}), Authorization: `Bearer ${info.token}` },
+    headers: { 'Content-Type': 'application/json',
+               Authorization: 'Bearer ' + info.token, ...(opts.headers || {}) },
   });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
   return r.json();
 }
 
+const ICONS = { '.pdf':'▤', '.docx':'▤', '.doc':'▤', '.md':'▤', '.txt':'▤',
+                '.xlsx':'▦', '.xls':'▦', '.csv':'▦', '.pptx':'▥', '.ppt':'▥',
+                '.zip':'▣', '.rar':'▣', '.7z':'▣',
+                '.png':'▨', '.jpg':'▨', '.jpeg':'▨', '.heic':'▨',
+                '.mp4':'▷', '.mov':'▷', '.mp3':'♪', '.m4a':'♪' };
+
+function fmtSize(b) {
+  if (!b) return '';
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b / 1024).toFixed(0) + ' KB';
+  if (b < 1073741824) return (b / 1048576).toFixed(1) + ' MB';
+  return (b / 1073741824).toFixed(1) + ' GB';
+}
 function fmtDate(ts) {
   if (!ts) return '';
-  const d = new Date(ts * 1000);
   const days = Math.floor((Date.now() / 1000 - ts) / 86400);
   if (days <= 0) return '今天';
   if (days === 1) return '昨天';
-  if (days < 30) return days + ' 天前';
+  if (days < 7) return days + ' 天前';
+  const d = new Date(ts * 1000);
   return (d.getMonth() + 1) + '月' + d.getDate() + '日';
 }
 
-function shortPath(p) {
-  return p.replace(new RegExp('^/Users/[^/]+'), '~');
-}
-
-function render() {
-  const listEl = document.getElementById('list');
-  listEl.className = 'list';
-  listEl.innerHTML = sources.map(function (s, i) {
-    return '<div class="item">' +
-      '<input class="cb" type="checkbox" data-i="' + i + '"' + (s.doc_count > 0 ? ' checked' : '') + '>' +
-      '<div class="info">' +
-        '<div class="name">' + s.name + (s.volatile ? '<span class="badge">易失</span>' : '') + '</div>' +
-        '<div class="path">' + shortPath(s.path) + '</div>' +
-      '</div>' +
-      '<div class="meta">' +
-        (s.doc_count ? '<div><span class="cnt">' + s.doc_count + '</span> 个文档</div>' : '<div>暂无文档</div>') +
-        '<div>' + fmtDate(s.recent_mtime) + '</div>' +
-      '</div>' +
-    '</div>';
-  }).join('');
-
-  document.getElementById('sub').textContent =
-    '找到 ' + sources.length + ' 个来源。勾选后才会开始索引 —— 未勾选的目录不会被访问。';
-  document.getElementById('foot').style.display = 'flex';
-  updateHint();
-  listEl.querySelectorAll('.cb').forEach(function (cb) {
-    cb.addEventListener('change', updateHint);
+function renderNav() {
+  const el = document.getElementById('nav');
+  let h = '<div class="nav-group">文件库</div>';
+  h += '<div class="nav-item' + (activeSource === null ? ' on' : '') + '" data-src="">' +
+       '<span class="label">全部文件</span><span class="n">' + (stats ? stats.files : '') + '</span></div>';
+  if (stats && stats.deduped > 0) {
+    h += '<div class="nav-item" data-dup="1"><span class="label">重复内容</span>' +
+         '<span class="n">' + stats.deduped + '</span></div>';
+  }
+  if (stats && stats.by_source.length) {
+    h += '<div class="nav-group">来源</div>';
+    stats.by_source.forEach(function (s) {
+      h += '<div class="nav-item' + (activeSource === s.name ? ' on' : '') + '" data-src="' + s.name + '">' +
+           '<span class="label">' + s.name + '</span><span class="n">' + s.c + '</span></div>';
+    });
+  }
+  if (stats && stats.by_ext.length) {
+    h += '<div class="nav-group">类型</div>';
+    stats.by_ext.slice(0, 6).forEach(function (e) {
+      h += '<div class="nav-item" data-ext="' + e.ext + '">' +
+           '<span class="label">' + (e.ext || '无扩展名') + '</span><span class="n">' + e.c + '</span></div>';
+    });
+  }
+  el.innerHTML = h;
+  el.querySelectorAll('.nav-item').forEach(function (it) {
+    it.onclick = function () {
+      activeSource = it.dataset.src || null;
+      load(document.getElementById('q').value);
+    };
   });
 }
 
-function updateHint() {
-  const checked = [].slice.call(document.querySelectorAll('.cb:checked'));
-  const vol = checked.filter(function (cb) { return sources[cb.dataset.i].volatile; }).length;
-  document.getElementById('enable').disabled = checked.length === 0;
-  document.getElementById('hint').textContent = checked.length === 0 ? '' :
-    '已选 ' + checked.length + ' 个' + (vol ? '，其中 ' + vol + ' 个可能被应用自动清理' : '');
+function renderRows() {
+  const el = document.getElementById('rows');
+  if (!files.length) {
+    el.innerHTML = '<div class="empty">没有匹配的文件</div>';
+    return;
+  }
+  el.innerHTML = files.map(function (f) {
+    return '<div class="row" data-path="' + encodeURIComponent(f.path) + '">' +
+      '<span class="icon">' + (ICONS[f.ext] || '▢') + '</span>' +
+      '<span class="fname">' + f.name + '</span>' +
+      '<span class="fsrc' + (f.volatile ? ' vol' : '') + '">' + (f.source_name || '') + '</span>' +
+      '<span class="fsize">' + fmtSize(f.size) + '</span>' +
+      '<span class="fdate">' + fmtDate(f.mtime) + '</span>' +
+    '</div>';
+  }).join('');
+  el.querySelectorAll('.row').forEach(function (r) {
+    r.ondblclick = function () {
+      window.inktable.revealInFinder(decodeURIComponent(r.dataset.path));
+    };
+  });
 }
 
-document.getElementById('skip').onclick = function () {
-  document.querySelectorAll('.cb').forEach(function (cb) { cb.checked = false; });
-  updateHint();
+async function load(q) {
+  const params = new URLSearchParams({ limit: '300' });
+  if (q) params.set('q', q);
+  const d = await api('/files?' + params);
+  files = d.files;
+  if (activeSource) files = files.filter(function (f) { return f.source_name === activeSource; });
+  document.getElementById('count').textContent = files.length + ' 个文件';
+  renderRows();
+}
+
+let timer;
+document.getElementById('q').oninput = function (e) {
+  clearTimeout(timer);
+  timer = setTimeout(function () { load(e.target.value); }, 150);
 };
 
-(async function () {
-  try {
-    const d = await api('/sources/discover', { method: 'POST' });
-    sources = d.sources;
-    render();
-  } catch (e) {
-    document.getElementById('list').textContent = '扫描失败：' + e.message;
+/* ---------- 首次启动引导 ---------- */
+function renderSetup() {
+  document.getElementById('setupSub').textContent =
+    '找到 ' + sources.length + ' 个来源。勾选后才会索引 —— 未勾选的目录不会被访问。';
+  document.getElementById('srcList').innerHTML = sources.map(function (s, i) {
+    return '<div class="src">' +
+      '<input type="checkbox" data-i="' + i + '"' + (s.doc_count > 0 ? ' checked' : '') + '>' +
+      '<div class="info"><div class="nm">' + s.name +
+        (s.volatile ? '<span class="badge">易失</span>' : '') + '</div>' +
+        '<div class="pth">' + s.path.replace(new RegExp('^/Users/[^/]+'), '~') + '</div></div>' +
+      '<div class="meta">' +
+        (s.doc_count ? '<div><span class="cnt">' + s.doc_count + '</span> 个文档</div>' : '<div>暂无文档</div>') +
+      '</div></div>';
+  }).join('');
+  document.querySelectorAll('.src input').forEach(function (cb) {
+    cb.onchange = updateSetupHint;
+  });
+  updateSetupHint();
+}
+function updateSetupHint() {
+  const n = document.querySelectorAll('.src input:checked').length;
+  document.getElementById('btnEnable').disabled = n === 0;
+  document.getElementById('setupHint').textContent = n ? '已选 ' + n + ' 个' : '';
+}
+document.getElementById('btnSkip').onclick = function () {
+  document.querySelectorAll('.src input').forEach(function (cb) { cb.checked = false; });
+  updateSetupHint();
+};
+document.getElementById('btnEnable').onclick = async function () {
+  const btn = this;
+  btn.disabled = true;
+  const chosen = [].slice.call(document.querySelectorAll('.src input:checked'))
+    .map(function (cb) { return sources[cb.dataset.i]; });
+  for (let i = 0; i < chosen.length; i++) {
+    const s = chosen[i];
+    btn.textContent = '正在索引 ' + (i + 1) + '/' + chosen.length + '…';
+    try {
+      await api('/sources/enable', { method: 'POST', body: JSON.stringify({
+        name: s.name, path: s.path, kind: s.kind,
+        discovered_by: s.discovered_by, volatile: s.volatile }) });
+    } catch (e) { /* 单个来源失败不阻断其余 */ }
   }
-})();
+  document.getElementById('setup').style.display = 'none';
+  await boot();
+};
+
+async function boot() {
+  stats = await api('/stats');
+  if (stats.files === 0) {
+    document.getElementById('setup').style.display = 'flex';
+    sources = (await api('/sources/discover', { method: 'POST' })).sources;
+    renderSetup();
+    return;
+  }
+  renderNav();
+  await load('');
+}
+
+boot().catch(function (e) {
+  document.getElementById('rows').innerHTML = '<div class="empty">启动失败：' + e.message + '</div>';
+});
 </script>
 </body>
 </html>
