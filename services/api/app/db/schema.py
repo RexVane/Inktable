@@ -1,0 +1,181 @@
+"""数据库 schema —— PLAN §9。
+
+核心设计：**files 与 contents 分离**（§9 contents 表）。
+
+    N 个 files : 1 个 contents
+
+一份内容被存了 5 处，chunks 只建一次、向量只算一次。且任一 file 存活，
+content 与其 chunks 就保留 —— 原件被微信清理掉，副本仍然可检索。
+v5 之前 chunks 直接挂 file_id，导致"复用 chunks"这件事无处承载。
+
+身份用 (volume_uuid, inode) 而非路径（§8）：用户在 Finder 里移动/改名文件后
+索引自动跟上，不需要重新解析、重新嵌入。
+"""
+
+from __future__ import annotations
+
+SCHEMA_VERSION = 1
+
+SCHEMA = """
+PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
+
+-- 来源（§9 sources）
+CREATE TABLE IF NOT EXISTS sources (
+    id                    INTEGER PRIMARY KEY,
+    name                  TEXT NOT NULL,
+    path                  TEXT NOT NULL UNIQUE,
+    kind                  TEXT NOT NULL,              -- im / browser / system / manual
+    discovered_by         TEXT NOT NULL,              -- config / heuristic / bundle / default / manual
+    volatile              INTEGER NOT NULL DEFAULT 0, -- 应用会自行清理？
+    auto_preserve         INTEGER NOT NULL DEFAULT 0, -- 易失来源自动保全副本，默认关
+    enabled               INTEGER NOT NULL DEFAULT 0, -- 默认不启用（§1 约束 4）
+    permission_ok         INTEGER,
+    permission_checked_at REAL,
+    created_at            REAL NOT NULL
+);
+
+-- 内容实体（§9 contents）：chunks 挂这里，不挂 files
+CREATE TABLE IF NOT EXISTS contents (
+    id                 INTEGER PRIMARY KEY,
+    sha256             TEXT NOT NULL UNIQUE,
+    size               INTEGER NOT NULL,
+    parse_state        TEXT NOT NULL DEFAULT 'pending',  -- pending/parsing/indexed/parse_failed/unsupported
+    chunk_count        INTEGER NOT NULL DEFAULT 0,
+    embedding_model_id TEXT,
+    indexed_at         REAL
+);
+
+-- 文件（§9 files）
+CREATE TABLE IF NOT EXISTS files (
+    id                INTEGER PRIMARY KEY,
+    volume_uuid       TEXT NOT NULL,      -- 身份 1/2
+    inode             INTEGER NOT NULL,   -- 身份 2/2
+    content_id        INTEGER REFERENCES contents(id) ON DELETE SET NULL,
+    path              TEXT NOT NULL,      -- 当前路径（缓存，可变）
+    name              TEXT NOT NULL,
+    origin_path       TEXT,               -- 首次发现时的路径
+    preserved_path    TEXT,               -- 保全副本路径
+    source_id         INTEGER REFERENCES sources(id) ON DELETE SET NULL,
+    ext               TEXT,
+    mime              TEXT,
+    size              INTEGER NOT NULL,
+    state             TEXT NOT NULL,      -- 见 §10 状态机
+    error_code        TEXT,
+    retry_count       INTEGER NOT NULL DEFAULT 0,
+    category_id       INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+    confidence        REAL,
+    confirmed_by_user INTEGER NOT NULL DEFAULT 0,
+    is_dataless       INTEGER NOT NULL DEFAULT 0,  -- iCloud 占位文件（§7.8）
+    mtime             REAL,
+    detected_at       REAL NOT NULL,
+    indexed_at        REAL,
+    missing_since     REAL,
+    UNIQUE (volume_uuid, inode)
+);
+
+CREATE INDEX IF NOT EXISTS idx_files_content  ON files(content_id);
+CREATE INDEX IF NOT EXISTS idx_files_state    ON files(state);
+CREATE INDEX IF NOT EXISTS idx_files_source   ON files(source_id);
+CREATE INDEX IF NOT EXISTS idx_files_volume   ON files(volume_uuid);
+CREATE INDEX IF NOT EXISTS idx_files_category ON files(category_id);
+CREATE INDEX IF NOT EXISTS idx_files_mtime    ON files(mtime);
+
+-- 分类树（§9 categories）：**纯虚拟，磁盘上不存在对应目录**
+CREATE TABLE IF NOT EXISTS categories (
+    id         INTEGER PRIMARY KEY,
+    parent_id  INTEGER REFERENCES categories(id) ON DELETE CASCADE,
+    name       TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS tags (
+    id    INTEGER PRIMARY KEY,
+    name  TEXT NOT NULL UNIQUE,
+    color TEXT
+);
+
+CREATE TABLE IF NOT EXISTS file_tags (
+    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    tag_id  INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (file_id, tag_id)
+);
+
+-- 分片（§9 chunks）：挂 content_id
+CREATE TABLE IF NOT EXISTS chunks (
+    id                 INTEGER PRIMARY KEY,
+    content_id         INTEGER NOT NULL REFERENCES contents(id) ON DELETE CASCADE,
+    layer              TEXT NOT NULL DEFAULT 'child',   -- child（检索用）/ parent（送模型用）
+    parent_id          INTEGER REFERENCES chunks(id) ON DELETE SET NULL,
+    page               INTEGER,
+    page_end           INTEGER,
+    bbox               TEXT,          -- JSON 数组，一片可跨多个矩形
+    section_path       TEXT NOT NULL DEFAULT '',
+    ordinal            INTEGER NOT NULL,
+    text               TEXT NOT NULL,
+    text_hash          TEXT NOT NULL, -- 增量 diff 的主键（§12.5）
+    token_count        INTEGER,
+    embedding_model_id TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_chunks_content ON chunks(content_id);
+CREATE INDEX IF NOT EXISTS idx_chunks_layer   ON chunks(content_id, layer);
+CREATE INDEX IF NOT EXISTS idx_chunks_hash    ON chunks(text_hash);
+
+-- 任务队列（§9 tasks）
+CREATE TABLE IF NOT EXISTS tasks (
+    id             INTEGER PRIMARY KEY,
+    file_id        INTEGER REFERENCES files(id) ON DELETE CASCADE,  -- 非文件级任务为 NULL
+    kind           TEXT NOT NULL,
+    payload        TEXT,
+    status         TEXT NOT NULL DEFAULT 'pending',
+    attempts       INTEGER NOT NULL DEFAULT 0,
+    next_run_at    REAL,
+    last_error     TEXT,
+    progress_done  INTEGER NOT NULL DEFAULT 0,
+    progress_total INTEGER NOT NULL DEFAULT 0,
+    created_at     REAL NOT NULL
+);
+
+-- 防止同一文件的同类任务重复入队（FSEvents 抖动时极易发生）
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_dedup
+    ON tasks(kind, file_id) WHERE status IN ('pending', 'running');
+
+-- 写盘操作日志（§9 operations）：只记录真正写盘的动作
+CREATE TABLE IF NOT EXISTS operations (
+    id            INTEGER PRIMARY KEY,
+    file_id       INTEGER REFERENCES files(id) ON DELETE CASCADE,
+    kind          TEXT NOT NULL,   -- preserve / archive_move
+    src_path      TEXT,
+    dst_path      TEXT,
+    method        TEXT,            -- copy / copy_verify_delete
+    sha256_before TEXT,
+    undone        INTEGER NOT NULL DEFAULT 0,
+    created_at    REAL NOT NULL
+);
+
+-- 分类变更历史（§9 file_history）：批量操作靠 batch_id 整批撤销
+CREATE TABLE IF NOT EXISTS file_history (
+    id       INTEGER PRIMARY KEY,
+    file_id  INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    field    TEXT NOT NULL,
+    old      TEXT,
+    new      TEXT,
+    by       TEXT NOT NULL,   -- rule / llm / user
+    batch_id TEXT,
+    rule_id  INTEGER,
+    at       REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
+"""
+
+DEFAULT_SETTINGS = {
+    "db_schema_version": str(SCHEMA_VERSION),
+    "cloud_index_placeholders": "0",   # iCloud 占位文件默认不索引（§7.8）
+    "privacy_cloud_ai_enabled": "0",   # 云端 AI 默认关闭（§1 约束 3）
+    "confidence_threshold": "0.6",
+}
