@@ -171,6 +171,19 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+
+-- 中文全文检索双索引（§9.1，M0 实测确认必须双路）
+--
+-- FTS5 默认 unicode61 对中文零命中：整段汉字被当作一个 token。
+-- jieba 主索引负责成词查询，trigram 副索引兜底子串、编号、错别字。
+-- 两个都是 content='' 的外部内容表，rowid 对齐 chunks.id。
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+    text, content='', tokenize='unicode61'
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts_tri USING fts5(
+    text, content='', tokenize='trigram'
+);
 """
 
 DEFAULT_SETTINGS = {
