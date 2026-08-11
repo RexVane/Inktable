@@ -41,7 +41,8 @@ def acquire_single_instance_lock() -> None:
 
 
 def connect(path: Path | str | None = None) -> sqlite3.Connection:
-    p = Path(path) if path else DB_PATH
+    # INKTABLE_DB 让测试与开发指向独立库，避免污染用户的真实数据
+    p = Path(path) if path else Path(os.environ.get("INKTABLE_DB") or DB_PATH)
     if p != Path(":memory:"):
         p.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(p), check_same_thread=False)

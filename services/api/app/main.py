@@ -25,11 +25,13 @@ from app.health import collect_health
 from app.index.pipeline import index_pending, indexable_exts
 from app.index.search import search as fts_search
 from app.watcher.scanner import preview_source, scan_source
+from app.watcher.service import WatchService
 
 app = FastAPI(title="Inktable API", version="0.1.0")
 
 _db = None
 _db_lock = threading.Lock()
+_watch: WatchService | None = None
 
 
 def db():
@@ -41,6 +43,19 @@ def db():
         if not quick_check(_db):
             raise RuntimeError("数据库完整性检查失败")
     return _db
+
+
+def watch_service() -> WatchService:
+    global _watch
+    if _watch is None:
+        _watch = WatchService(db, _db_lock)
+    return _watch
+
+
+@app.on_event("shutdown")
+def _shutdown() -> None:
+    if _watch is not None:
+        _watch.stop()
 
 # 令牌优先从 stdin 读取；缺省时自生成（开发态）
 SESSION_TOKEN = os.environ.pop("INKTABLE_TOKEN", None) or secrets.token_urlsafe(32)
@@ -117,6 +132,9 @@ def enable_source(req: EnableRequest) -> dict:
         conn.commit()
         row = conn.execute("SELECT id FROM sources WHERE path = ?", (req.path,)).fetchone()
         stats = scan_source(conn, row["id"], req.path)
+
+    # 启用后立即挂上实时监听 —— 之后进来的新文件自动入库
+    watch_service().watch(req.path)
 
     return {
         "source_id": row["id"],
@@ -246,6 +264,27 @@ def run_index(req: IndexRequest) -> dict:
             if total["total"] >= req.limit:
                 break
         return total
+
+
+@app.post("/watch/start", dependencies=[Depends(require_token)])
+def watch_start() -> dict:
+    """挂上所有已启用来源的实时监听（PLAN §11.1）。
+
+    幂等 —— 重复调用不会重复挂载。前端启动时无条件调一次即可。
+    """
+    return watch_service().start()
+
+
+@app.post("/watch/stop", dependencies=[Depends(require_token)])
+def watch_stop() -> dict:
+    watch_service().stop()
+    return {"stopped": True}
+
+
+@app.get("/watch/status", dependencies=[Depends(require_token)])
+def watch_status() -> dict:
+    """监听状态 + 最近自动入库的文件，供界面「实时动态」展示。"""
+    return watch_service().status
 
 
 @app.get("/index/status", dependencies=[Depends(require_token)])

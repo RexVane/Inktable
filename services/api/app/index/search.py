@@ -38,12 +38,46 @@ def segment_for_query(text: str) -> str:
 
 
 def quote_fts_query(text: str) -> str:
-    """把任意用户输入包成 FTS5 短语查询。
+    """把一个词包成 FTS5 短语。
 
-    所有进入 MATCH 的字符串都必须经过这里 —— 不能靠调用方自觉。
+    短语引号有两个作用：
+      1. 屏蔽 FTS5 语法字符（`-` 会被当成 NOT，`HT-2024-0023` 直接语法错）
+      2. 要求内部词元**相邻**，保住多字词的完整性
+
     内部双引号按 FTS5 规则转义为两个双引号。
     """
     return '"' + text.replace('"', '""') + '"'
+
+
+def build_fts_query(query: str, *, segment: bool) -> str:
+    """把用户输入编译成 FTS5 表达式。
+
+    **每个词各自成短语，词之间用 AND** —— 这是关键。
+
+    曾经的写法是把整串包成一个短语，结果搜「庞贝蠕虫 共生菌」返回 0 条：
+    短语要求所有词元在原文里连续出现，而这两个词中间隔着别的字。
+    单独搜「庞贝」「蠕虫」却都能命中 —— 典型的"分开能搜、合起来搜不到"。
+
+    现在：
+        庞贝蠕虫 共生菌
+      → "庞贝 蠕虫" AND "共生 共生菌"
+        └ 词内相邻（保完整性）  └ 词间不限位置（AND）
+
+    segment=True 走 jieba 主索引（词元需与索引侧对齐），
+    False 走 trigram 副索引（直接用原文，兜底编号与未登录词）。
+    """
+    terms = [t for t in query.split() if t.strip()]
+    if not terms:
+        return ""
+
+    parts = []
+    for term in terms:
+        piece = segment_for_query(term) if segment else term
+        piece = piece.strip()
+        if piece:
+            parts.append(quote_fts_query(piece))
+
+    return " AND ".join(parts)
 
 
 SCHEMA = """
@@ -81,8 +115,11 @@ def search(conn, query: str, limit: int = 100) -> dict[str, list[tuple[int, floa
     不在这里融合 —— 融合是 §12.3b ④ 两级 RRF 的职责，
     它还要合并向量路的结果。
     """
-    jieba_q = quote_fts_query(segment_for_query(query))
-    raw_q = quote_fts_query(query)
+    jieba_q = build_fts_query(query, segment=True)
+    raw_q = build_fts_query(query, segment=False)
+
+    if not jieba_q and not raw_q:
+        return {"jieba": [], "trigram": []}
 
     def run(table: str, q: str, k: int) -> list[tuple[int, float]]:
         try:
