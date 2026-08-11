@@ -17,6 +17,7 @@ import uvicorn
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from app.discovery.sources import discover_all
 from app.health import collect_health
 
 app = FastAPI(title="Inktable API", version="0.1.0")
@@ -46,6 +47,16 @@ def health() -> dict:
 @app.get("/whoami", dependencies=[Depends(require_token)])
 def whoami() -> dict:
     return {"app": "inktable", "authenticated": True}
+
+
+@app.post("/sources/discover", dependencies=[Depends(require_token)])
+def discover() -> dict:
+    """触发来源自动发现，返回候选列表（PLAN §7.4）。
+
+    只探测不启用 —— 启用需要用户逐个确认（§1 约束 4）。
+    """
+    sources = discover_all()
+    return {"sources": [s.to_dict() for s in sources]}
 
 
 def _read_stdin_secrets() -> None:
