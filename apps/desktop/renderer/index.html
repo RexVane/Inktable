@@ -683,51 +683,52 @@ async function runAsk(q) {
   const question = String(q || '').trim();
   if (!question) return;
   const el = document.getElementById('answerRows');
-  el.innerHTML = '<div class="ans"><div class="atext" style="color:var(--text-secondary)">' +
-                 '正在依据文件库作答…</div></div>';
+  el.innerHTML = qaHistoryHtml() +
+    '<div class="qa-q">' + esc(question) + '</div>' +
+    '<div class="ans"><div class="atext" style="color:var(--text-secondary)">' +
+    '正在依据文件库作答…</div></div>';
+  bindQaThread(el);
+  el.scrollTop = el.scrollHeight;
   document.getElementById('askSubmit').disabled = true;
   try {
     const a = await api('/ask', { method: 'POST', body: JSON.stringify({
       question: question, book_id: activeBook }) });
     renderAnswer(a, question);
+    var box = document.getElementById('askQ');
+    if (box) box.value = '';
   } catch (e) {
-    el.innerHTML = '<div class="ans"><div class="ahedge">提问失败：' + esc(e.message) + '</div></div>';
+    qaHistory.push({ question: question,
+                     html: '<div class="ans"><div class="ahedge">提问失败：' + esc(e.message) + '</div></div>' });
+    qaAnswers.push(null);
+    renderQaThread();
   } finally {
     document.getElementById('askSubmit').disabled = llmInfo.available !== true;
   }
 }
 
-function renderAnswer(a, q) {
+/* 问答历史：右栏保留本会话全部问答；引用绑定按卡片索引回查各自的
+   citations，避免旧回答的引用点开后跳到新回答的证据 */
+let qaHistory = [];   // [{ question, html }]
+let qaAnswers = [];   // 与 qaHistory 对齐的 answer 对象（失败卡为 null）
+
+function qaHistoryHtml() {
+  return qaHistory.map(function (item) {
+    return '<div class="qa-q">' + esc(item.question) + '</div>' + item.html;
+  }).join('');
+}
+
+function renderQaThread() {
   const el = document.getElementById('answerRows');
-  let h = '<div class="ans">';
+  el.innerHTML = qaHistoryHtml();
+  bindQaThread(el);
+  el.scrollTop = el.scrollHeight;
+}
 
-  if (a.status === 'not_configured') {
-    h += '<div class="atext" style="color:var(--text-secondary)">还没有配置模型服务。' +
-         '</div><div class="askbar" id="openSet" style="border:none;padding:8px 0 0">' +
-         '打开设置 → AI 问答</div></div>';
-    el.innerHTML = h;
-    document.getElementById('openSet').onclick = function () { sheetOpen(true); };
-    return;
-  }
-
-  if (a.hedge) h += '<div class="ahedge">⚠ ' + esc(a.hedge) + '</div>';
-
-  if (a.status === 'answered') {
-    var body = esc(a.answer).replace(/\[C(\d{1,2})\]/g, function (_m, n) {
-      return '<span class="cite-chip" data-tag="C' + n + '">C' + n + '</span>';
-    });
-    h += '<div class="atext">' + body + '</div>';
-    h += '<div class="refs">' + a.citations.map(refHtml).join('') + '</div>';
-  } else if (a.status === 'refused') {
-    h += '<div class="atext" style="color:var(--text-secondary)">' + esc(a.answer) + '</div>';
-  } else if (a.status === 'fallback') {
-    h += '<div class="refs">' + a.retrieved.map(refHtml).join('') + '</div>';
-  }
-  h += '</div>';
-  el.innerHTML = h;
-
+function bindQaThread(el) {
   el.querySelectorAll('.ref').forEach(function (r) {
     r.onclick = function () {
+      var a = qaAnswers[+r.dataset.ans];
+      if (!a) return;
       var citationList = a.citations && a.citations.length ? a.citations : (a.retrieved || []);
       var citation = citationList.find(function (item) { return item.tag === r.dataset.tag; });
       if (citation) showEvidence(citation);
@@ -739,7 +740,7 @@ function renderAnswer(a, q) {
   el.querySelectorAll('.cite-chip').forEach(function (c) {
     c.onclick = function () {
       var ref = Array.from(el.querySelectorAll('.ref')).find(function (r) {
-        return r.dataset.tag === c.dataset.tag;
+        return r.dataset.ans === c.dataset.ans && r.dataset.tag === c.dataset.tag;
       });
       if (ref) { ref.scrollIntoView({ block: 'center' }); ref.onclick(); ref.style.background = 'var(--ink-active)';
                  setTimeout(function () { ref.style.background = ''; }, 900); }
@@ -747,10 +748,50 @@ function renderAnswer(a, q) {
   });
 }
 
-function refHtml(c) {
+function renderAnswer(a, q) {
+  const el = document.getElementById('answerRows');
+
+  if (a.status === 'not_configured') {
+    el.innerHTML = qaHistoryHtml() +
+      '<div class="ans"><div class="atext" style="color:var(--text-secondary)">还没有配置模型服务。' +
+      '</div><div class="askbar" id="openSet" style="border:none;padding:8px 0 0">' +
+      '打开设置 → AI 问答</div></div>';
+    bindQaThread(el);
+    document.getElementById('openSet').onclick = function () { sheetOpen(true); };
+    return;
+  }
+
+  var index = qaAnswers.length;
+  let h = '<div class="ans">';
+  if (a.hedge) h += '<div class="ahedge">⚠ ' + esc(a.hedge) + '</div>';
+
+  if (a.status === 'answered') {
+    var body = esc(a.answer).replace(/\[C(\d{1,2})\]/g, function (_m, n) {
+      return '<span class="cite-chip" data-ans="' + index + '" data-tag="C' + n + '">C' + n + '</span>';
+    });
+    h += '<div class="atext">' + body + '</div>';
+    h += '<div class="refs">' + a.citations.map(function (c) {
+      return refHtml(c, index);
+    }).join('') + '</div>';
+  } else if (a.status === 'refused') {
+    h += '<div class="atext" style="color:var(--text-secondary)">' + esc(a.answer) + '</div>';
+  } else if (a.status === 'fallback') {
+    h += '<div class="refs">' + (a.retrieved || []).map(function (c) {
+      return refHtml(c, index);
+    }).join('') + '</div>';
+  }
+  h += '</div>';
+
+  qaHistory.push({ question: q, html: h });
+  qaAnswers.push(a);
+  renderQaThread();
+}
+
+function refHtml(c, ansIndex) {
   var loc = c.page ? ('第 ' + c.page + ' 页')
           : (c.section_path ? c.section_path.split(' › ').slice(-1)[0] : '');
-  return '<div class="ref" data-tag="' + esc(c.tag) + '" data-path="' + encodedData(c.file_path) + '">' +
+  return '<div class="ref" data-ans="' + esc(ansIndex == null ? '' : ansIndex) +
+    '" data-tag="' + esc(c.tag) + '" data-path="' + encodedData(c.file_path) + '">' +
     '<span class="rtag">[' + esc(c.tag) + ']</span>' +
     '<span class="rname">' + esc(c.file_name) + (loc ? ' · ' + esc(loc) : '') + '</span>' +
     '<span class="rsnip">' + esc(c.snippet || '') + '</span></div>';

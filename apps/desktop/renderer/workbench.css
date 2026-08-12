@@ -1026,6 +1026,20 @@ textarea:focus-visible,
   text-align: center;
 }
 
+.qa-q {
+  margin: 14px 14px 0;
+  padding: 8px 12px;
+  border-radius: 10px 10px 3px 10px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 560;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 .ans {
   margin: 14px;
   padding: 15px 16px;
@@ -1033,6 +1047,10 @@ textarea:focus-visible,
   border-radius: 10px;
   background: var(--surface);
   box-shadow: var(--shadow-card);
+}
+
+.qa-q + .ans {
+  margin-top: 8px;
 }
 
 .ans .atext {
