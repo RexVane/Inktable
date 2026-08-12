@@ -13,10 +13,8 @@ from __future__ import annotations
 import glob
 import json
 import os
-import plistlib
 import subprocess
-import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 HOME = Path.home()

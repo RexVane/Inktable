@@ -137,8 +137,6 @@ def _check_embedding() -> dict:
         return {"ok": True, "available": False, "note": "模型未安装，语义检索关闭"}
 
     try:
-        import numpy as np
-
         m = emb.get_embedder()
         v = m.encode(["汝窑天青釉", "宿舍电费充值", "汝窑瓷器的釉色"])
         sim_related = float(v[0] @ v[2])
