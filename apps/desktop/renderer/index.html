@@ -47,7 +47,7 @@
           <div class="evidence-content" id="evidence"><div class="evidence-empty"><div><div class="empty-mark">¶</div><div class="empty-title">选择一条结果</div><div class="empty-meta">在这里查看原文片段和定位信息</div></div></div></div>
         </section>
         <aside class="qa-panel" aria-label="知识问答">
-          <div class="panel-head qa-head"><span class="panel-title">知识问答</span><button class="model-state" id="modelState" type="button">未配置模型</button></div>
+          <div class="panel-head qa-head"><span class="panel-title">知识问答</span><button class="qa-clear" id="qaClear" type="button" title="清空本次会话的问答">清空</button><button class="model-state" id="modelState" type="button">未配置模型</button></div>
           <div class="answer-rows" id="answerRows"><div class="qa-empty"><div><div class="empty-mark">?</div><div class="empty-title">询问你的知识库</div><div class="empty-meta">回答会附带可定位的原文引用</div></div></div></div>
           <div class="qa-composer">
             <textarea id="askQ" rows="2" placeholder="输入问题…"></textarea>
@@ -724,6 +724,15 @@ function renderQaThread() {
   el.scrollTop = el.scrollHeight;
 }
 
+function resetQaThread() {
+  qaHistory = [];
+  qaAnswers = [];
+  document.getElementById('answerRows').innerHTML =
+    '<div class="qa-empty"><div><div class="empty-mark">?</div>' +
+    '<div class="empty-title">询问你的知识库</div>' +
+    '<div class="empty-meta">回答会附带可定位的原文引用</div></div></div>';
+}
+
 function bindQaThread(el) {
   el.querySelectorAll('.ref').forEach(function (r) {
     r.onclick = function () {
@@ -1279,6 +1288,7 @@ async function onSourceAction(btn) {
 }
 
 document.getElementById('gear').onclick = function () { sheetOpen(true); };
+document.getElementById('qaClear').onclick = function () { resetQaThread(); };
 document.getElementById('modelState').onclick = function () {
   if (!llmInfo.configured) return sheetOpen(true);
   return testModelConnection();
