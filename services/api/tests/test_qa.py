@@ -222,7 +222,7 @@ def test_answered_with_citations(db, scripted):
     assert a.validation["attempts"] == 1
     assert a.trace["trace_id"]
     assert [stage["name"] for stage in a.trace["stages"]] == [
-        "hierarchy_routing", "deep_retrieval", "scope", "rrf",
+        "hierarchy_routing", "deep_retrieval", "decompose", "scope", "rrf",
         "rerank", "diversify", "expand", "compress", "assemble",
     ]
 

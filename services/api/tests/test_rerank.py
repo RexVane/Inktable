@@ -85,3 +85,35 @@ def test_soft_cap_limits_long_document_before_local_rerank(monkeypatch):
     assert sum(item.content_id == 1 for item in seen) == rerank.SOFT_PER_CONTENT
     assert any(item.content_id == 2 for item in seen)
     assert result.reranked_count == len(seen)
+
+
+def test_redundant_coverage_demoted_within_document():
+    """同文档里重复覆盖同一批查询词的分片让位给带新覆盖的分片。"""
+    inputs = [
+        rerank.RerankInput(1, 1, "如何启动 python 服务器", "", 0.9),
+        rerank.RerankInput(2, 1, "再讲一遍 python 启动方式", "", 0.8),
+        rerank.RerankInput(3, 1, "使用 python 3.11 版本 开发", "", 0.7),
+    ]
+    ranked = [
+        rerank.RerankOutput(1, 0.90),
+        rerank.RerankOutput(2, 0.88),  # 无新增覆盖，应被降权
+        rerank.RerankOutput(3, 0.86),  # 新增覆盖"版本/开发"，应升到第 2
+    ]
+    adjusted = rerank._demote_redundant_coverage(
+        "python 启动 版本 开发", inputs, ranked,
+    )
+    assert [item.chunk_id for item in adjusted] == [1, 3, 2]
+    # 惩罚是软的：被降权分片仍在结果里，未被淘汰（K3）
+    assert len(adjusted) == 3
+
+
+def test_redundancy_pass_keeps_degraded_inputs_untouched():
+    """降级路径（空文本输入）不受去冗影响，保持 RRF 顺序。"""
+    inputs = [
+        rerank.RerankInput(1, 0, "", "", 0.9),
+        rerank.RerankInput(2, 0, "", "", 0.8),
+    ]
+    ranked = [rerank.RerankOutput(1, 0.9), rerank.RerankOutput(2, 0.8)]
+    adjusted = rerank._demote_redundant_coverage("问题 词", inputs, ranked)
+    assert [item.chunk_id for item in adjusted] == [1, 2]
+    assert [item.score for item in adjusted] == [0.9, 0.8]

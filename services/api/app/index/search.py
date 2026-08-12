@@ -130,10 +130,16 @@ def _is_meaningful(word: str) -> bool:
 
 
 def extract_query_terms(query: str) -> list[str]:
-    """Return stable, de-duplicated terms for pairwise ranking features."""
+    """Return stable, de-duplicated terms for pairwise ranking features.
+
+    含中文的空格片段必须重新分词，不论长短：查询「PyFTP 使用什么 Python
+    版本开发」按空格切出的「版本开发」不是词 —— 原文里「版本」「开发」
+    分开出现时覆盖特征会漏配（probe-2 实测 F20/F29 因此失败）。
+    """
     terms: list[str] = []
     for raw in query.split():
-        words = segment_for_query(raw).split() if _needs_split(raw) else [raw]
+        has_cjk = any("一" <= ch <= "鿿" for ch in raw)
+        words = segment_for_query(raw).split() if has_cjk else [raw]
         for word in words:
             normalized = word.strip().lower()
             if normalized and _is_meaningful(normalized) and normalized not in terms:

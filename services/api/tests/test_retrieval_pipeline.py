@@ -49,7 +49,8 @@ def test_trace_has_stable_stages_without_query_text():
         conn.close()
 
     assert [stage["name"] for stage in result.trace.stages] == [
-        "hierarchy_routing", "deep_retrieval", "scope", "rrf", "rerank",
+        "hierarchy_routing", "deep_retrieval", "decompose", "scope", "rrf",
+        "rerank",
     ]
     assert result.trace.trace_id
     assert result.trace.query_hash
@@ -75,7 +76,7 @@ def test_empty_book_scope_removes_candidates():
         conn.close()
 
     assert result.candidates == []
-    assert result.trace.stages[2]["book_id"] == 1
+    assert result.trace.stages[3]["book_id"] == 1
 
 
 def _retrieval(*chunk_ids: int) -> RetrievalResult:

@@ -633,6 +633,8 @@ ExpandedEvidence
 
 **执行状态（2026-08-13）**：协议与首个本地适配器已完成，模型发布门槛未完成。Rerank 已固定在 RRF 后、diversify 前，支持 `LocalStaticReranker` 与显式 `RrfOnlyReranker` 降级，trace 返回模型、耗时和 `degraded: ["rerank"]`。72 题对照中 local-static 将 Recall@5 从 78.3% 提至 83.3%、严格通过率从 65.0% 提至 76.7%、Recall@20 从 96.7% 提至 98.3%，P50 从 26.8ms 增至 36.7ms；但 MRR@10 / nDCG@10 仅相对提升 5.6% / 4.7%，未达 15% 门槛。当前环境无 Cross-Encoder 运行时或模型资产，且计划禁止未批准的原生依赖，因此 M3 不标完成；现有适配器默认启用并保留可回退路径。
 
+**M3b 补充（2026-08-13 晚）**：基于逐题运行时探针完成五项管线改进——比较类问题子查询分解（QueryPlan，K3 安全）、查询词抽取对中文空格片段强制重分词、rerank 输入按 `text_hash` 跨内容去重（拦截近重复文件副本刷榜）、LocalStaticReranker v2 新增数值答案/显式类型/文件名覆盖特征、rerank 后同文档冗余覆盖软降权。同日 RRF 对照下 Recall@5 85.0%→95.0%，严格通过率 73.3%→90.0%，MRR@10 73.2%→78.8%，nDCG@10 77.3%→83.0%（p50 50ms），后端 168 项测试全绿。MRR/nDCG 相对提升 7.6%/7.5% 仍低于 15% 选型门槛，M3 保持未完成；剩余失败（F29/F31/P19 片级排序、X06 近重复洪灾）正是 Cross-Encoder 与模糊去重的目标场景。冻结结果见 `docs/eval/v7-m3b-local-static-v2.json` 与对照 `v7-m3b-rrf-control.json`。
+
 - 建立候选模型 benchmark，不凭模型大小或记忆选型。
 - 实现 Reranker 协议、本地适配器和显式降级适配器。
 - 调整深召回、RRF 和软硬 cap。

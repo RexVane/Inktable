@@ -65,6 +65,29 @@ P19, and P20; some are upstream candidate-retrieval failures rather than
 compression losses. Exact gold-span annotation is still incomplete, and the
 proxy is below the 95% Evidence Recall gate, so M4 remains in progress.
 
+The M3b round (`v7-m3b-local-static-v2.json`, paired control
+`v7-m3b-rrf-control.json`) keeps the same frozen 72 questions and adds five
+pipeline changes driven by per-case runtime probes:
+
+1. Comparative-question decomposition: "A 和 B 分别…" queries add one
+   sub-query recall route per entity (head-limited, fusion-only, K3-safe).
+2. Term extraction now always re-segments CJK whitespace tokens, so glued
+   non-words like "版本开发" no longer poison coverage features.
+3. Rerank input selection deduplicates identical `text_hash` chunks across
+   contents, so near-identical file copies cannot flood the candidate pool.
+4. LocalStaticReranker v2 adds numeric-answer, explicit file-type, and
+   filename-coverage features on top of semantic/coverage/RRF/exact.
+5. A post-rerank redundancy pass softly demotes same-document chunks that
+   add no new query-term coverage, keeping complementary chunks visible.
+
+Against the same-day RRF control this lifts Recall@5 from 85.0% to 95.0%,
+strict pass rate from 73.3% to 90.0%, MRR@10 from 73.2% to 78.8%, and
+nDCG@10 from 77.3% to 83.0% (p50 50ms). The relative MRR/nDCG gains
+(+7.6%/+7.5%) still do not reach the 15% cross-encoder selection gate, so
+M3 remains open; the remaining failures (F29/F31/P19 chunk-level ranking,
+X06 near-duplicate flood) are exactly the cases a real cross-encoder or
+fuzzy duplicate grouping would address.
+
 The JSON output records query text, ranks, scores, latency, and document names.
 It does not persist chunk text or source file contents. Existing
 `baseline-fts5.json` and `with-vector.json` remain the immutable 30-question

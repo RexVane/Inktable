@@ -135,7 +135,8 @@ def test_remove_orphan_content_only(client, tmp_path):
     assert d["trace_id"] == d["trace"]["trace_id"]
     assert d["timings"] == d["trace"]["stages"]
     assert [stage["name"] for stage in d["trace"]["stages"]] == [
-        "hierarchy_routing", "deep_retrieval", "scope", "rrf", "rerank",
+        "hierarchy_routing", "deep_retrieval", "decompose", "scope", "rrf",
+        "rerank",
     ]
     assert "汝窑 天青釉" not in str(d["trace"])
 
