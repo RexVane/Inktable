@@ -676,7 +676,7 @@ ExpandedEvidence
 
 ### M7：发布候选
 
-**执行状态（2026-08-13）**：0.2.0 发布候选已产出。全量回归后端 170 项、桌面 15 项全绿；72 题检索评测与压缩评测均已冻结（`docs/eval/`）；PyInstaller sidecar 重打包后经 headless 冒烟（health 全绿：sqlite-vec v0.1.9、FTS5、中文检索探针 7/7、嵌入模型 256 维加载）；`dist/Inktable-0.2.0-arm64.dmg`（300 MB）打包完成，asar 内确认为新界面、sidecar 与最新构建逐字节一致。README、HANDOFF 入口、发布说明（`docs/RELEASE-0.2.0.md`）已更新；根目录 HANDOFF.md 收口为入口链接。数据库为 M2 时已完成的 v2 schema（迁移前有可恢复备份），本轮无 schema 变更。待用户完成：真机安装冒烟（无签名需右键打开）。未关闭的阻塞项如实列于发布说明「已知限制」：Cross-Encoder 选型门槛、两项真实模型 QA 指标。
+**执行状态（2026-08-13）**：0.2.0 发布候选已产出。全量回归后端 170 项、桌面 15 项全绿；72 题检索评测与压缩评测均已冻结（`docs/eval/`）；PyInstaller sidecar 重打包后经 headless 冒烟（health 全绿：sqlite-vec v0.1.9、FTS5、中文检索探针 7/7、嵌入模型 256 维加载）；`dist/Inktable-0.2.0-arm64.dmg`（300 MB）打包完成，asar 内确认为新界面、sidecar 与最新构建逐字节一致。README、HANDOFF 入口、发布说明（`docs/RELEASE-0.2.0.md`）已更新；根目录 HANDOFF.md 收口为入口链接。数据库为 M2 时已完成的 v2 schema（迁移前有可恢复备份），本轮无 schema 变更。损坏恢复演练已实际执行（2026-08-13，于真实库只读副本上）：建备份 → `backup_is_restorable` 通过 → 注入 4KB 中段损坏 → `quick_check` 正确检出 → 从备份恢复后分片数一致、FTS 可查；真实库存在当日自动备份。待用户完成：真机安装冒烟（无签名需右键打开）。未关闭的阻塞项如实列于发布说明「已知限制」：Cross-Encoder 选型门槛、两项真实模型 QA 指标。
 
 - 全量回归、离线评测、性能测试、数据库升级/回滚演练。
 - 重跑 PyInstaller、Electron DMG 和真实安装冒烟。
