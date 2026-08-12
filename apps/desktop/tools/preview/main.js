@@ -68,6 +68,12 @@ app.whenReady().then(async () => {
   await waitFor(win, "!!document.querySelector('.ans .refs')");
   await shot(win, '1-light-workbench');
 
+  // 引用点击 → 中栏证据视图（含"查看文件详情"入口）
+  await win.webContents.executeJavaScript(
+    "document.querySelectorAll('.ref')[0].click(); true", true);
+  await waitFor(win, "!!document.querySelector('.evidence-document')");
+  await shot(win, '6-light-evidence');
+
   // 搜索状态
   await win.webContents.executeJavaScript(`
     document.getElementById('q').value = '封阳台';

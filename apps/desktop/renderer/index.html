@@ -196,14 +196,22 @@ function showEvidence(evidence) {
   selectedEvidence = evidence;
   var location = evidence.page ? ('第 ' + evidence.page + ' 页') : (evidence.section_path || evidence.locator || '原文片段');
   var path = evidence.path || evidence.file_path || '';
+  var fileId = evidence.file_id || null;
   document.getElementById('evidence').innerHTML = '<div class="evidence-document">' +
     '<div class="evidence-document-head"><div class="evidence-name">' + esc(evidence.name || evidence.file_name || '未命名文档') + '</div>' +
     '<div class="evidence-locator">' + esc(location) + '</div></div>' +
     '<div class="evidence-text">' + esc(evidence.text || evidence.snippet || '没有可显示的原文片段。') + '</div>' +
-    (path ? '<div class="evidence-actions"><button class="text-button" id="revealEvidence" type="button">在 Finder 中显示</button></div>' : '') +
+    ((path || fileId) ? '<div class="evidence-actions">' +
+      (fileId ? '<button class="text-button" id="openEvidenceDetail" type="button">查看文件详情</button>' : '') +
+      (path ? '<button class="text-button" id="revealEvidence" type="button">在 Finder 中显示</button>' : '') +
+      '</div>' : '') +
     '</div>';
   var button = document.getElementById('revealEvidence');
   if (button) button.onclick = function () { window.inktable.revealInFinder(path); };
+  var detailButton = document.getElementById('openEvidenceDetail');
+  if (detailButton) detailButton.onclick = function () {
+    showFileDetail({ file_id: fileId, name: evidence.file_name, path: path });
+  };
 }
 
 function detailSectionHtml(section) {
