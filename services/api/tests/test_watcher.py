@@ -12,11 +12,15 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from app.db.database import connect, init_db
+from app.watcher import stability
+from app.watcher.service import WatchService
 from app.watcher.stability import looks_like_temp, stabilize
-from app.watcher.watcher import Watcher
+from app.watcher.watcher import Watcher, _Handler
 
 
 @pytest.fixture
@@ -75,6 +79,29 @@ class TestStability:
     def test_vanished_file(self, tmp_path):
         assert not stabilize(str(tmp_path / "nope.txt")).stable
 
+    def test_moved_file_cannot_pass_on_advisory_flock_alone(self, tmp_path, monkeypatch):
+        """普通写句柄不持 flock；能取得 advisory lock 仍必须经过采样。"""
+        f = tmp_path / "still-open.txt"
+        f.write_text("正在写", encoding="utf-8")
+
+        with open(f, "ab") as writer:
+            # 句柄仍开着，但普通 writer 没主动 flock，另一个 fd 仍可取锁。
+            assert stability._has_exclusive_lock(str(f))
+            sampled = False
+
+            def not_stable(_path):
+                nonlocal sampled
+                sampled = True
+                return False
+
+            monkeypatch.setattr(stability, "_size_stable", not_stable)
+            result = stability.stabilize(str(f), moved_in=True)
+            writer.write(b"more")
+
+        assert sampled, "moved_in 因 flock 成功绕过了稳定性采样"
+        assert not result.stable
+        assert result.reason == "still_growing"
+
 
 class TestWatcher:
     def test_move_in_captured(self, watched):
@@ -103,6 +130,25 @@ class TestWatcher:
         names = _names(captured)
         assert not any("crdownload" in n for n in names), "临时文件被误处理"
         assert "报告.pdf" in names, "改名后的最终文件被漏掉"
+
+    def test_node_modules_not_captured_in_realtime(self, tmp_path):
+        """实时监听必须与首次扫描一样排除 node_modules。"""
+        inbox = tmp_path / "inbox"
+        inbox.mkdir()
+        captured = []
+        w = Watcher(lambda p, m: captured.append((Path(p).name, m)))
+        handler = _Handler(w._enqueue, w._enqueue_gone, str(inbox))
+        nested = inbox / "node_modules" / "pkg"
+        nested.mkdir(parents=True)
+        dependency = nested / "dependency.txt"
+        dependency.write_text("不应入库", encoding="utf-8")
+
+        # 走真实 watchdog handler → enqueue 路径，但不依赖容易受并发测试
+        # 影响的系统 FSEvents stream。
+        handler.on_created(SimpleNamespace(is_directory=False, src_path=str(dependency)))
+        assert "dependency.txt" not in _names(captured)
+        assert str(dependency) not in w._pending
+        assert w.stats["skipped_excluded"] > 0
 
     def test_streaming_write_no_false_positive(self, watched):
         """分段写入不能被误判为写完。
@@ -149,3 +195,43 @@ class TestWatcher:
         assert str(inbox) in w.watched_paths
         w.unwatch(str(inbox))
         assert str(inbox) not in w.watched_paths
+
+
+def test_reconcile_recovers_files_created_while_app_was_off(tmp_path, monkeypatch):
+    """启动补扫必须找回应用关闭期间落入来源的文件（§19 R8）。"""
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    late = inbox / "离线期间新增.txt"
+    late.write_text("应用没运行时写入的内容", encoding="utf-8")
+
+    conn = connect(":memory:")
+    init_db(conn)
+    conn.execute(
+        "INSERT INTO sources (name, path, kind, discovered_by, enabled, created_at) "
+        "VALUES ('S', ?, 'manual', 'manual', 1, ?)",
+        (str(inbox), time.time()),
+    )
+    conn.commit()
+
+    service = WatchService(lambda: conn, threading.Lock())
+
+    class FakeWatcher:
+        watched_paths: list[str] = []
+        stats: dict = {}
+
+        def watch(self, path):
+            self.watched_paths = [*self.watched_paths, path]
+            return True
+
+        def stop(self):
+            return None
+
+    service._watcher = FakeWatcher()
+    monkeypatch.setattr("app.watcher.service.index_pending", lambda _c, limit: {"total": 0})
+
+    result = service._reconcile_once()
+    row = conn.execute("SELECT name, path FROM files").fetchone()
+    assert result["registered"] == 1
+    assert row["name"] == late.name
+    assert row["path"] == str(late)
+    conn.close()

@@ -73,6 +73,14 @@ MAX_FULLTEXT_SIZE = 200 * 1024 * 1024   # 超过只登记元数据（§7.7 ④�
 MAX_DEPTH = 12
 HASH_BLOCK = 8 * 1024 * 1024            # 分块流式，避免大文件占满内存
 
+# 内容读取失败不是「文件没有变化」。保留明确的可重试错误码，避免下一次
+# 扫描仅因 size/mtime 相同就把它误判为 unchanged。
+HASH_FAILED = "hash_failed"
+
+
+class ContentReadError(RuntimeError):
+    """读取文件正文以计算内容哈希失败，可在后续扫描中重试。"""
+
 
 @dataclass
 class ScanStats:
@@ -116,6 +124,34 @@ def should_skip_dir(name: str) -> bool:
     return Path(name).suffix.lower() in PACKAGE_EXTS
 
 
+def should_skip_path(path: Path | str, root: Path | str,
+                     max_depth: int = MAX_DEPTH) -> bool:
+    """判断一个**文件**是否应按扫描规则排除。
+
+    扫描与实时监听必须使用同一套规则：否则首次扫描避开 node_modules，
+    监听却会在用户安装依赖时把其中几万个文件重新塞进库。这里以文件相对
+    来源根目录的祖先目录为准；用户若显式把某个目录作为来源根，则它本身
+    不因名字（例如 ``node_modules``）而被排除，这与 ``iter_files`` 一致。
+    """
+    p, base = Path(path), Path(root)
+    try:
+        rel = p.relative_to(base)
+    except ValueError:
+        # watchdog 在 macOS 上可能把 /var 规范化为 /private/var；扫描来源则
+        # 保留用户输入。用解析后的路径再比一次，避免把合法事件误排除。
+        try:
+            rel = p.resolve(strict=False).relative_to(base.resolve(strict=False))
+        except ValueError:
+            # 事件不属于这个来源时绝不能当作可索引文件处理。
+            return True
+
+    parents = rel.parts[:-1]
+    # iter_files 在当前目录深度 >= MAX_DEPTH 时不再处理其中的文件。
+    if len(parents) >= max_depth:
+        return True
+    return any(should_skip_dir(part) for part in parents)
+
+
 def hash_file(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -143,49 +179,105 @@ def iter_files(root: Path, max_depth: int = MAX_DEPTH):
         for fn in filenames:
             if fn.startswith("."):
                 continue
-            yield current / fn, False
+            path = current / fn
+            if should_skip_path(path, root, max_depth):
+                continue
+            yield path, False
 
 
 def register_file(conn, path: Path, source_id: int | None, stats: ScanStats) -> int | None:
     """登记单个文件，返回 file_id。已存在且未变化时直接返回原 id。"""
+    ext = path.suffix.lower()
+    mime = mimetypes.guess_type(path.name)[0]
     try:
         ident = identify(path)
     except (OSError, PermissionError):
+        # 对已知路径留下可重试记录；不能因一次临时权限/读取失败而把旧
+        # content 解关联，更不能下一轮把它当 unchanged。
+        row = conn.execute("SELECT id FROM files WHERE path = ?", (str(path),)).fetchone()
+        if row:
+            conn.execute(
+                """UPDATE files
+                   SET source_id = ?, name = ?, ext = ?, mime = ?, state = 'failed',
+                       error_code = ?, retry_count = retry_count + 1
+                   WHERE id = ?""",
+                (source_id, path.name, ext, mime, HASH_FAILED, row["id"]),
+            )
         stats.errors += 1
         return None
 
-    ext = path.suffix.lower()
     kind = classify_ext(ext)
-    if kind == "ignore":
-        stats.skipped_ext += 1
-        return None
 
     # 已登记过？先按身份查（§8：移动/改名后 inode 不变）
     row = conn.execute(
-        "SELECT id, size, mtime, path, state FROM files "
+        "SELECT id, size, mtime, path, state, source_id, ext, mime, is_dataless, "
+        "content_id, error_code, volume_uuid, inode FROM files "
         "WHERE volume_uuid = ? AND inode = ?",
         (ident.volume_uuid, ident.inode),
     ).fetchone()
+    identity_matched = row is not None
+    if row is None:
+        # 原子替换会让同一路径得到新 inode。路径兜底复用原 file_id，避免
+        # 同一路径留下两条记录；由于身份不同，下面不会走 unchanged 快路径。
+        row = conn.execute(
+            "SELECT id, size, mtime, path, state, source_id, ext, mime, is_dataless, "
+            "content_id, error_code, volume_uuid, inode FROM files WHERE path = ? "
+            "ORDER BY id LIMIT 1",
+            (str(path),),
+        ).fetchone()
 
     if row:
+        if kind == "ignore":
+            # 已索引文件改名到白名单外，或同一路径被原子替换成忽略类型：
+            # 保留身份记录以继续追踪，但立即解除 content，避免旧全文仍以
+            # 新文件名/类型出现在检索结果里。孤儿 content 由既有清扫流程处理。
+            conn.execute(
+                """UPDATE files
+                   SET volume_uuid = ?, inode = ?, content_id = NULL, path = ?, name = ?,
+                       source_id = ?, ext = ?, mime = ?, size = ?, mtime = ?,
+                       state = 'ignored', is_dataless = ?, indexed_at = NULL,
+                       error_code = NULL, retry_count = 0, missing_since = NULL
+                   WHERE id = ?""",
+                (ident.volume_uuid, ident.inode, str(path), path.name, source_id, ext, mime,
+                 ident.size, ident.mtime, int(ident.is_dataless), row["id"]),
+            )
+            stats.skipped_ext += 1
+            return None
+
         # 路径变了但内容没变 → 只更新路径，不重新解析（§12.1 性能关键项）
-        if row["size"] == ident.size and abs((row["mtime"] or 0) - ident.mtime) <= 1.0:
-            if row["path"] != str(path):
-                conn.execute(
-                    "UPDATE files SET path = ?, name = ? WHERE id = ?",
-                    (str(path), path.name, row["id"]),
-                )
+        # 但 hash/read 失败的文件是例外：其 metadata 即使没有变化，也必须
+        # 在下一次扫描重新尝试读取，不能进入永久 unchanged。
+        if (identity_matched
+                and row["size"] == ident.size
+                and row["mtime"] == ident.mtime
+                and row["error_code"] != HASH_FAILED
+                and (row["content_id"] is not None or ident.is_dataless)):
+            changed = any((
+                row["path"] != str(path),
+                row["source_id"] != source_id,
+                row["ext"] != ext,
+                row["mime"] != mime,
+                bool(row["is_dataless"]) != ident.is_dataless,
+            ))
+            conn.execute(
+                """UPDATE files
+                   SET path = ?, name = ?, source_id = ?, ext = ?, mime = ?,
+                       is_dataless = ?,
+                       state = CASE WHEN state = 'missing' THEN 'registered' ELSE state END,
+                       missing_since = NULL
+                   WHERE id = ?""",
+                (str(path), path.name, source_id, ext, mime, int(ident.is_dataless), row["id"]),
+            )
+            if changed:
                 stats.path_updated += 1
             else:
                 stats.unchanged += 1
-            # 曾被标 missing 的文件重现（外置盘插回、误删恢复、移回来）
-            # → 自动复活，索引一直都在（§8.3：missing 非终态）
-            conn.execute(
-                """UPDATE files SET state = 'registered', missing_since = NULL
-                   WHERE id = ? AND state = 'missing'""",
-                (row["id"],),
-            )
             return row["id"]
+
+    # 新的白名单外文件不入库；已登记文件已在上面更新为 ignored 并解除全文。
+    if kind == "ignore":
+        stats.skipped_ext += 1
+        return None
 
     # iCloud 占位文件：**绝不读取内容**，读了就会触发全量下载（§7.8）
     if ident.is_dataless:
@@ -194,18 +286,31 @@ def register_file(conn, path: Path, source_id: int | None, stats: ScanStats) -> 
         state = "cloud_placeholder"
     elif kind == "fulltext" and ident.size > MAX_FULLTEXT_SIZE:
         stats.skipped_too_large += 1
-        content_id, state = _ensure_content(conn, path, ident, stats), "registered"
+        try:
+            content_id = _ensure_content(conn, path, ident, stats)
+        except ContentReadError:
+            _record_content_read_failure(conn, row, path, source_id, ident, ext, mime, stats)
+            return None
+        state = "registered"
     else:
-        content_id, state = _ensure_content(conn, path, ident, stats), "registered"
+        try:
+            content_id = _ensure_content(conn, path, ident, stats)
+        except ContentReadError:
+            _record_content_read_failure(conn, row, path, source_id, ident, ext, mime, stats)
+            return None
+        state = "registered"
 
     now = time.time()
-    mime = mimetypes.guess_type(path.name)[0]
-
     if row:  # 内容变了，更新既有记录
         conn.execute(
-            "UPDATE files SET content_id=?, path=?, name=?, size=?, mtime=?, "
-            "state=?, indexed_at=NULL WHERE id=?",
-            (content_id, str(path), path.name, ident.size, ident.mtime, state, row["id"]),
+            """UPDATE files
+               SET volume_uuid = ?, inode = ?, content_id = ?, path = ?, name = ?,
+                   source_id = ?, ext = ?, mime = ?,
+                   size = ?, mtime = ?, state = ?, is_dataless = ?, indexed_at = NULL,
+                   error_code = NULL, retry_count = 0, missing_since = NULL
+               WHERE id = ?""",
+            (ident.volume_uuid, ident.inode, content_id, str(path), path.name, source_id,
+             ext, mime, ident.size, ident.mtime, state, int(ident.is_dataless), row["id"]),
         )
         stats.content_updated += 1
         return row["id"]
@@ -235,9 +340,8 @@ def _ensure_content(conn, path: Path, ident: FileIdentity, stats: ScanStats) -> 
     """按内容哈希去重。同一份内容只建一条 contents 记录（§9 contents）。"""
     try:
         digest = hash_file(path)
-    except (OSError, PermissionError):
-        stats.errors += 1
-        return None
+    except (OSError, PermissionError) as e:
+        raise ContentReadError(str(e)) from e
 
     row = conn.execute("SELECT id FROM contents WHERE sha256 = ?", (digest,)).fetchone()
     if row:
@@ -249,6 +353,36 @@ def _ensure_content(conn, path: Path, ident: FileIdentity, stats: ScanStats) -> 
         (digest, ident.size),
     )
     return cur.lastrowid
+
+
+def _record_content_read_failure(conn, row, path: Path, source_id: int | None,
+                                 ident: FileIdentity, ext: str, mime: str | None,
+                                 stats: ScanStats) -> None:
+    """记录可重试的哈希失败，同时保留已关联的旧 content。"""
+    now = time.time()
+    if row:
+        # 特别不要写 content_id = NULL：旧索引仍是最后一个已知可靠版本，
+        # 在下一次读取成功前必须保留。
+        conn.execute(
+            """UPDATE files
+               SET volume_uuid = ?, inode = ?, path = ?, name = ?, source_id = ?,
+                   ext = ?, mime = ?, size = ?, mtime = ?,
+                   is_dataless = ?, state = 'failed', error_code = ?,
+                   retry_count = retry_count + 1, missing_since = NULL
+               WHERE id = ?""",
+            (ident.volume_uuid, ident.inode, str(path), path.name, source_id, ext, mime,
+             ident.size, ident.mtime, int(ident.is_dataless), HASH_FAILED, row["id"]),
+        )
+    else:
+        conn.execute(
+            """INSERT INTO files
+               (volume_uuid, inode, content_id, path, name, origin_path, source_id, ext, mime,
+                size, state, error_code, retry_count, is_dataless, mtime, detected_at)
+               VALUES (?,?,NULL,?,?,?,?,?,?,?,'failed',?,1,?,?,?)""",
+            (ident.volume_uuid, ident.inode, str(path), path.name, str(path), source_id,
+             ext, mime, ident.size, HASH_FAILED, int(ident.is_dataless), ident.mtime, now),
+        )
+    stats.errors += 1
 
 
 def scan_source(conn, source_id: int, root: Path | str, progress=None) -> ScanStats:

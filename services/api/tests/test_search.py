@@ -22,7 +22,17 @@ def db():
         (3, "发票编号 HT-2024-0023，金额人民币 12800 元整。"),
         (4, "本科毕业设计：Sn58Bi 钎料的剪切强度随 Ni 含量先升后降。"),
     ]
+    conn.execute(
+        "INSERT INTO contents (id, sha256, size, parse_state) "
+        "VALUES (1, 'search-fixture', 1, 'indexed')"
+    )
     for cid, text in docs:
+        conn.execute(
+            """INSERT INTO chunks
+               (id, content_id, ordinal, text, text_hash, index_version)
+               VALUES (?, 1, ?, ?, ?, 1)""",
+            (cid, cid - 1, text, f"hash-{cid}"),
+        )
         index_chunk(conn, cid, text)
     conn.commit()
     yield conn
@@ -72,11 +82,16 @@ class TestChineseSearch:
         assert 1 in _hits(db, "蠕虫")
 
     def test_cross_chunk_and_returns_nothing(self, db):
-        """AND 语义：分处不同分片的词不应命中。
+        """Child 词法 AND 仍不跨片；Document 软路由可以召回同文档证据。
 
-        这不是 bug 而是正确行为，锁住它防止有人"修"成 OR。
+        M2 前这个测试要求全管线为空。分层索引上线后，Document 路由的职责
+        正是识别同文档的跨片问题，所以这里只锁住 Child 词法语义。
         """
-        assert _hits(db, "庞贝蠕虫 甲烷") == set()
+        result = search(db, "庞贝蠕虫 甲烷")
+        assert result["jieba"] == []
+        assert result["trigram"] == []
+        assert {cid for cid, _ in result["substr"]} == {1, 2}
+        assert all(score == 1.0 for _cid, score in result["substr"])
 
     def test_hyphenated_id(self, db):
         """带连字符的编号 —— FTS5 把 `-` 当 NOT，必须被短语引号屏蔽。"""

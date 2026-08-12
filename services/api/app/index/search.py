@@ -129,6 +129,18 @@ def _is_meaningful(word: str) -> bool:
     return bool(word.strip())
 
 
+def extract_query_terms(query: str) -> list[str]:
+    """Return stable, de-duplicated terms for pairwise ranking features."""
+    terms: list[str] = []
+    for raw in query.split():
+        words = segment_for_query(raw).split() if _needs_split(raw) else [raw]
+        for word in words:
+            normalized = word.strip().lower()
+            if normalized and _is_meaningful(normalized) and normalized not in terms:
+                terms.append(normalized)
+    return terms[:16]
+
+
 # FTS5 建表语句的唯一来源是 app/db/schema.py（init_db 执行它）。
 #
 # 这里曾经也放了一份 —— 两份定义分叉过一次：给这份加了
@@ -158,7 +170,8 @@ def index_chunk(conn, chunk_id: int, text: str, section_path: str = "") -> None:
     )
 
 
-def search(conn, query: str, limit: int = 100) -> dict[str, list[tuple[int, float]]]:
+def search(conn, query: str, limit: int = 100, *,
+           include_hierarchy: bool = True) -> dict[str, list[tuple[int, float]]]:
     """多路检索，返回各路的 (chunk_id, 分数) 排名列表。
 
     不在这里融合 —— 融合是 §12.3b ④ 两级 RRF 的职责。
@@ -196,8 +209,12 @@ def search(conn, query: str, limit: int = 100) -> dict[str, list[tuple[int, floa
             return [
                 (r[0], -r[1])  # bm25 越小越相关，取负统一为"越大越好"
                 for r in conn.execute(
-                    f"SELECT rowid, bm25({table}) FROM {table} "
-                    f"WHERE {table} MATCH ? ORDER BY bm25({table}) LIMIT ?",
+                    f"SELECT {table}.rowid, bm25({table}) FROM {table} "
+                    f"JOIN chunks ch ON ch.id = {table}.rowid "
+                    f"JOIN contents c ON c.id = ch.content_id "
+                    f"WHERE {table} MATCH ? "
+                    f"AND ch.index_version = c.active_index_version "
+                    f"ORDER BY bm25({table}) LIMIT ?",
                     (q, k),
                 )
             ]
@@ -217,6 +234,13 @@ def search(conn, query: str, limit: int = 100) -> dict[str, list[tuple[int, floa
         out["substr"] = _substring_search(conn, query, limit)
 
     out["vector"] = _vector_search(conn, query, limit)
+
+    if include_hierarchy:
+        try:
+            from app.index.hierarchy import hierarchy_routes
+            out.update(hierarchy_routes(conn, query, limit))
+        except Exception:
+            out.update({"document": [], "section": []})
     return out
 
 
@@ -231,7 +255,13 @@ def _vector_search(conn, query: str, limit: int) -> list[tuple[int, float]]:
         if vec.count(conn) == 0:
             return []
         qv = emb.get_embedder().encode_one(query)
-        return vec.search(conn, qv, limit=limit)
+        active_ids = [row["id"] for row in conn.execute(
+            """SELECT ch.id FROM chunks ch JOIN contents c ON c.id = ch.content_id
+               WHERE ch.index_version = c.active_index_version"""
+        )]
+        if not active_ids:
+            return []
+        return vec.search(conn, qv, limit=limit, candidate_ids=active_ids)
     except Exception as e:  # noqa: BLE001 - 任何异常都只降级，不冒泡
         import logging
         logging.getLogger("inktable.search").debug("向量路跳过：%s", e)
@@ -269,8 +299,10 @@ def _substring_search(conn, query: str, limit: int) -> list[tuple[int, float]]:
 
     try:
         rows = conn.execute(
-            f"SELECT id, ({score_expr}) AS hits FROM chunks "
-            f"WHERE {where} ORDER BY hits DESC LIMIT ?",
+            f"SELECT ch.id, ({score_expr}) AS hits FROM chunks ch "
+            f"JOIN contents c ON c.id = ch.content_id "
+            f"WHERE ch.index_version = c.active_index_version AND ({where}) "
+            f"ORDER BY hits DESC LIMIT ?",
             [*like, *like, limit],
         ).fetchall()
     except sqlite3.Error:

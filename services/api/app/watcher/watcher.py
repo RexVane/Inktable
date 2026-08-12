@@ -16,14 +16,17 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from pathlib import Path
 
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
+from watchdog.observers.polling import PollingObserver
 
 from app.watcher.stability import STABILIZE_TIMEOUT, looks_like_temp, stabilize
+from app.watcher.scanner import should_skip_path
 
 log = logging.getLogger("inktable.watcher")
 
@@ -33,37 +36,50 @@ GONE_QUIET = 3.0        # deleted 事件后等这么久才确认消失 ——
                         # 原子替换（删+建）与编辑器的保存舞步都在此窗口内完成
 
 
+def _default_observer():
+    """创建平台监听器；测试/诊断可显式切到纯 Python polling。
+
+    macOS 的 FSEvents 后端是原生扩展，某些 CI/共享执行环境无法创建 stream，
+    甚至会在 Python 来得及捕获异常前触发进程级 Bus error。生产仍默认使用
+    FSEvents；设置 ``INKTABLE_WATCH_BACKEND=polling`` 时改用安全的轮询后端。
+    """
+    if os.environ.get("INKTABLE_WATCH_BACKEND", "").strip().lower() == "polling":
+        return PollingObserver(timeout=0.2)
+    return Observer()
+
+
 class _Handler(FileSystemEventHandler):
     """只做入队，绝不做重活。"""
 
-    def __init__(self, enqueue, enqueue_gone):
+    def __init__(self, enqueue, enqueue_gone, root: str):
         self._enqueue = enqueue
         self._enqueue_gone = enqueue_gone
+        self._root = root
 
     def on_created(self, event):
         if not event.is_directory:
-            self._enqueue(event.src_path, moved_in=False)
+            self._enqueue(event.src_path, moved_in=False, root=self._root)
 
     def on_moved(self, event):
         # §11.1：微信「临时目录→移入」、浏览器「.crdownload→改名」都走这条。
         # 漏掉 on_moved 就等于漏掉两种主流下载方式。
         if not event.is_directory:
-            self._enqueue(event.dest_path, moved_in=True)
+            self._enqueue(event.dest_path, moved_in=True, root=self._root)
             # 树内移动：旧路径消失了。交给 gone 队列判定 ——
             # register_file 靠 inode 命中会把新路径写回，旧路径不会误标 missing
             # （gone 判定时会先查库里该路径对应的文件是否已在别处找到）。
-            self._enqueue_gone(event.src_path)
+            self._enqueue_gone(event.src_path, root=self._root)
 
     def on_modified(self, event):
         # 已入库文件被改写 → 需要重新索引（§12.5 增量更新）
         if not event.is_directory:
-            self._enqueue(event.src_path, moved_in=False)
+            self._enqueue(event.src_path, moved_in=False, root=self._root)
 
     def on_deleted(self, event):
         # 文件消失 —— 可能是真删除，也可能是原子替换（删+建）或
         # 移到监听树外。**不能立刻动库**：静默期后确认还不在才算 gone。
         if not event.is_directory:
-            self._enqueue_gone(event.src_path)
+            self._enqueue_gone(event.src_path, root=self._root)
 
 
 class Watcher:
@@ -73,9 +89,10 @@ class Watcher:
     避免把 SQLite 单写线程约束（§19 R9）扩散到这一层。
     """
 
-    def __init__(self, on_stable, on_gone=None):
+    def __init__(self, on_stable, on_gone=None, observer_factory=None):
         self._on_stable = on_stable
         self._on_gone = on_gone          # 路径确认消失后的回调（可选）
+        self._observer_factory = observer_factory or _default_observer
         self._observer: Observer | None = None
         self._pending: dict[str, tuple[float, bool]] = {}  # path -> (最后事件时间, moved_in)
         self._gone: dict[str, float] = {}                  # path -> 最后 deleted 事件时间
@@ -85,15 +102,24 @@ class Watcher:
         self._watched: dict[str, object] = {}
         self._done: dict[str, tuple[int, int]] = {}  # path -> (mtime_ns, size)，去重指纹
         self.stats = {"events": 0, "stable": 0, "deduped": 0,
-                      "skipped_temp": 0, "timeout": 0, "gone": 0}
+                      "skipped_temp": 0, "skipped_excluded": 0,
+                      "timeout": 0, "gone": 0}
 
     # ---------------------------------------------------------------- 生命周期
 
     def start(self) -> None:
         if self._observer is not None:
             return
-        self._observer = Observer()
-        self._observer.start()
+        observer = self._observer_factory()
+        try:
+            observer.start()
+        except Exception:
+            try:
+                observer.stop()
+            except Exception:
+                pass
+            raise
+        self._observer = observer
         self._stop.clear()
         self._worker = threading.Thread(target=self._run, name="inktable-stabilizer", daemon=True)
         self._worker.start()
@@ -119,7 +145,7 @@ class Watcher:
             return False
         try:
             handle = self._observer.schedule(
-                _Handler(self._enqueue, self._enqueue_gone), path, recursive=True
+                _Handler(self._enqueue, self._enqueue_gone, str(p)), str(p), recursive=True
             )
         except OSError as e:
             log.warning("无法监听 %s：%s", path, e)
@@ -140,8 +166,10 @@ class Watcher:
 
     # ---------------------------------------------------------------- 内部
 
-    def _enqueue_gone(self, path: str) -> None:
+    def _enqueue_gone(self, path: str, root: str | None = None) -> None:
         """watchdog 线程调用 —— 记录"路径可能消失了"，稍后确认。"""
+        if root is not None and should_skip_path(path, root):
+            return
         if looks_like_temp(Path(path).name):
             return
         with self._lock:
@@ -149,9 +177,12 @@ class Watcher:
             # 同一路径若还有 pending 的稳定检测，撤掉 —— 文件都没了
             self._pending.pop(path, None)
 
-    def _enqueue(self, path: str, moved_in: bool) -> None:
+    def _enqueue(self, path: str, moved_in: bool, root: str | None = None) -> None:
         """watchdog 线程调用 —— 必须立刻返回。"""
         self.stats["events"] += 1
+        if root is not None and should_skip_path(path, root):
+            self.stats["skipped_excluded"] += 1
+            return
         if looks_like_temp(Path(path).name):
             self.stats["skipped_temp"] += 1
             return

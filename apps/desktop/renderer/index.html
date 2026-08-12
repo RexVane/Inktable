@@ -2,6 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src http://127.0.0.1:*; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'" />
 <title>Inktable</title>
 <style>
   /* 设计 Token —— PLAN §15 A8：原生极简 */
@@ -101,6 +102,16 @@
     font: inherit; margin-top: 14px; padding: 6px 16px; border: none; border-radius: 6px;
     background: var(--accent); color: #fff; font-weight: 500; cursor: pointer;
   }
+  .load-more {
+    display: flex; justify-content: center; align-items: center; gap: 10px;
+    padding: 12px 16px 18px; color: var(--text-secondary); font-size: 11px;
+  }
+  .load-more button {
+    font: inherit; padding: 5px 14px; border-radius: 5px; cursor: pointer;
+    border: 1px solid var(--separator); background: transparent; color: var(--text-primary);
+  }
+  .load-more button:hover { background: var(--bg-hover); }
+  .load-more button:disabled { opacity: .45; cursor: default; }
 
   /* 来源引导（首次启动） */
   .setup { position: absolute; inset: 0; background: var(--bg-app); z-index: 10;
@@ -142,6 +153,23 @@
   .live.busy .dot { animation: pulse 1.1s ease-in-out infinite; }
   .live.off .dot { background: var(--text-secondary); opacity: .4; }
   @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
+
+  /* sidecar 生命周期：与文件监听状态分开显示，避免后端断线时误以为只是没监听 */
+  .sidecar-status {
+    display: flex; align-items: center; gap: 5px; flex-shrink: 0;
+    color: var(--text-secondary); font-size: 11px; white-space: nowrap;
+  }
+  .sidecar-status .dot {
+    width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+    background: var(--text-secondary); opacity: .55;
+  }
+  .sidecar-status.ready .dot { background: var(--accent); opacity: 1; }
+  .sidecar-status.starting .dot,
+  .sidecar-status.restarting .dot { background: var(--warn); opacity: 1; animation: sidecar-pulse 1.1s ease-in-out infinite; }
+  .sidecar-status.stopped .dot { background: var(--warn); opacity: 1; }
+  .sidecar-status.failed { color: #ff3b30; }
+  .sidecar-status.failed .dot { background: #ff3b30; opacity: 1; }
+  @keyframes sidecar-pulse { 0%,100% { opacity: 1 } 50% { opacity: .28 } }
 
   /* 新文件到达提示：底部浮出，几秒后自己消失 */
   .toast {
@@ -260,20 +288,52 @@
   .tag.live { background: rgba(29,185,84,.16); color: var(--accent); }
   .tag.gone { background: rgba(255,59,48,.14); color: #ff3b30; }
 </style>
+<link rel="stylesheet" href="workbench.css" />
 </head>
 <body>
-  <div class="sidebar">
-    <div class="drag"></div>
-    <div class="nav" id="nav"></div>
-  </div>
   <div class="main">
     <div class="topbar">
-      <input class="search" id="q" placeholder="搜索文件内容或文件名…" />
-      <span class="count" id="count"></span>
-      <span class="live off" id="live" title=""><span class="dot"></span><span id="liveText"></span></span>
-      <span class="gear" id="gear" title="设置">⚙</span>
+      <div class="topbar-brand" aria-label="Inktable 个人知识库">
+        <span class="brand-mark" aria-hidden="true">I</span>
+        <div class="brand-copy"><div class="brand-name">Inktable</div><div class="brand-subtitle">个人知识库</div></div>
+      </div>
+      <div class="view-title"><span class="scope-name" id="topbarScope">全部内容</span></div>
+      <div class="topbar-spacer"></div>
+      <div class="status-cluster">
+        <span class="live off" id="live" title=""><span class="dot"></span><span id="liveText"></span></span>
+        <span class="sidecar-status starting" id="sidecarStatus" title="正在连接本地服务" aria-live="polite">
+          <span class="dot"></span><span id="sidecarStatusText">正在连接…</span>
+        </span>
+        <button class="gear" id="gear" type="button" title="来源与设置" aria-label="来源与设置">⚙</button>
+      </div>
     </div>
-    <div class="rows" id="rows"><div class="empty">加载中…</div></div>
+    <div class="workspace" id="workspace">
+      <div class="content-layout">
+        <section class="results-panel" aria-label="文件管理">
+          <div class="panel-head"><span class="panel-title" id="resultsTitle">文件管理</span><span class="count" id="count"></span></div>
+          <div class="file-search">
+            <div class="query-controls">
+              <input class="search" id="q" placeholder="搜索内容或文件名…" autocomplete="off" />
+              <button class="query-submit" id="querySubmit" type="button" title="搜索" aria-label="搜索">→</button>
+            </div>
+          </div>
+          <div class="nav" id="nav"></div>
+          <div class="rows" id="rows"><div class="workbench-empty"><div><div class="empty-mark">⌕</div><div class="empty-title">正在载入内容</div></div></div></div>
+        </section>
+        <section class="evidence-panel" aria-label="文件详情">
+          <div class="panel-head"><span class="panel-title">文件详情</span></div>
+          <div class="evidence-content" id="evidence"><div class="evidence-empty"><div><div class="empty-mark">¶</div><div class="empty-title">选择一条结果</div><div class="empty-meta">在这里查看原文片段和定位信息</div></div></div></div>
+        </section>
+        <aside class="qa-panel" aria-label="知识问答">
+          <div class="panel-head qa-head"><span class="panel-title">知识问答</span><button class="model-state" id="modelState" type="button">未配置模型</button></div>
+          <div class="answer-rows" id="answerRows"><div class="qa-empty"><div><div class="empty-mark">?</div><div class="empty-title">询问你的知识库</div><div class="empty-meta">回答会附带可定位的原文引用</div></div></div></div>
+          <div class="qa-composer">
+            <textarea id="askQ" rows="2" placeholder="输入问题…"></textarea>
+            <button id="askSubmit" class="qa-submit" type="button">提问</button>
+          </div>
+        </aside>
+      </div>
+    </div>
   </div>
   <div class="toast" id="toast"></div>
   <div class="ctx" id="ctx"></div>
@@ -309,12 +369,179 @@
   </div>
 
 <script>
+const PAGE_SIZE = 300;
 let sources = [], files = [], activeSource = null, stats = null;
 let categories = { tree: [], unclassified: 0 };
 let activeCategory = null;   // 数字=分类id, 'none'=未分类, null=不过滤
 let books = [];
 let activeBook = null;
+let activeExt = null;        // null=不过滤，空字符串=无扩展名
+let activeDuplicate = false;
+let filesTotal = 0;
+let currentQuery = '';
+let loadVersion = 0;
+let searchVersion = 0;
 let llmInfo = { configured: false };
+let selectedEvidence = null;
+let detailVersion = 0;
+
+function currentScopeLabel() {
+  if (activeBook !== null) {
+    var book = books.find(function (item) { return item.id === activeBook; });
+    return book ? ('文件书 · ' + book.name) : '当前文件书';
+  }
+  if (activeSource !== null) return '来源 · ' + activeSource;
+  if (activeCategory !== null) {
+    if (activeCategory === 'none') return '未分类资料';
+    var category = categories.tree.find(function (item) { return item.id === activeCategory; });
+    return category ? ('分类 · ' + category.name) : '当前分类';
+  }
+  if (activeExt !== null) return '类型 · ' + (activeExt || '无扩展名');
+  if (activeDuplicate) return '重复内容';
+  return '全部内容';
+}
+
+function updateWorkbenchChrome() {
+  var scope = currentScopeLabel();
+  document.getElementById('topbarScope').textContent = scope;
+  document.getElementById('q').placeholder = '搜索事实、片段或文件名…';
+  document.getElementById('querySubmit').title = '搜索';
+  document.getElementById('querySubmit').setAttribute('aria-label', '搜索');
+}
+
+function updateModelState(status) {
+  llmInfo = status || { configured: false };
+  var button = document.getElementById('modelState');
+  var submit = document.getElementById('askSubmit');
+  if (!button || !submit) return;
+  if (llmInfo.available === true) {
+    button.className = 'model-state ready';
+    button.textContent = '模型可用';
+    button.title = (llmInfo.model || '当前模型') + '连接正常';
+    submit.disabled = false;
+  } else if (llmInfo.available === false && llmInfo.configured) {
+    button.className = 'model-state error';
+    button.textContent = llmInfo.message || '模型不可用';
+    button.title = '点击重新检测连接';
+    submit.disabled = true;
+  } else if (llmInfo.configured) {
+    button.className = 'model-state pending';
+    button.textContent = '检测模型';
+    button.title = '已配置，点击检测连接';
+    submit.disabled = true;
+  } else {
+    button.className = 'model-state off';
+    button.textContent = '未配置模型';
+    button.title = '点击打开模型设置';
+    submit.disabled = true;
+  }
+}
+
+async function testModelConnection(hint) {
+  var button = document.getElementById('modelState');
+  button.className = 'model-state checking';
+  button.textContent = '检测中…';
+  button.disabled = true;
+  if (hint) hint.textContent = '正在检测模型连接…';
+  try {
+    var status = await api('/settings/llm/test', { method: 'POST' });
+    updateModelState(status);
+    if (hint) hint.textContent = status.message || (status.available ? '模型连接正常' : '模型不可用');
+    return status;
+  } catch (e) {
+    var failed = { configured: llmInfo.configured, available: false, code: 'unreachable', message: '检测失败：' + e.message };
+    updateModelState(failed);
+    if (hint) hint.textContent = failed.message;
+    return failed;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderKnowledgeEmpty() {
+  document.getElementById('count').textContent = '';
+  document.getElementById('rows').innerHTML = '<div class="workbench-empty"><div><div class="empty-mark">⌕</div><div class="empty-title">没有内容</div></div></div>';
+  clearEvidence();
+}
+
+function clearEvidence() {
+  selectedEvidence = null;
+  document.getElementById('evidence').innerHTML = '<div class="evidence-empty"><div><div class="empty-mark">¶</div><div class="empty-title">选择一条结果</div><div class="empty-meta">在这里查看原文片段和定位信息</div></div></div>';
+}
+
+function showEvidence(evidence) {
+  if (!evidence) return clearEvidence();
+  selectedEvidence = evidence;
+  var location = evidence.page ? ('第 ' + evidence.page + ' 页') : (evidence.section_path || evidence.locator || '原文片段');
+  var path = evidence.path || evidence.file_path || '';
+  document.getElementById('evidence').innerHTML = '<div class="evidence-document">' +
+    '<div class="evidence-document-head"><div class="evidence-name">' + esc(evidence.name || evidence.file_name || '未命名文档') + '</div>' +
+    '<div class="evidence-locator">' + esc(location) + '</div></div>' +
+    '<div class="evidence-text">' + esc(evidence.text || evidence.snippet || '没有可显示的原文片段。') + '</div>' +
+    (path ? '<div class="evidence-actions"><button class="text-button" id="revealEvidence" type="button">在 Finder 中显示</button></div>' : '') +
+    '</div>';
+  var button = document.getElementById('revealEvidence');
+  if (button) button.onclick = function () { window.inktable.revealInFinder(path); };
+}
+
+function detailSectionHtml(section) {
+  var location = section.page ? ('第 ' + section.page + ' 页') :
+    (section.section_path || section.locator || section.title || '正文片段');
+  return '<article class="detail-section">' +
+    '<div class="detail-section-locator">' + esc(location) + '</div>' +
+    '<div class="detail-section-text">' + esc(section.text || '没有可显示的正文。') + '</div>' +
+    '</article>';
+}
+
+function renderFileDetail(detail) {
+  var file = detail.file || {};
+  var documentInfo = detail.document || {};
+  var path = file.preserved_path || file.path || '';
+  var meta = [file.ext || file.mime, fmtSize(file.size), file.source && file.source.name, fmtDate(file.mtime)]
+    .filter(Boolean).join(' · ');
+  var sections = Array.isArray(detail.sections) ? detail.sections : [];
+  document.getElementById('evidence').innerHTML = '<div class="file-detail">' +
+    '<div class="file-detail-head"><div class="evidence-name">' + esc(file.name || documentInfo.title || '未命名文档') + '</div>' +
+    '<div class="file-detail-meta">' + esc(meta || '文件详情') + '</div>' +
+    (path ? '<div class="file-detail-path">' + esc(path) + '</div>' : '') +
+    ((documentInfo.summary_text || documentInfo.summary) ? '<div class="file-summary">' + esc(documentInfo.summary_text || documentInfo.summary) + '</div>' : '') +
+    (path ? '<button class="text-button" id="revealEvidence" type="button">在 Finder 中显示</button>' : '') + '</div>' +
+    '<div class="detail-sections">' +
+      (sections.length ? sections.map(detailSectionHtml).join('') : '<div class="detail-empty">该文件还没有可展示的索引正文</div>') +
+      (detail.truncated ? '<div class="detail-more">仅显示前 ' + esc(sections.length) + ' 个片段</div>' : '') +
+    '</div></div>';
+  var button = document.getElementById('revealEvidence');
+  if (button) button.onclick = function () { window.inktable.revealInFinder(path); };
+}
+
+async function showFileDetail(file) {
+  if (!file) return clearEvidence();
+  var fileId = file.file_id || file.id;
+  if (!fileId) return showEvidence({ name: file.name, text: file.path || '', path: openPathForFile(file) });
+  var version = ++detailVersion;
+  document.getElementById('evidence').innerHTML = '<div class="detail-loading">正在读取文件详情…</div>';
+  try {
+    var detail = await api('/files/' + encodeURIComponent(fileId) + '/detail');
+    if (version === detailVersion) renderFileDetail(detail);
+  } catch (e) {
+    if (version === detailVersion) {
+      document.getElementById('evidence').innerHTML = '<div class="detail-error">文件详情加载失败：' + esc(e.message) + '</div>';
+    }
+  }
+}
+
+function showSearchFileDetail(file) {
+  detailVersion += 1;
+  var snippets = Array.isArray(file.snippets) ? file.snippets : [];
+  var path = file.path || '';
+  document.getElementById('evidence').innerHTML = '<div class="file-detail">' +
+    '<div class="file-detail-head"><div class="evidence-name">' + esc(file.name || '未命名文档') + '</div>' +
+    '<div class="file-detail-meta">' + esc([file.ext, file.source_name].filter(Boolean).join(' · ') || '检索命中') + '</div>' +
+    (path ? '<div class="file-detail-path">' + esc(path) + '</div><button class="text-button" id="revealEvidence" type="button">在 Finder 中显示</button>' : '') + '</div>' +
+    '<div class="detail-sections">' + (snippets.length ? snippets.map(detailSectionHtml).join('') : '<div class="detail-empty">没有可显示的命中片段</div>') + '</div></div>';
+  var button = document.getElementById('revealEvidence');
+  if (button) button.onclick = function () { window.inktable.revealInFinder(path); };
+}
 
 async function api(path, opts = {}) {
   const info = await window.inktable.getSidecarInfo();
@@ -353,62 +580,70 @@ function fmtDate(ts) {
 
 function renderNav() {
   const el = document.getElementById('nav');
-  let h = '<div class="nav-group">文件库</div>';
-  h += '<div class="nav-item' + (activeSource === null ? ' on' : '') + '" data-src="">' +
-       '<span class="label">全部文件</span><span class="n">' + (stats ? stats.files : '') + '</span></div>';
+  const unfiltered = activeSource === null && activeCategory === null &&
+    activeBook === null && activeExt === null && !activeDuplicate;
+  let h = '<div class="nav-group">范围</div>';
+  h += '<div class="nav-item' + (unfiltered ? ' on' : '') + '" data-src="">' +
+       '<span class="label">全部文件</span><span class="n">' + esc(stats ? stats.files : '') + '</span></div>';
   if (stats && stats.deduped > 0) {
-    h += '<div class="nav-item" data-dup="1"><span class="label">重复内容</span>' +
-         '<span class="n">' + stats.deduped + '</span></div>';
+    h += '<div class="nav-item' + (activeDuplicate ? ' on' : '') + '" data-dup="1"><span class="label">重复内容</span>' +
+         '<span class="n">' + esc(stats.deduped) + '</span></div>';
   }
   h += '<div class="nav-group">分类 <span class="nav-add" id="catAdd" title="新建分类">＋</span></div>';
   h += '<div id="catInputWrap"></div>';
   categories.tree.forEach(function (c) {
-    var pad = 8 + c.depth * 14;
-    h += '<div class="nav-item' + (activeCategory === c.id ? ' on' : '') + '" data-cat="' + c.id +
+    var pad = 8 + safeNumber(c.depth) * 14;
+    h += '<div class="nav-item' + (activeCategory === c.id ? ' on' : '') + '" data-cat="' + esc(c.id) +
          '" style="padding-left:' + pad + 'px">' +
          '<span class="label">' + esc(c.name) + '</span>' +
-         '<span class="n">' + (c.total_count || '') + '</span></div>';
+         '<span class="n">' + esc(c.total_count || '') + '</span></div>';
   });
   h += '<div class="nav-item' + (activeCategory === 'none' ? ' on' : '') + '" data-cat="none">' +
-       '<span class="label">未分类</span><span class="n">' + categories.unclassified + '</span></div>';
+       '<span class="label">未分类</span><span class="n">' + esc(categories.unclassified) + '</span></div>';
 
   h += '<div class="nav-group">文件书 <span class="nav-add" id="bookAdd" title="新建文件书">＋</span></div>';
   h += '<div id="bookInputWrap"></div>';
   books.forEach(function (b) {
-    h += '<div class="nav-item' + (activeBook === b.id ? ' on' : '') + '" data-book="' + b.id + '">' +
-         '<span class="label">' + esc(b.name) + '</span><span class="n">' + (b.n || '') + '</span></div>';
+    h += '<div class="nav-item' + (activeBook === b.id ? ' on' : '') + '" data-book="' + esc(b.id) + '">' +
+         '<span class="label">' + esc(b.name) + '</span><span class="n">' + esc(b.n || '') + '</span></div>';
   });
 
   if (stats && stats.by_source.length) {
     h += '<div class="nav-group">来源</div>';
     stats.by_source.forEach(function (s) {
-      h += '<div class="nav-item' + (activeSource === s.name ? ' on' : '') + '" data-src="' + s.name + '">' +
-           '<span class="label">' + s.name + '</span><span class="n">' + s.c + '</span></div>';
+      h += '<div class="nav-item' + (activeSource === s.name ? ' on' : '') + '" data-src="' + esc(s.name) + '">' +
+           '<span class="label">' + esc(s.name) + '</span><span class="n">' + esc(s.c) + '</span></div>';
     });
   }
   if (stats && stats.by_ext.length) {
     h += '<div class="nav-group">类型</div>';
     stats.by_ext.slice(0, 6).forEach(function (e) {
-      h += '<div class="nav-item" data-ext="' + e.ext + '">' +
-           '<span class="label">' + (e.ext || '无扩展名') + '</span><span class="n">' + e.c + '</span></div>';
+      const ext = e.ext || '';
+      h += '<div class="nav-item' + (activeExt === ext ? ' on' : '') + '" data-ext="' + esc(ext) + '">' +
+           '<span class="label">' + esc(e.ext || '无扩展名') + '</span><span class="n">' + esc(e.c) + '</span></div>';
     });
   }
   el.innerHTML = h;
   el.querySelectorAll('.nav-item').forEach(function (it) {
     it.onclick = function () {
+      activeSource = null; activeCategory = null; activeBook = null;
+      activeExt = null; activeDuplicate = false;
       if (it.dataset.book !== undefined) {
         activeBook = +it.dataset.book;
-        activeCategory = null; activeSource = null;
       } else if (it.dataset.cat !== undefined) {
         var v = it.dataset.cat;
         activeCategory = (v === 'none') ? 'none' : +v;
-        activeSource = null; activeBook = null;
+      } else if (it.dataset.dup !== undefined) {
+        activeDuplicate = true;
+      } else if (it.dataset.ext !== undefined) {
+        activeExt = it.dataset.ext;
       } else {
         activeSource = it.dataset.src || null;
-        activeCategory = null; activeBook = null;
       }
       renderNav();
-      load(document.getElementById('q').value);
+      updateWorkbenchChrome();
+      document.getElementById('q').value = '';
+      load('');
     };
   });
   bindBookAdd();
@@ -468,23 +703,33 @@ function renderRows() {
     el.innerHTML = '<div class="empty">没有匹配的文件</div>';
     return;
   }
-  el.innerHTML = files.map(function (f) {
+  const rows = files.map(function (f) {
     // 原件没了但有副本 → 双击落到副本（保全存在的意义）
     var openPath = f.path;
     if (f.state === 'missing' && f.preserved_path) openPath = f.preserved_path;
     var gone = f.state === 'missing' && !f.preserved_path;
-    return '<div class="row' + (gone ? ' gone' : '') + '" data-path="' + encodeURIComponent(openPath) + '">' +
+    return '<div class="row' + (gone ? ' gone' : '') + '" data-path="' + encodedData(openPath) + '" data-index="' + encodedData(f.id) + '">' +
       '<span class="icon">' + (ICONS[f.ext] || '▢') + '</span>' +
-      '<span class="fname">' + f.name +
+      '<span class="fname">' + esc(f.name) +
         (f.state === 'missing' ? ' <span class="tag' + (f.preserved_path ? '' : ' gone') + '">' +
           (f.preserved_path ? '已保全' : '原文件已消失') + '</span>' : '') +
       '</span>' +
-      '<span class="fsrc' + (f.volatile ? ' vol' : '') + '">' + (f.source_name || '') + '</span>' +
-      '<span class="fsize">' + fmtSize(f.size) + '</span>' +
-      '<span class="fdate">' + fmtDate(f.mtime) + '</span>' +
+      '<span class="fsrc' + (f.volatile ? ' vol' : '') + '">' + esc(f.source_name || '') + '</span>' +
+      '<span class="fsize">' + esc(fmtSize(f.size)) + '</span>' +
+      '<span class="fdate">' + esc(fmtDate(f.mtime)) + '</span>' +
     '</div>';
   }).join('');
+  const more = files.length < filesTotal
+    ? '<div class="load-more"><button id="loadMore">加载更多</button>' +
+      '<span>已显示 ' + esc(files.length) + ' / ' + esc(filesTotal) + '</span></div>'
+    : '';
+  el.innerHTML = rows + more;
   el.querySelectorAll('.row').forEach(function (r, idx) {
+    r.onclick = function () {
+      el.querySelectorAll('.row.on').forEach(function (item) { item.classList.remove('on'); });
+      r.classList.add('on');
+      showFileDetail(files[idx]);
+    };
     r.ondblclick = function () {
       window.inktable.revealInFinder(decodeURIComponent(r.dataset.path));
     };
@@ -493,14 +738,30 @@ function renderRows() {
       openCtxMenu(e.clientX, e.clientY, files[idx]);
     };
   });
+  const moreBtn = document.getElementById('loadMore');
+  if (moreBtn) moreBtn.onclick = async function () {
+    moreBtn.disabled = true;
+    moreBtn.textContent = '加载中…';
+    try {
+      await load(currentQuery, true);
+    } catch (e) {
+      moreBtn.disabled = false;
+      moreBtn.textContent = '重试加载';
+      toast('加载失败：' + e.message);
+    }
+  };
+}
+
+function openPathForFile(file) {
+  return file && file.state === 'missing' && file.preserved_path ? file.preserved_path : (file && file.path ? file.path : '');
 }
 
 /* 右键归类：列出分类树，点即归；底部可勾"同类型以后自动归" */
 function openCtxMenu(x, y, file) {
   var el = document.getElementById('ctx');
-  var h = '<div class="ci dim">归类「' + esc(file.name.slice(0, 18)) + '」到…</div>';
+  var h = '<div class="ci dim">归类「' + esc(String(file.name || '').slice(0, 18)) + '」到…</div>';
   categories.tree.forEach(function (c) {
-    h += '<div class="ci" data-cid="' + c.id + '" style="padding-left:' + (10 + c.depth * 12) + 'px">' +
+    h += '<div class="ci" data-cid="' + esc(c.id) + '" style="padding-left:' + (10 + safeNumber(c.depth) * 12) + 'px">' +
          esc(c.name) + '</div>';
   });
   if (!categories.tree.length) h += '<div class="ci dim">（先在侧边栏 ＋ 新建分类）</div>';
@@ -510,7 +771,7 @@ function openCtxMenu(x, y, file) {
   if (books.length) {
     h += '<div class="sep"></div>';
     books.forEach(function (b) {
-      h += '<div class="ci" data-book="' + b.id + '">加入书：' + esc(b.name) + '</div>';
+      h += '<div class="ci" data-book="' + esc(b.id) + '">加入书：' + esc(b.name) + '</div>';
     });
   }
   el.innerHTML = h;
@@ -557,7 +818,7 @@ function openCtxLearn(x, y, file) {
   var el = document.getElementById('ctx');
   var h = '<div class="ci dim">归类并记住规则 → 选分类</div>';
   categories.tree.forEach(function (c) {
-    h += '<div class="ci" data-cid="' + c.id + '" style="padding-left:' + (10 + c.depth * 12) + 'px">' +
+    h += '<div class="ci" data-cid="' + esc(c.id) + '" style="padding-left:' + (10 + safeNumber(c.depth) * 12) + 'px">' +
          esc(c.name) + '</div>';
   });
   el.innerHTML = h;
@@ -584,22 +845,53 @@ document.addEventListener('contextmenu', function (e) {
   if (!e.target.closest('.row')) closeCtx();
 });
 
-async function load(q) {
-  const params = new URLSearchParams({ limit: '300' });
-  if (q) params.set('q', q);
+async function load(q, append = false) {
+  const query = String(q || '').trim();
+  document.getElementById('resultsTitle').textContent = query ? '文件搜索' : '文件管理';
+  if (!append) {
+    searchVersion += 1;  // 列表导航使尚未返回的全文搜索失效
+    currentQuery = query;
+    files = [];
+    filesTotal = 0;
+  } else if (query !== currentQuery) {
+    return load(query, false);
+  }
+  const version = append ? loadVersion : ++loadVersion;
+  const params = new URLSearchParams({
+    limit: String(PAGE_SIZE),
+    offset: String(append ? files.length : 0),
+  });
+  if (query) params.set('q', query);
   if (activeCategory === 'none') params.set('unclassified', 'true');
   else if (activeCategory !== null) params.set('category_id', String(activeCategory));
   if (activeBook !== null) params.set('book_id', String(activeBook));
+  if (activeSource !== null) params.set('source', activeSource);
+  if (activeExt !== null) params.set('ext', activeExt);
+  if (activeDuplicate) params.set('duplicate', 'true');
   const d = await api('/files?' + params);
-  files = d.files;
-  if (activeSource) files = files.filter(function (f) { return f.source_name === activeSource; });
-  document.getElementById('count').textContent = files.length + ' 个文件';
+  if (version !== loadVersion) return;
+  const page = Array.isArray(d.files) ? d.files : [];
+  files = append ? files.concat(page) : page;
+  filesTotal = Math.max(0, safeNumber(d.total));
+  document.getElementById('count').textContent = filesTotal + ' 个文件';
   renderRows();
 }
 
 /* 全文搜索：搜内容而非文件名。文件名匹配与内容匹配合并展示 */
 function esc(s) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+function encodedData(value) {
+  return esc(encodeURIComponent(String(value == null ? '' : value)));
+}
+function safeNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
 }
 function highlight(text, q) {
   const safe = esc(text);
@@ -614,38 +906,28 @@ function highlight(text, q) {
   return out;
 }
 
-function askEntryHtml(q) {
-  if (!q) return '';
-  return '<div class="askbar" id="askEntry">⌘↵ 向 AI 提问「' + esc(q) + '」' +
-         (llmInfo.configured ? '' : '（需先在设置里配置模型）') + '</div>';
-}
-
-function bindAskEntry(q) {
-  var e = document.getElementById('askEntry');
-  if (e) e.onclick = function () { runAsk(q); };
-}
-
 function renderHits(result, q) {
   const el = document.getElementById('rows');
+  document.getElementById('resultsTitle').textContent = '检索结果';
   if (!result.files.length) {
-    el.innerHTML = '<div class="empty">没有匹配的内容<br>' +
-      '<span style="font-size:11px">试试其他关键词，或检查文档是否已完成索引</span></div>';
+    el.innerHTML = '<div class="workbench-empty"><div><div class="empty-mark">⌕</div><div class="empty-title">没有找到匹配内容</div>' +
+      '<div class="empty-meta">试试其他关键词，或检查文档是否已完成索引</div></div></div>';
+    clearEvidence();
     return;
   }
-  let h = askEntryHtml(q);
-  h += '<div class="mode">全文搜索 · 命中 ' + result.total + ' 个文件' +
+  let h = '<div class="mode">全文搜索 · 命中 ' + esc(result.total) + ' 个文件' +
           (result.routes && result.routes.vector ? ' · 含语义匹配' : '') + '</div>';
   if (result.hedge) {
     h += '<div class="mode" style="color:var(--warn)">⚠ ' + esc(result.hedge) + '</div>';
   }
-  h += result.files.map(function (f) {
+  h += result.files.map(function (f, index) {
     const snips = f.snippets.map(function (s) {
       const loc = s.page ? ('第 ' + s.page + ' 页')
                 : (s.section_path ? s.section_path.split(' › ').slice(-1)[0] : '');
       return '<div class="snip">' + (loc ? '<span class="loc">' + esc(loc) + '</span>' : '') +
              highlight(s.text, q) + '</div>';
     }).join('');
-    return '<div class="hit" data-path="' + encodeURIComponent(f.path) + '">' +
+    return '<div class="hit" data-path="' + encodedData(f.path) + '" data-hit="' + esc(index) + '" tabindex="0">' +
       '<div class="hit-head">' +
         '<span class="icon">' + (ICONS[f.ext] || '▢') + '</span>' +
         '<span class="hit-name">' + esc(f.name) + '</span>' +
@@ -654,31 +936,43 @@ function renderHits(result, q) {
       '</div>' + snips + '</div>';
   }).join('');
   el.innerHTML = h;
-  el.querySelectorAll('.hit').forEach(function (r) {
+  el.querySelectorAll('.hit').forEach(function (r, index) {
+    r.onclick = function () {
+      var file = result.files[index];
+      el.querySelectorAll('.hit.on').forEach(function (item) { item.classList.remove('on'); });
+      r.classList.add('on');
+      showSearchFileDetail(file);
+    };
+    r.onkeydown = function (event) {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); r.onclick(); }
+    };
     r.ondblclick = function () {
       window.inktable.revealInFinder(decodeURIComponent(r.dataset.path));
     };
   });
-  bindAskEntry(q);
 }
 
 /* ---------- AI 问答（B6） ---------- */
 async function runAsk(q) {
-  const el = document.getElementById('rows');
+  const question = String(q || '').trim();
+  if (!question) return;
+  const el = document.getElementById('answerRows');
   el.innerHTML = '<div class="ans"><div class="atext" style="color:var(--text-secondary)">' +
                  '正在依据文件库作答…</div></div>';
-  document.getElementById('count').textContent = '';
+  document.getElementById('askSubmit').disabled = true;
   try {
     const a = await api('/ask', { method: 'POST', body: JSON.stringify({
-      question: q, book_id: activeBook }) });
-    renderAnswer(a, q);
+      question: question, book_id: activeBook }) });
+    renderAnswer(a, question);
   } catch (e) {
     el.innerHTML = '<div class="ans"><div class="ahedge">提问失败：' + esc(e.message) + '</div></div>';
+  } finally {
+    document.getElementById('askSubmit').disabled = llmInfo.available !== true;
   }
 }
 
 function renderAnswer(a, q) {
-  const el = document.getElementById('rows');
+  const el = document.getElementById('answerRows');
   let h = '<div class="ans">';
 
   if (a.status === 'not_configured') {
@@ -707,14 +1001,21 @@ function renderAnswer(a, q) {
   el.innerHTML = h;
 
   el.querySelectorAll('.ref').forEach(function (r) {
+    r.onclick = function () {
+      var citationList = a.citations && a.citations.length ? a.citations : (a.retrieved || []);
+      var citation = citationList.find(function (item) { return item.tag === r.dataset.tag; });
+      if (citation) showEvidence(citation);
+    };
     r.ondblclick = function () {
       window.inktable.revealInFinder(decodeURIComponent(r.dataset.path));
     };
   });
   el.querySelectorAll('.cite-chip').forEach(function (c) {
     c.onclick = function () {
-      var ref = el.querySelector('.ref[data-tag="' + c.dataset.tag + '"]');
-      if (ref) { ref.scrollIntoView({ block: 'center' }); ref.style.background = 'var(--bg-selected)';
+      var ref = Array.from(el.querySelectorAll('.ref')).find(function (r) {
+        return r.dataset.tag === c.dataset.tag;
+      });
+      if (ref) { ref.scrollIntoView({ block: 'center' }); ref.onclick(); ref.style.background = 'var(--ink-active)';
                  setTimeout(function () { ref.style.background = ''; }, 900); }
     };
   });
@@ -723,31 +1024,45 @@ function renderAnswer(a, q) {
 function refHtml(c) {
   var loc = c.page ? ('第 ' + c.page + ' 页')
           : (c.section_path ? c.section_path.split(' › ').slice(-1)[0] : '');
-  return '<div class="ref" data-tag="' + c.tag + '" data-path="' + encodeURIComponent(c.file_path) + '">' +
-    '<span class="rtag">[' + c.tag + ']</span>' +
+  return '<div class="ref" data-tag="' + esc(c.tag) + '" data-path="' + encodedData(c.file_path) + '">' +
+    '<span class="rtag">[' + esc(c.tag) + ']</span>' +
     '<span class="rname">' + esc(c.file_name) + (loc ? ' · ' + esc(loc) : '') + '</span>' +
     '<span class="rsnip">' + esc(c.snippet || '') + '</span></div>';
 }
 
 async function doSearch(q) {
   if (!q) { await load(''); return; }
+  const version = ++searchVersion;
+  loadVersion += 1;  // 搜索开始后，忽略尚未返回的文件列表请求
   document.getElementById('count').textContent = '搜索中…';
+  let r = null;
   try {
-    const r = await api('/search', { method: 'POST', body: JSON.stringify({ q: q, limit: 40 }) });
-    if (r.total > 0) {
-      document.getElementById('count').textContent = r.total + ' 个文件';
-      renderHits(r, q);
-      return;
-    }
+    r = await api('/search', { method: 'POST', body: JSON.stringify({
+      q: q, limit: 40, book_id: activeBook,
+    }) });
   } catch (e) { /* 全文搜索失败时退回文件名搜索 */ }
+  if (version !== searchVersion) return;
+  if (r && r.total > 0) {
+    document.getElementById('count').textContent = r.total + ' 个文件';
+    renderHits(r, q);
+    return;
+  }
   await load(q);   // 内容没命中就按文件名找
+}
+
+function executeQuery(q) {
+  clearTimeout(timer);
+  timer = null;
+  var query = String(q || '').trim();
+  if (!query) return load('');
+  return doSearch(query);
 }
 
 let timer;
 document.getElementById('q').oninput = function (e) {
   clearTimeout(timer);
   const v = e.target.value.trim();
-  timer = setTimeout(function () { doSearch(v); }, 200);
+  timer = setTimeout(function () { executeQuery(v); }, 220);
 };
 
 /* ---------- 首次启动引导 ---------- */
@@ -756,12 +1071,12 @@ function renderSetup() {
     '找到 ' + sources.length + ' 个来源。勾选后才会索引 —— 未勾选的目录不会被访问。';
   document.getElementById('srcList').innerHTML = sources.map(function (s, i) {
     return '<div class="src">' +
-      '<input type="checkbox" data-i="' + i + '"' + (s.doc_count > 0 ? ' checked' : '') + '>' +
-      '<div class="info"><div class="nm">' + s.name +
+      '<input type="checkbox" data-i="' + esc(i) + '"' + (s.doc_count > 0 ? ' checked' : '') + '>' +
+      '<div class="info"><div class="nm">' + esc(s.name) +
         (s.volatile ? '<span class="badge">易失</span>' : '') + '</div>' +
-        '<div class="pth">' + s.path.replace(new RegExp('^/Users/[^/]+'), '~') + '</div></div>' +
+        '<div class="pth">' + esc(String(s.path || '').replace(new RegExp('^/Users/[^/]+'), '~')) + '</div></div>' +
       '<div class="meta">' +
-        (s.doc_count ? '<div><span class="cnt">' + s.doc_count + '</span> 个文档</div>' : '<div>暂无文档</div>') +
+        (s.doc_count ? '<div><span class="cnt">' + esc(s.doc_count) + '</span> 个文档</div>' : '<div>暂无文档</div>') +
       '</div></div>';
   }).join('');
   document.querySelectorAll('.src input').forEach(function (cb) {
@@ -778,19 +1093,70 @@ document.getElementById('btnSkip').onclick = function () {
   document.querySelectorAll('.src input').forEach(function (cb) { cb.checked = false; });
   updateSetupHint();
 };
+
+async function previewAndConfirmSource(source, hintEl) {
+  if (hintEl) hintEl.textContent = '正在预扫描…';
+  let p;
+  try {
+    p = await api('/sources/preview', { method: 'POST', body: JSON.stringify({
+      path: source.path,
+    }) });
+  } catch (e) {
+    if (hintEl) hintEl.textContent = '预扫描失败：' + e.message;
+    return false;
+  }
+
+  const total = p.truncated ? ('至少 ' + safeNumber(p.total_files)) : safeNumber(p.total_files);
+  const ok = confirm(
+    '准备启用「' + (source.name || '所选目录') + '」\n\n' +
+    source.path + '\n\n' +
+    '预计文件：' + total + '\n' +
+    '可收录文件：' + safeNumber(p.will_index) + '\n' +
+    '按类型忽略：' + safeNumber(p.ignored_by_ext) + '\n' +
+    '排除目录：' + safeNumber(p.excluded_dirs) + '\n\n' +
+    '继续启用并扫描？'
+  );
+  if (!ok && hintEl) hintEl.textContent = '已取消启用';
+  return ok;
+}
+
 document.getElementById('btnEnable').onclick = async function () {
   const btn = this;
   btn.disabled = true;
+  const hint = document.getElementById('setupHint');
   const chosen = [].slice.call(document.querySelectorAll('.src input:checked'))
     .map(function (cb) { return sources[cb.dataset.i]; });
+  let enabled = 0;
+  let skipped = 0;
+  const failures = [];
   for (let i = 0; i < chosen.length; i++) {
     const s = chosen[i];
+    btn.textContent = '正在预扫描 ' + (i + 1) + '/' + chosen.length + '…';
+    if (!await previewAndConfirmSource(s, hint)) {
+      skipped += 1;
+      if (hint.textContent.startsWith('预扫描失败')) failures.push(hint.textContent);
+      continue;
+    }
     btn.textContent = '正在扫描 ' + (i + 1) + '/' + chosen.length + '…';
     try {
       await api('/sources/enable', { method: 'POST', body: JSON.stringify({
         name: s.name, path: s.path, kind: s.kind,
         discovered_by: s.discovered_by, volatile: s.volatile }) });
-    } catch (e) { /* 单个来源失败不阻断其余 */ }
+      enabled += 1;
+    } catch (e) {
+      skipped += 1;
+      const message = '启用「' + String(s.name || '') + '」失败：' + e.message;
+      failures.push(message);
+      hint.textContent = message;
+    }
+  }
+  if (!enabled) {
+    btn.textContent = '启用并开始索引';
+    updateSetupHint();
+    hint.textContent = failures.length
+      ? failures[failures.length - 1]
+      : (skipped ? '没有启用来源，可重新选择后再试' : '');
+    return;
   }
   // 扫描只登记文件，正文索引另起一步 —— 让用户先看到文件列表
   btn.textContent = '正在解析文档内容…';
@@ -802,18 +1168,51 @@ document.getElementById('btnEnable').onclick = async function () {
 };
 
 /* 后台索引：解析正文并建全文索引，完成前顶部显示进度 */
-async function runIndexing() {
+let indexingPromise = null;
+let indexingRerunRequested = false;
+
+function runIndexing(forceAfterCurrent = false) {
+  if (indexingPromise) {
+    indexingRerunRequested = indexingRerunRequested || forceAfterCurrent;
+    return indexingPromise;
+  }
+  indexingPromise = drainIndexQueue().finally(function () {
+    const rerun = indexingRerunRequested;
+    indexingRerunRequested = false;
+    indexingPromise = null;
+    if (rerun && lastSidecarState === 'ready') runIndexing();
+  });
+  return indexingPromise;
+}
+
+async function drainIndexQueue() {
   const countEl = document.getElementById('count');
   try {
-    const st = await api('/index/status');
-    if (!st.pending) return;
-    countEl.textContent = '正在解析 ' + st.pending + ' 个文档…';
-    const r = await api('/index/run', { method: 'POST', body: JSON.stringify({ limit: 2000 }) });
-    countEl.textContent = '已索引 ' + r.indexed + ' 个文档，可搜索内容了';
+    let st = await api('/index/status');
+    let completed = 0;
+    while (safeNumber(st.pending) > 0) {
+      const pendingBefore = safeNumber(st.pending);
+      countEl.textContent = '正在解析 ' + pendingBefore + ' 个文档…';
+      const r = await api('/index/run', { method: 'POST', body: JSON.stringify({ limit: 2000 }) });
+      completed += safeNumber(r.total);
+      const next = await api('/index/status');
+      const pendingAfter = safeNumber(next.pending);
+      if (pendingAfter >= pendingBefore) {
+        countEl.textContent = '索引已暂停：仍有 ' + pendingAfter + ' 个文档待处理';
+        toast('索引没有进展，已停止重试');
+        return;
+      }
+      st = next;
+    }
+    if (!completed) return;
+    countEl.textContent = '已处理 ' + completed + ' 个文档，可搜索内容了';
     setTimeout(function () {
       if (!document.getElementById('q').value) load('');
     }, 2500);
-  } catch (e) { /* 索引失败不影响文件浏览 */ }
+  } catch (e) {
+    countEl.textContent = '索引暂停，可稍后重试';
+    toast('索引失败：' + e.message);
+  }
 }
 
 /* ---------- 实时监听 ----------
@@ -823,12 +1222,76 @@ async function runIndexing() {
 */
 let liveSeen = 0;          // 上次看到的已入库计数
 let livePollTimer = null;
+let lastSidecarState = 'starting';
+let lastSidecarRevision = -1;
+let applicationStarted = false;
+let applicationResumePromise = null;
+let applicationResumeRequested = false;
+let recoveryNoticePending = false;
 
 function setLive(state, text, title) {
   const el = document.getElementById('live');
   el.className = 'live' + (state ? ' ' + state : '');
   document.getElementById('liveText').textContent = text || '';
   el.title = title || '';
+}
+
+function setSidecarStatus(info) {
+  const el = document.getElementById('sidecarStatus');
+  const textEl = document.getElementById('sidecarStatusText');
+
+  // 兼容旧 preload 首次直接给 sidecar:info（{ port, token }）的形式；
+  // 新版首次回调来自主进程缓存的 sidecar 状态。
+  let state = 'starting';
+  if (info && Number.isInteger(Number(info.port)) && Number(info.port) > 0) {
+    state = 'ready';
+  } else if (info && typeof info.state === 'string') {
+    state = info.state;
+  }
+
+  const attempt = safeNumber(info && info.attempt);
+  const labels = {
+    starting: ['正在连接…', '正在启动本地服务'],
+    restarting: [attempt > 0 ? ('正在重启（第 ' + attempt + ' 次）…') : '正在重启…', '本地服务正在重启'],
+    ready: ['服务已连接', '本地服务运行正常'],
+    stopped: ['服务已停止', '本地服务已停止，正在尝试恢复'],
+    failed: ['服务不可用', String((info && info.error) || '本地服务启动失败')],
+  };
+  const entry = labels[state] || ['服务状态未知', '无法识别本地服务状态'];
+  const classState = labels[state] ? state : 'stopped';
+  if (!el || !textEl) return classState;
+  el.className = 'sidecar-status ' + classState;
+  textEl.textContent = entry[0];
+  el.title = entry[1];
+  el.setAttribute('aria-label', entry[1]);
+  return classState;
+}
+
+function handleSidecarStatus(info) {
+  const revision = safeNumber(info && info.revision);
+  if (revision > 0 && revision < lastSidecarRevision) return;
+  if (revision > 0) lastSidecarRevision = revision;
+
+  const previous = lastSidecarState;
+  const state = setSidecarStatus(info);
+  lastSidecarState = state;
+
+  if (state === 'ready') {
+    if (previous !== 'ready' || (!applicationStarted && !applicationResumePromise)) {
+      const recovering = applicationStarted ||
+        previous === 'restarting' || previous === 'stopped' || previous === 'failed';
+      requestApplicationResume(recovering);
+    }
+    return;
+  }
+
+  // 旧 sidecar 的请求结果不能在断线后覆盖界面；恢复后 boot() 会重新取数。
+  loadVersion += 1;
+  searchVersion += 1;
+  stopWatchPolling();
+  liveSeen = 0;
+  setLive('off', state === 'starting' ? '等待服务' : '服务中断',
+          state === 'failed' ? '本地服务不可用' : '等待本地服务恢复');
 }
 
 let toastTimer;
@@ -876,6 +1339,12 @@ function startWatchPolling() {
   livePollTimer = setInterval(pollWatch, 3000);
 }
 
+function stopWatchPolling() {
+  if (!livePollTimer) return;
+  clearInterval(livePollTimer);
+  livePollTimer = null;
+}
+
 /* ---------- 设置：来源管理 ---------- */
 function sheetOpen(on) {
   document.getElementById('sheet').classList.toggle('show', on);
@@ -900,38 +1369,37 @@ async function renderSources() {
   if (!list.length) {
     body.innerHTML = '<div class="empty" style="padding:30px">还没有来源<br>' +
       '<span style="font-size:11px">点「重新发现」自动查找，或手动添加目录</span></div>';
-    return;
+  } else {
+    body.innerHTML = list.map(function (s) {
+      const tags = [];
+      if (!s.exists) tags.push('<span class="tag gone">目录不存在</span>');
+      else if (s.watching) tags.push('<span class="tag live">监听中</span>');
+      else if (s.enabled) tags.push('<span class="tag">已启用</span>');
+      else tags.push('<span class="tag">已停用</span>');
+      if (s.volatile) tags.push('<span class="badge">易失</span>');
+
+      const preserveBtns = s.volatile && s.enabled
+        ? '<button class="mini" data-act="autopreserve" data-id="' + esc(s.id) + '" data-on="' + (s.auto_preserve ? 1 : 0) + '">' +
+            (s.auto_preserve ? '自动保全:开' : '自动保全:关') + '</button>' +
+          '<button class="mini" data-act="preserveall" data-id="' + esc(s.id) + '">立即保全</button>'
+        : '';
+      const acts = preserveBtns + (s.enabled
+        ? '<button class="mini" data-act="disable" data-id="' + esc(s.id) + '">停用</button>'
+        : '<button class="mini" data-act="enable" data-id="' + esc(s.id) +
+          '" data-path="' + encodedData(s.path) + '" data-name="' + esc(s.name) + '">启用</button>');
+
+      return '<div class="srow">' +
+        '<div class="info">' +
+          '<div class="nm">' + esc(s.name) + tags.join('') + '</div>' +
+          '<div class="pth">' + esc(String(s.path || '').replace(new RegExp('^/Users/[^/]+'), '~')) +
+            ' · ' + esc(s.file_count) + ' 个文件</div>' +
+        '</div>' +
+        '<div class="acts">' + acts +
+          '<button class="mini danger" data-act="remove" data-id="' + esc(s.id) +
+          '" data-name="' + esc(s.name) + '">移除</button>' +
+        '</div></div>';
+    }).join('');
   }
-
-  body.innerHTML = list.map(function (s) {
-    const tags = [];
-    if (!s.exists) tags.push('<span class="tag gone">目录不存在</span>');
-    else if (s.watching) tags.push('<span class="tag live">监听中</span>');
-    else if (s.enabled) tags.push('<span class="tag">已启用</span>');
-    else tags.push('<span class="tag">已停用</span>');
-    if (s.volatile) tags.push('<span class="badge">易失</span>');
-
-    const preserveBtns = s.volatile && s.enabled
-      ? '<button class="mini" data-act="autopreserve" data-id="' + s.id + '" data-on="' + (s.auto_preserve ? 1 : 0) + '">' +
-          (s.auto_preserve ? '自动保全:开' : '自动保全:关') + '</button>' +
-        '<button class="mini" data-act="preserveall" data-id="' + s.id + '">立即保全</button>'
-      : '';
-    const acts = preserveBtns + (s.enabled
-      ? '<button class="mini" data-act="disable" data-id="' + s.id + '">停用</button>'
-      : '<button class="mini" data-act="enable" data-id="' + s.id +
-        '" data-path="' + encodeURIComponent(s.path) + '" data-name="' + esc(s.name) + '">启用</button>');
-
-    return '<div class="srow">' +
-      '<div class="info">' +
-        '<div class="nm">' + esc(s.name) + tags.join('') + '</div>' +
-        '<div class="pth">' + esc(s.path.replace(new RegExp('^/Users/[^/]+'), '~')) +
-          ' · ' + s.file_count + ' 个文件</div>' +
-      '</div>' +
-      '<div class="acts">' + acts +
-        '<button class="mini danger" data-act="remove" data-id="' + s.id +
-        '" data-name="' + esc(s.name) + '">移除</button>' +
-      '</div></div>';
-  }).join('');
 
   body.querySelectorAll('button[data-act]').forEach(function (b) {
     b.onclick = function () { onSourceAction(b); };
@@ -939,7 +1407,7 @@ async function renderSources() {
 
   // AI 问答配置（密钥经主进程 safeStorage 加密，渲染进程只见"已保存"）
   var saved = await window.inktable.llmGet();
-  body.insertAdjacentHTML('beforeend',
+  body.insertAdjacentHTML('afterbegin',
     '<div class="llm-form"><div class="lf-title">AI 问答（OpenAI 兼容接口）</div>' +
     '<input id="llmEp" placeholder="接口地址，如 https://api.xxx.com/v1" value="' + esc(saved.endpoint) + '">' +
     '<input id="llmModel" placeholder="模型名" value="' + esc(saved.model) + '">' +
@@ -947,10 +1415,11 @@ async function renderSources() {
       (saved.has_key ? 'API 密钥（已保存，留空表示不变）' : 'API 密钥') + '">' +
     '<div style="display:flex;gap:8px;align-items:center">' +
     '<button class="mini" id="llmSave">保存</button>' +
+    '<button class="mini" id="llmTest">检测连接</button>' +
     (llmInfo.configured ? '<button class="mini" id="llmClassify">AI 归类未分类文件</button>' : '') +
     '<button class="mini danger" id="llmClear">清除</button>' +
     '<span class="hint" id="llmHint">' +
-      (llmInfo.configured ? '已启用 —— 搜索框输入问题后按 ⌘↵ 提问' : '未配置时问答不可用，其余功能不受影响') +
+      (llmInfo.configured ? '已保存，检测后即可确认模型可用' : '未配置时问答不可用，其余功能不受影响') +
     '</span></div></div>');
 
   document.getElementById('llmSave').onclick = async function () {
@@ -961,8 +1430,11 @@ async function renderSources() {
       model: document.getElementById('llmModel').value,
       api_key: document.getElementById('llmKey').value,
     });
-    try { llmInfo = await api('/settings/llm'); } catch (e) {}
-    hint.textContent = llmInfo.configured ? '已启用 ✓' : '配置不完整（三项都要填）';
+    try { updateModelState(await api('/settings/llm')); } catch (e) {}
+    hint.textContent = llmInfo.configured ? '已保存，请检测连接' : '配置不完整（三项都要填）';
+  };
+  document.getElementById('llmTest').onclick = function () {
+    return testModelConnection(document.getElementById('llmHint'));
   };
   var lc = document.getElementById('llmClassify');
   if (lc) lc.onclick = async function () {
@@ -976,8 +1448,8 @@ async function renderSources() {
     } catch (e) { hint.textContent = '失败：' + e.message; }
   };
   document.getElementById('llmClear').onclick = async function () {
-    await window.inktable.llmSet({ endpoint: '', model: '', api_key: '' });
-    try { llmInfo = await api('/settings/llm'); } catch (e) {}
+    await window.inktable.llmSet({ clear: true });
+    try { updateModelState(await api('/settings/llm')); } catch (e) {}
     await renderSources();
   };
 }
@@ -985,6 +1457,7 @@ async function renderSources() {
 async function onSourceAction(btn) {
   const act = btn.dataset.act;
   const hint = document.getElementById('sheetHint');
+  let sourcePath = null;
 
   if (act === 'remove') {
     // 破坏性操作要说清后果：会清索引，但不会动磁盘上的文件
@@ -994,6 +1467,14 @@ async function onSourceAction(btn) {
   }
 
   btn.disabled = true;
+  if (act === 'enable') {
+    sourcePath = decodeURIComponent(btn.dataset.path);
+    const ok = await previewAndConfirmSource({ name: btn.dataset.name, path: sourcePath }, hint);
+    if (!ok) {
+      btn.disabled = false;
+      return;
+    }
+  }
   hint.textContent = '处理中…';
   try {
     if (act === 'autopreserve') {
@@ -1015,7 +1496,7 @@ async function onSourceAction(btn) {
       await api('/sources/remove', { method: 'POST', body: JSON.stringify({ source_id: +btn.dataset.id }) });
     } else if (act === 'enable') {
       await api('/sources/enable', { method: 'POST', body: JSON.stringify({
-        name: btn.dataset.name, path: decodeURIComponent(btn.dataset.path) }) });
+        name: btn.dataset.name, path: sourcePath }) });
       runIndexing();
     }
     hint.textContent = '';
@@ -1031,6 +1512,22 @@ async function onSourceAction(btn) {
 }
 
 document.getElementById('gear').onclick = function () { sheetOpen(true); };
+document.getElementById('modelState').onclick = function () {
+  if (!llmInfo.configured) return sheetOpen(true);
+  return testModelConnection();
+};
+document.getElementById('querySubmit').onclick = function () {
+  executeQuery(document.getElementById('q').value.trim());
+};
+document.getElementById('askSubmit').onclick = function () {
+  runAsk(document.getElementById('askQ').value);
+};
+document.getElementById('askQ').onkeydown = function (event) {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    if (!document.getElementById('askSubmit').disabled) runAsk(event.target.value);
+  }
+};
 document.getElementById('btnClose').onclick = function () { sheetOpen(false); };
 document.getElementById('sheet').onclick = function (e) {
   if (e.target.id === 'sheet') sheetOpen(false);   // 点遮罩关闭
@@ -1040,6 +1537,8 @@ document.getElementById('btnAdd').onclick = async function () {
   const dir = await window.inktable.pickDirectory();
   if (!dir) return;
   const hint = document.getElementById('sheetHint');
+  const source = { name: dir.split('/').filter(Boolean).slice(-1)[0] || '所选目录', path: dir };
+  if (!await previewAndConfirmSource(source, hint)) return;
   hint.textContent = '正在扫描…';
   try {
     await api('/sources/add', { method: 'POST', body: JSON.stringify({ path: dir }) });
@@ -1079,9 +1578,9 @@ document.getElementById('btnRescan').onclick = async function () {
 document.addEventListener('keydown', function (e) {
   if (e.key === 'Escape') sheetOpen(false);
   if ((e.metaKey || e.ctrlKey) && e.key === ',') { e.preventDefault(); sheetOpen(true); }
-  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-    var q = document.getElementById('q').value.trim();
-    if (q) { e.preventDefault(); runAsk(q); }
+  if (e.key === 'Enter' && e.target && e.target.id === 'q') {
+    e.preventDefault();
+    executeQuery(e.target.value.trim());
   }
   if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
     e.preventDefault();
@@ -1093,27 +1592,74 @@ document.addEventListener('keydown', function (e) {
 async function boot() {
   stats = await api('/stats');
   await refreshCats();
-  try { llmInfo = await api('/settings/llm'); } catch (e) {}
+  try { updateModelState(await api('/settings/llm')); } catch (e) { updateModelState({ configured: false }); }
   if (stats.files === 0) {
     document.getElementById('setup').style.display = 'flex';
     sources = (await api('/sources/discover', { method: 'POST' })).sources;
     renderSetup();
-    return;
+    return { hasFiles: false };
   }
+  document.getElementById('setup').style.display = 'none';
   renderNav();
-  await load('');
+  updateWorkbenchChrome();
+  const q = document.getElementById('q').value.trim();
+  if (q) await executeQuery(q);
+  else await load('');
+  return { hasFiles: true };
 }
 
-boot().then(async function () {
-  if (!stats || stats.files === 0) return;
-  // 挂上所有已启用来源的监听（幂等，重复调用安全）
-  try { await api('/watch/start', { method: 'POST' }); } catch (e) {}
-  startWatchPolling();
-  // 上次索引未完成（应用被关掉、期间新增了文件）时自动续上
-  runIndexing();
-}).catch(function (e) {
-  document.getElementById('rows').innerHTML = '<div class="empty">启动失败：' + e.message + '</div>';
-});
+function requestApplicationResume(recovered) {
+  applicationResumeRequested = true;
+  recoveryNoticePending = recoveryNoticePending || recovered;
+  if (applicationResumePromise) return applicationResumePromise;
+
+  applicationResumePromise = (async function () {
+    while (applicationResumeRequested && lastSidecarState === 'ready') {
+      applicationResumeRequested = false;
+      const showRecoveryNotice = recoveryNoticePending;
+      recoveryNoticePending = false;
+
+      try {
+        const state = await boot();
+        if (lastSidecarState !== 'ready') {
+          applicationResumeRequested = true;
+          return;
+        }
+        applicationStarted = true;
+
+        // 恢复后重新挂上来源监听、重建轮询并续跑索引；后端接口均幂等。
+        try { await api('/watch/start', { method: 'POST' }); } catch (e) {}
+        if (state.hasFiles) {
+          startWatchPolling();
+          runIndexing(showRecoveryNotice);
+        }
+        if (showRecoveryNotice) toast('本地服务已恢复');
+      } catch (e) {
+        if (lastSidecarState === 'ready') {
+          setSidecarStatus({ state: 'failed', error: e.message });
+          document.getElementById('rows').innerHTML =
+            '<div class="empty">启动失败：' + esc(e.message) + '</div>';
+        }
+        return;
+      }
+    }
+  })().finally(function () {
+    applicationResumePromise = null;
+    if (applicationResumeRequested && lastSidecarState === 'ready') {
+      requestApplicationResume(recoveryNoticePending);
+    }
+  });
+  return applicationResumePromise;
+}
+
+if (window.inktable && typeof window.inktable.onSidecar === 'function') {
+  window.inktable.onSidecar(handleSidecarStatus);
+} else {
+  // 开发/旧 preload 兼容：若能直接取得可用连接信息，仍可正常启动。
+  window.inktable.getSidecarInfo().then(function (info) {
+    handleSidecarStatus(info || { state: 'failed', error: 'sidecar 未就绪' });
+  });
+}
 </script>
 </body>
 </html>

@@ -19,8 +19,8 @@ import time
 from collections import deque
 from pathlib import Path
 
-from app.index.pipeline import index_pending
-from app.watcher.scanner import ScanStats, register_file
+from app.index.pipeline import count_readable_pending, index_pending
+from app.watcher.scanner import ScanStats, register_file, scan_source, should_skip_path
 from app.watcher.watcher import Watcher
 
 
@@ -48,6 +48,9 @@ log = logging.getLogger("inktable.watch_service")
 
 # 最近活动日志保留条数 —— 给界面"实时动态"用
 ACTIVITY_LIMIT = 50
+INITIAL_RECONCILE_DELAY = 2.0
+RECONCILE_INTERVAL = 6 * 60 * 60
+RECONCILE_INDEX_BUDGET = 2000
 
 
 class WatchService:
@@ -60,6 +63,12 @@ class WatchService:
         self._activity: deque[dict] = deque(maxlen=ACTIVITY_LIMIT)
         self._counters = {"detected": 0, "registered": 0, "indexed": 0,
                           "skipped": 0, "missing": 0, "preserved": 0}
+        self._reconcile_stop = threading.Event()
+        self._reconcile_thread: threading.Thread | None = None
+        self._reconcile = {
+            "runs": 0, "last_at": None, "last_error": "",
+            "scanned": 0, "registered": 0, "indexed": 0,
+        }
 
     # ------------------------------------------------------------ 生命周期
 
@@ -71,28 +80,132 @@ class WatchService:
         ).fetchall()
 
         ok, failed = [], []
+        watched = set(self._watcher.watched_paths)
         for r in rows:
             if not Path(r["path"]).is_dir():
                 failed.append({"name": r["name"], "reason": "目录不存在"})
                 continue
             try:
-                self._watcher.watch(r["path"])
-                ok.append(r["name"])
-            except OSError as e:
+                if r["path"] in watched or self._watcher.watch(r["path"]):
+                    ok.append(r["name"])
+                    watched.add(r["path"])
+                else:
+                    failed.append({"name": r["name"], "reason": "监听器未能挂载目录"})
+            except Exception as e:
                 # 权限不足是最常见的原因（未授予完全磁盘访问）
                 failed.append({"name": r["name"], "reason": str(e)})
 
+        if rows:
+            # 先挂监听再补扫：应用关闭期间新增的文件不会漏；补扫期间新事件
+            # 也会进入 watcher 队列。延迟两秒让首屏先完成加载。
+            self._start_reconciler(INITIAL_RECONCILE_DELAY)
         log.info("监听已启动：%d 个来源，%d 个失败", len(ok), len(failed))
         return {"watching": ok, "failed": failed}
 
-    def watch(self, path: str) -> None:
-        self._watcher.watch(path)
+    def watch(self, path: str) -> bool:
+        watched = self._watcher.watch(path)
+        # 新来源在 enable API 中已经同步扫描过；这里只需启动后续周期兜底。
+        self._start_reconciler(RECONCILE_INTERVAL)
+        return watched
 
-    def unwatch(self, path: str) -> None:
-        self._watcher.unwatch(path)
+    def unwatch(self, path: str) -> bool:
+        return self._watcher.unwatch(path)
 
     def stop(self) -> None:
+        self._reconcile_stop.set()
+        if self._reconcile_thread:
+            self._reconcile_thread.join(timeout=10)
+            self._reconcile_thread = None
         self._watcher.stop()
+
+    def _start_reconciler(self, initial_delay: float) -> None:
+        if self._reconcile_thread and self._reconcile_thread.is_alive():
+            return
+        self._reconcile_stop.clear()
+        self._reconcile_thread = threading.Thread(
+            target=self._reconcile_loop,
+            args=(initial_delay,),
+            name="inktable-reconcile",
+            daemon=True,
+        )
+        self._reconcile_thread.start()
+
+    def _reconcile_loop(self, initial_delay: float) -> None:
+        if self._reconcile_stop.wait(initial_delay):
+            return
+        while not self._reconcile_stop.is_set():
+            try:
+                self._reconcile_once()
+            except Exception as e:
+                self._reconcile["last_error"] = str(e)
+                log.exception("来源补扫失败：%s", e)
+            if self._reconcile_stop.wait(RECONCILE_INTERVAL):
+                return
+
+    def _reconcile_once(self) -> dict:
+        """补扫全部已启用来源，并处理本轮新产生的待索引内容。
+
+        FSEvents 不是持久队列：应用没运行、网络卷断续或事件缓冲溢出时都会
+        漏事件。周期全量扫描是实时监听的正确性兜底，不是性能优化。
+        """
+        result = {"scanned": 0, "registered": 0, "indexed": 0, "failed": 0}
+        with self._lock:
+            conn = self._conn_factory()
+            rows = conn.execute(
+                "SELECT id, name, path FROM sources WHERE enabled = 1 ORDER BY id"
+            ).fetchall()
+            watched = set(self._watcher.watched_paths)
+
+            for row in rows:
+                root = Path(row["path"])
+                if not root.is_dir():
+                    result["failed"] += 1
+                    continue
+                if row["path"] not in watched:
+                    try:
+                        if self._watcher.watch(row["path"]):
+                            watched.add(row["path"])
+                    except Exception as e:
+                        log.warning("补扫时重新挂载监听失败 %s：%s", row["path"], e)
+                try:
+                    stats = scan_source(conn, row["id"], root)
+                except Exception as e:
+                    conn.rollback()
+                    result["failed"] += 1
+                    log.exception("补扫来源失败 %s：%s", row["name"], e)
+                    continue
+                result["scanned"] += stats.scanned
+                result["registered"] += stats.registered + stats.content_updated
+
+            budget = RECONCILE_INDEX_BUDGET
+            while budget > 0:
+                pending_before = count_readable_pending(conn)
+                indexed = index_pending(conn, limit=min(200, budget))
+                result["indexed"] += indexed.get("indexed", 0)
+                consumed = indexed.get("total", 0)
+                if consumed <= 0:
+                    break
+                budget -= consumed
+                if count_readable_pending(conn) >= pending_before:
+                    # 解析器持续返回 unsupported 等终态时，同一 content 仍可
+                    # 被 index_pending 再次选中；没有进展就停止本轮，避免周期
+                    # 补扫在一个坏文件上空转 2000 次。
+                    break
+
+        self._reconcile.update({
+            "runs": self._reconcile["runs"] + 1,
+            "last_at": time.time(),
+            "last_error": "" if result["failed"] == 0 else f"{result['failed']} 个来源失败",
+            "scanned": result["scanned"],
+            "registered": result["registered"],
+            "indexed": result["indexed"],
+        })
+        if result["registered"] or result["indexed"]:
+            log.info(
+                "来源补扫完成：扫描 %d，登记/更新 %d，索引 %d",
+                result["scanned"], result["registered"], result["indexed"],
+            )
+        return result
 
     # ------------------------------------------------------------ 回调
 
@@ -117,6 +230,17 @@ class WatchService:
                     log.warning("文件不属于任何已启用来源，跳过：%s", path)
                     self._counters["skipped"] += 1
                     self._log_activity(name, path, "no_source", 0)
+                    return
+
+                # Watcher 已在入队时复用扫描排除规则；这里再做一次防御性
+                # 校验，保证直接调用回调或平台事件异常时也不会把
+                # node_modules / package / 超深目录写入库。
+                source = conn.execute(
+                    "SELECT path FROM sources WHERE id = ?", (source_id,)
+                ).fetchone()
+                if source is None or should_skip_path(path, source["path"]):
+                    self._counters["skipped"] += 1
+                    self._log_activity(name, path, "excluded", 0)
                     return
 
                 stats = ScanStats()
@@ -250,5 +374,6 @@ class WatchService:
             "watched": watched,
             "counters": dict(self._counters),
             "watcher": dict(self._watcher.stats),
+            "reconcile": dict(self._reconcile),
             "activity": list(self._activity),
         }

@@ -1,0 +1,339 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const test = require('node:test');
+const vm = require('node:vm');
+
+const rendererPath = path.resolve(__dirname, '..', 'renderer', 'index.html');
+const renderer = fs.readFileSync(rendererPath, 'utf8');
+const script = renderer.match(/<script>([\s\S]*?)<\/script>/);
+
+function sourceBetween(start, end) {
+  const from = renderer.indexOf(start);
+  const to = renderer.indexOf(end, from);
+  assert.notEqual(from, -1, `missing source marker: ${start}`);
+  assert.notEqual(to, -1, `missing source marker: ${end}`);
+  return renderer.slice(from, to).trim();
+}
+
+test('renderer inline script remains valid JavaScript', () => {
+  assert.ok(script, 'renderer must contain an inline script');
+  assert.doesNotThrow(() => new vm.Script(script[1], { filename: rendererPath }));
+});
+
+test('file navigation delegates filters and pagination to the API', () => {
+  assert.match(renderer, /params\.set\('source', activeSource\)/);
+  assert.match(renderer, /params\.set\('ext', activeExt\)/);
+  assert.match(renderer, /params\.set\('duplicate', 'true'\)/);
+  assert.match(renderer, /offset: String\(append \? files\.length : 0\)/);
+  assert.match(renderer, /filesTotal = Math\.max\(0, safeNumber\(d\.total\)\)/);
+  assert.match(renderer, /load\(currentQuery, true\)/);
+  assert.match(renderer, /id="loadMore"/);
+  assert.doesNotMatch(renderer, /files = files\.filter\(function \(f\) \{ return f\.source_name === activeSource;/);
+});
+
+test('book search, indexing drain, and source preview stay wired end to end', () => {
+  assert.match(renderer, /q: q, limit: 40, book_id: activeBook/);
+  assert.match(renderer, /if \(version !== searchVersion\) return;/);
+  assert.match(renderer, /while \(safeNumber\(st\.pending\) > 0\)/);
+  assert.match(renderer, /await api\('\/index\/run', \{ method: 'POST'/);
+  assert.match(renderer, /pendingAfter >= pendingBefore/);
+  assert.match(renderer, /function runIndexing\([^)]*\)[\s\S]*?indexingPromise/);
+  assert.match(renderer, /async function previewAndConfirmSource/);
+  assert.match(renderer, /api\('\/sources\/preview'/);
+  assert.match(renderer, /await previewAndConfirmSource\(s, hint\)/);
+  assert.match(renderer, /await previewAndConfirmSource\(source, hint\)/);
+  assert.match(renderer, /if \(!enabled\)[\s\S]*?return;/);
+  assert.match(renderer, /function executeQuery\(q\) \{\s*clearTimeout\(timer\);\s*timer = null;/);
+});
+
+test('file list, evidence, and knowledge answer columns coexist without legacy modes', () => {
+  const layout = sourceBetween('<div class="content-layout">', '</div>\n    </div>\n  </div>');
+  assert.match(layout, /<section class="results-panel"[^>]*aria-label="文件管理"/);
+  assert.match(layout, /<section class="evidence-panel"[^>]*aria-label="文件详情"/);
+  assert.match(layout, /<aside class="qa-panel"[^>]*aria-label="知识问答"/);
+  assert.match(layout, /id="rows"/);
+  assert.match(layout, /id="evidence"/);
+  assert.match(layout, /id="answerRows"/);
+
+  assert.doesNotMatch(renderer, /\b(?:activeView|setActiveView|workbenchNav|libraryNav)\b/);
+  assert.doesNotMatch(renderer, /\b(?:queryMode|setQueryMode)\b|class="mode-button"|data-mode=/);
+});
+
+test('knowledge questions render only in the answer column', async () => {
+  const askSource = sourceBetween('async function runAsk(', 'function refHtml(');
+  assert.match(askSource, /getElementById\('answerRows'\)/);
+  assert.doesNotMatch(askSource, /getElementById\('rows'\)/);
+
+  const answerRows = {
+    innerHTML: '',
+    querySelectorAll() { return []; },
+  };
+  const filesRows = { innerHTML: 'file list stays visible' };
+  const submit = { disabled: false };
+  const context = {
+    api: async (requestPath, options) => {
+      assert.equal(requestPath, '/ask');
+      assert.deepEqual(JSON.parse(options.body), { question: '什么是银行家算法？', book_id: null });
+      return { status: 'answered', answer: '用于避免死锁 [C1]', citations: [] };
+    },
+    document: {
+      getElementById(id) {
+        if (id === 'answerRows') return answerRows;
+        if (id === 'rows') return filesRows;
+        if (id === 'askSubmit') return submit;
+        return null;
+      },
+    },
+    showEvidence() {},
+    sheetOpen() {},
+    refHtml() { return ''; },
+    setTimeout,
+  };
+
+  await vm.runInNewContext(`
+    let activeBook = null;
+    let llmInfo = { configured: true, available: true };
+    function esc(value) { return String(value); }
+    ${askSource}
+    runAsk('什么是银行家算法？')
+  `, context);
+
+  assert.match(answerRows.innerHTML, /用于避免死锁/);
+  assert.equal(filesRows.innerHTML, 'file list stays visible');
+});
+
+test('clicking a file row selects it and updates the evidence column', async () => {
+  const evidenceSource = sourceBetween('function clearEvidence(', 'async function api(');
+  const rowsSource = sourceBetween('function renderRows(', '/* 右键归类');
+  const escapingSource = sourceBetween('function esc(', 'function highlight(');
+  const evidence = { innerHTML: '' };
+  const selectedClasses = new Set();
+  const row = {
+    dataset: {},
+    classList: {
+      add(name) { selectedClasses.add(name); },
+      remove(name) { selectedClasses.delete(name); },
+    },
+  };
+  const rows = {
+    innerHTML: '',
+    querySelectorAll(selector) {
+      if (selector === '.row') return [row];
+      if (selector === '.row.on') return [];
+      return [];
+    },
+  };
+  const context = {
+    ICONS: {},
+    fmtSize: () => '',
+    fmtDate: () => '',
+    api: async (requestPath) => {
+      assert.equal(requestPath, '/files/7/detail');
+      return {
+        file: { id: 7, name: '资源分配.md', path: '/docs/resource.md', ext: '.md' },
+        document: {},
+        sections: [{ section_path: '第一节', text: '正文片段' }],
+        truncated: false,
+      };
+    },
+    document: {
+      getElementById(id) {
+        if (id === 'rows') return rows;
+        if (id === 'evidence') return evidence;
+        return null;
+      },
+    },
+    setTimeout,
+    window: { inktable: { revealInFinder() {} } },
+  };
+
+  const result = await vm.runInNewContext(`
+    let files = [{ id: 7, name: '资源分配.md', path: '/docs/resource.md', ext: '.md', state: 'ready' }];
+    let filesTotal = 1, selectedEvidence = null, detailVersion = 0;
+    ${escapingSource}
+    ${evidenceSource}
+    ${rowsSource}
+    renderRows();
+    rowClick = document.getElementById('rows').querySelectorAll('.row')[0].onclick;
+    (async () => {
+      rowClick();
+      await new Promise(function (resolve) { setTimeout(resolve, 0); });
+      return { evidenceHtml: document.getElementById('evidence').innerHTML };
+    })()
+  `, context);
+
+  assert.match(result.evidenceHtml, /资源分配\.md/);
+  assert.match(result.evidenceHtml, /\/docs\/resource\.md/);
+  assert.match(result.evidenceHtml, /正文片段/);
+  assert.equal(selectedClasses.has('on'), true);
+});
+
+test('boot loads the default file list when the library has files', async () => {
+  const bootSource = sourceBetween('async function boot(', 'function requestApplicationResume(');
+  assert.doesNotMatch(bootSource, /\bactiveView\b/);
+
+  const setup = { style: { display: '' } };
+  const query = { value: '  ' };
+  const calls = [];
+  const context = {
+    api: async (requestPath) => {
+      calls.push(`api:${requestPath}`);
+      if (requestPath === '/stats') return { files: 3 };
+      if (requestPath === '/settings/llm') return { configured: false };
+      throw new Error(`unexpected API call: ${requestPath}`);
+    },
+    refreshCats: async () => calls.push('refreshCats'),
+    renderNav: () => calls.push('renderNav'),
+    updateWorkbenchChrome: () => calls.push('updateWorkbenchChrome'),
+    updateModelState: (status) => calls.push(`updateModelState:${status.configured}`),
+    load: async (value) => calls.push(`load:${value}`),
+    executeQuery: async () => calls.push('executeQuery'),
+    renderKnowledgeEmpty: () => calls.push('renderKnowledgeEmpty'),
+    document: {
+      getElementById(id) {
+        if (id === 'setup') return setup;
+        if (id === 'q') return query;
+        return null;
+      },
+    },
+  };
+
+  const result = await vm.runInNewContext(`
+    let stats = null, sources = [], llmInfo = { configured: false };
+    ${bootSource}
+    boot()
+  `, context);
+
+  assert.equal(result.hasFiles, true);
+  assert.equal(setup.style.display, 'none');
+  assert.equal(calls.includes('load:'), true);
+  assert.equal(calls.includes('executeQuery'), false);
+  assert.equal(calls.includes('renderKnowledgeEmpty'), false);
+});
+
+test('load sends the active scope and appends the next page', async () => {
+  const loadSource = sourceBetween('async function load(', '/* 全文搜索');
+  const safeNumberSource = renderer.match(/function safeNumber\(value\) \{[\s\S]*?\n\}/)[0];
+  const requests = [];
+  let renders = 0;
+  const count = { textContent: '' };
+  const context = {
+    URLSearchParams,
+    api: async (requestPath) => {
+      requests.push(requestPath);
+      const offset = Number(new URL(`http://local${requestPath}`).searchParams.get('offset'));
+      return offset === 0
+        ? { total: 4, files: [{ id: 1 }, { id: 2 }] }
+        : { total: 4, files: [{ id: 3 }, { id: 4 }] };
+    },
+    document: { getElementById: () => count },
+    renderRows: () => { renders += 1; },
+  };
+
+  const result = await vm.runInNewContext(`
+    let files = [], filesTotal = 0, currentQuery = '', loadVersion = 0, searchVersion = 0;
+    let activeCategory = null, activeBook = 9, activeSource = '微信 & QQ';
+    let activeExt = '.pdf', activeDuplicate = true;
+    const PAGE_SIZE = 300;
+    ${safeNumberSource}
+    ${loadSource}
+    (async () => {
+      await load('合同');
+      await load('合同', true);
+      return { files, filesTotal, currentQuery };
+    })()
+  `, context);
+
+  assert.deepEqual(Array.from(result.files, (f) => f.id), [1, 2, 3, 4]);
+  assert.equal(result.filesTotal, 4);
+  assert.equal(result.currentQuery, '合同');
+  assert.equal(count.textContent, '4 个文件');
+  assert.equal(renders, 2);
+
+  const first = new URL(`http://local${requests[0]}`).searchParams;
+  const second = new URL(`http://local${requests[1]}`).searchParams;
+  assert.equal(first.get('source'), '微信 & QQ');
+  assert.equal(first.get('ext'), '.pdf');
+  assert.equal(first.get('duplicate'), 'true');
+  assert.equal(first.get('book_id'), '9');
+  assert.equal(first.get('q'), '合同');
+  assert.equal(first.get('offset'), '0');
+  assert.equal(second.get('offset'), '2');
+});
+
+test('source preview exposes truncated scale before confirmation', async () => {
+  const previewSource = sourceBetween(
+    'async function previewAndConfirmSource(',
+    "document.getElementById('btnEnable')",
+  );
+  const safeNumberSource = renderer.match(/function safeNumber\(value\) \{[\s\S]*?\n\}/)[0];
+  const hint = { textContent: '' };
+  let prompt = '';
+  const context = {
+    api: async (requestPath, options) => {
+      assert.equal(requestPath, '/sources/preview');
+      assert.deepEqual(JSON.parse(options.body), { path: '/large' });
+      return {
+        total_files: 50000,
+        will_index: 1200,
+        ignored_by_ext: 300,
+        excluded_dirs: 7,
+        truncated: true,
+      };
+    },
+    confirm: (message) => { prompt = message; return true; },
+  };
+
+  const confirmed = await vm.runInNewContext(`
+    ${safeNumberSource}
+    ${previewSource}
+    previewAndConfirmSource({ name: '大目录', path: '/large' }, hint)
+  `, { ...context, hint });
+
+  assert.equal(confirmed, true);
+  assert.match(prompt, /预计文件：至少 50000/);
+  assert.match(prompt, /可收录文件：1200/);
+  assert.match(prompt, /排除目录：7/);
+});
+
+test('sidecar lifecycle is visible and initial sidecar info counts as ready', () => {
+  assert.match(renderer, /id="sidecarStatus"/);
+  assert.match(renderer, /window\.inktable\.onSidecar\(handleSidecarStatus\)/);
+
+  const statusSource = sourceBetween('function setSidecarStatus(', 'let toastTimer;');
+  const safeNumberSource = renderer.match(/function safeNumber\(value\) \{[\s\S]*?\n\}/)[0];
+  const status = {
+    className: '',
+    title: '',
+    attributes: {},
+    setAttribute(name, value) { this.attributes[name] = value; },
+  };
+  const label = { textContent: '' };
+  const context = {
+    window: { inktable: null },
+    document: {
+      getElementById(id) {
+        if (id === 'sidecarStatus') return status;
+        if (id === 'sidecarStatusText') return label;
+        return null;
+      },
+    },
+  };
+  vm.runInNewContext(`${safeNumberSource}\n${statusSource}`, context);
+
+  const cases = [
+    [{ port: 51000, token: 'secret' }, 'sidecar-status ready', '服务已连接'],
+    [{ state: 'ready' }, 'sidecar-status ready', '服务已连接'],
+    [{ state: 'restarting', attempt: 2 }, 'sidecar-status restarting', '正在重启（第 2 次）…'],
+    [{ state: 'stopped' }, 'sidecar-status stopped', '服务已停止'],
+    [{ state: 'failed', error: '健康检查失败' }, 'sidecar-status failed', '服务不可用'],
+  ];
+  for (const [info, className, text] of cases) {
+    context.setSidecarStatus(info);
+    assert.equal(status.className, className);
+    assert.equal(label.textContent, text);
+  }
+  assert.equal(status.title, '健康检查失败');
+  assert.equal(status.attributes['aria-label'], '健康检查失败');
+});

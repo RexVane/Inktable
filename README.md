@@ -1,7 +1,7 @@
 # Inktable
 
-macOS 本地文件索引与检索。自动发现微信、QQ、浏览器下载等目录，
-把散落全机的文档变成可搜内容的统一索引层。
+macOS 本地优先的个人知识库。自动发现微信、QQ、浏览器下载等目录，
+把散落全机的资料变成可检索、可问答、可回溯证据的知识空间。
 
 **默认不移动、不复制、不改名任何文件** —— 组织全部发生在索引层。
 
@@ -9,15 +9,17 @@ macOS 本地文件索引与检索。自动发现微信、QQ、浏览器下载等
 
 V1.0 已可用。`dist/Inktable-0.1.0-arm64.dmg`（295 MB，含 119 MB 本地嵌入模型）
 
+产品主体是知识工作台：搜索、问答和证据阅读共用同一检索范围；文件管理负责来源发现、解析、去重、增量更新、保全和治理。
+
 | 能力 | 状态 |
 |---|---|
 | 来源自动发现（微信 4.x / QQ / Chrome / Edge / Safari） | ✅ |
 | 文件登记与内容去重（inode 身份追踪） | ✅ |
 | 正文解析（PDF / DOCX / Markdown / TXT） | ✅ |
-| 中文全文检索（三路召回 + RRF 融合） | ✅ |
+| 中文全文检索（词法 / 子串 / 向量混合召回 + RRF 融合） | ✅ |
 | 实时监听（新文件自动入库，约 3.5 秒） | ✅ |
 | 来源管理（启用 / 停用 / 移除 / 手动添加） | ✅ |
-| 向量检索（语义匹配，V1.5） | ✅ |
+| 向量检索（语义匹配） | ✅ |
 | 置信度标注（库里没有时如实提示） | ✅ |
 | 文件消失处理（标 missing 保索引，重现自动复活） | ✅ |
 | 保全副本（易失来源防微信清缓存，复制绝不移动） | ✅ |
@@ -35,7 +37,7 @@ V1.0 已可用。`dist/Inktable-0.1.0-arm64.dmg`（295 MB，含 119 MB 本地嵌
 # 后端
 cd services/api
 uv sync
-uv run pytest                      # 72 项测试
+uv run pytest                      # 全量后端测试
 uv run python tests/e2e_watch.py   # 端到端：投放文件 → 自动入库 → 搜内容
 
 # 打包
@@ -50,11 +52,10 @@ cd ../../apps/desktop && npx electron-builder --mac --arm64
 ```
 Electron 主进程 ──stdin: {token}──▶ Python sidecar (FastAPI)
       │            ◀──stdout: {port}      │
-      │                                   ├─ discovery/  来源探测
-   renderer                               ├─ watcher/    监听 + 稳定性判据
-  (原生 JS)  ──HTTP + Bearer──────────────▶├─ parsing/    解析 + 分片
-                                          ├─ index/      FTS5 三路检索
-                                          └─ db/         SQLite
+      │                                   ├─ library/    来源、身份、监听、保全
+   renderer                               ├─ ingestion/  解析、层级、增量索引
+  (知识工作台) ──HTTP + Bearer────────────▶├─ retrieval/  混合召回、RRF、问答
+                                          └─ db/         SQLite + FTS5 + sqlite-vec
 ```
 
 数据库固定在 `~/Library/Application Support/Inktable/library.db`。
@@ -93,7 +94,7 @@ Electron 主进程 ──stdin: {token}──▶ Python sidecar (FastAPI)
 
 ## 文档
 
-- `docs/PLAN.md` —— 完整方案（v6）
+- `docs/PLAN.md` —— 完整方案（v7，知识库优先）
 - `docs/HANDOFF.md` —— 18 条硬约束，改动前必读
 - `docs/M0-RESULTS.md` —— 实测结果与决策记录
 

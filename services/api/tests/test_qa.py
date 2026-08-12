@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -43,6 +44,31 @@ class _FakeLLM(BaseHTTPRequestHandler):
         self.wfile.write(resp)
 
     def log_message(self, *a):  # 安静
+        pass
+
+
+class _StatusLLM(BaseHTTPRequestHandler):
+    status_code = 401
+
+    def do_POST(self):
+        self.send_response(self.status_code)
+        self.end_headers()
+
+    def log_message(self, *a):
+        pass
+
+
+class _RawLLM(BaseHTTPRequestHandler):
+    body = b"not-json"
+
+    def do_POST(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(self.body)))
+        self.end_headers()
+        self.wfile.write(self.body)
+
+    def log_message(self, *a):
         pass
 
 
@@ -94,6 +120,89 @@ def test_not_configured(db):
     assert a.answer is None
 
 
+def test_model_probe_succeeds_without_exposing_key(fake_server):
+    llm.configure(fake_server, "probe-secret", "fake-model")
+    _FakeLLM.scripts = ["OK"]
+    try:
+        result = llm.probe(timeout=2)
+    finally:
+        llm.configure("", "", "")
+
+    assert result == {
+        "configured": True,
+        "endpoint": fake_server,
+        "model": "fake-model",
+        "has_key": True,
+        "available": True,
+        "code": "ready",
+        "message": "模型连接正常",
+    }
+    assert "probe-secret" not in str(result)
+
+
+@pytest.mark.parametrize(
+    ("status_code", "code"),
+    [
+        (401, "auth_failed"), (403, "auth_failed"), (404, "not_found"),
+        (408, "timeout"), (429, "rate_limited"), (500, "service_error"),
+        (504, "timeout"),
+    ],
+)
+def test_model_probe_maps_http_failure(status_code, code):
+    _StatusLLM.status_code = status_code
+    srv = HTTPServer(("127.0.0.1", 0), _StatusLLM)
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+    llm.configure(f"http://127.0.0.1:{srv.server_port}/v1", "secret", "missing")
+    try:
+        result = llm.probe(timeout=2)
+    finally:
+        llm.configure("", "", "")
+        srv.shutdown()
+
+    assert result["available"] is False
+    assert result["code"] == code
+    assert "secret" not in str(result)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"not-json",
+        json.dumps({"unexpected": True}).encode(),
+        json.dumps({"choices": [{"message": {"content": 123}}]}).encode(),
+        json.dumps({"choices": [{"message": {"content": ""}}]}).encode(),
+    ],
+)
+def test_model_probe_rejects_invalid_response(body):
+    _RawLLM.body = body
+    srv = HTTPServer(("127.0.0.1", 0), _RawLLM)
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+    llm.configure(f"http://127.0.0.1:{srv.server_port}/v1", "secret", "model")
+    try:
+        result = llm.probe(timeout=2)
+    finally:
+        llm.configure("", "", "")
+        srv.shutdown()
+
+    assert result["available"] is False
+    assert result["code"] == "invalid_response"
+    assert "secret" not in str(result)
+
+
+def test_model_probe_rejects_invalid_endpoint_without_raising():
+    llm.configure("not-a-url", "secret", "model")
+    try:
+        result = llm.probe(timeout=2)
+    finally:
+        llm.configure("", "", "")
+
+    assert result["available"] is False
+    assert result["code"] == "unreachable"
+    assert "secret" not in str(result)
+
+
 def test_answered_with_citations(db, scripted):
     scripted("汝窑的烧成温度在一千二百度上下 [C1]。")
     a = ask(db, "汝窑的烧成温度是多少")
@@ -101,7 +210,21 @@ def test_answered_with_citations(db, scripted):
     assert "[C1]" in a.answer
     assert a.citations and a.citations[0]["file_name"] == "瓷器.txt"
     assert a.citations[0]["snippet"]           # 引用带原文片段
+    citation = a.citations[0]
+    assert citation["span_id"].startswith(f"ch{citation['chunk_id']}:")
+    assert citation["end_offset"] > citation["start_offset"]
+    assert citation["snippet"] == db.execute(
+        "SELECT substr(text, ?, ?) FROM chunks WHERE id = ?",
+        (citation["start_offset"] + 1,
+         citation["end_offset"] - citation["start_offset"],
+         citation["chunk_id"]),
+    ).fetchone()[0]
     assert a.validation["attempts"] == 1
+    assert a.trace["trace_id"]
+    assert [stage["name"] for stage in a.trace["stages"]] == [
+        "hierarchy_routing", "deep_retrieval", "scope", "rrf",
+        "rerank", "diversify", "expand", "compress", "assemble",
+    ]
 
 
 def test_fabricated_citation_stripped(db, scripted):
@@ -166,6 +289,43 @@ def test_book_scoping(db, scripted):
     # 上下文只能来自书内文件 —— 引用必然指向盐政.txt
     for c in a.citations:
         assert c["file_name"] == "盐政.txt", "书外内容泄进了书内问答"
+
+
+def test_book_citation_uses_member_copy_for_shared_content(
+    db, scripted, tmp_path
+):
+    """content 共享时，书内问答引用必须指向 book_members 中的具体副本。"""
+    member_path = tmp_path / "瓷器书内副本.txt"
+    shutil.copy2(tmp_path / "瓷器.txt", member_path)
+    scan_source(db, 1, tmp_path)
+    member_id = db.execute(
+        "SELECT id FROM files WHERE name = '瓷器书内副本.txt'"
+    ).fetchone()["id"]
+    original_id = db.execute(
+        "SELECT id FROM files WHERE name = '瓷器.txt'"
+    ).fetchone()["id"]
+    assert original_id != member_id
+    assert db.execute(
+        "SELECT content_id FROM files WHERE id = ?", (original_id,)
+    ).fetchone()[0] == db.execute(
+        "SELECT content_id FROM files WHERE id = ?", (member_id,)
+    ).fetchone()[0]
+
+    db.execute("INSERT INTO books (name, created_at) VALUES ('瓷器副本书', ?)",
+               (time.time(),))
+    db.execute(
+        "INSERT INTO book_members (book_id, file_id, added_at) VALUES (1, ?, ?)",
+        (member_id, time.time()),
+    )
+    db.commit()
+
+    scripted("汝窑烧成温度约一千二百度 [C1]。")
+    answer = ask(db, "汝窑的烧成温度是多少", book_id=1)
+
+    assert answer.status == "answered"
+    assert answer.citations
+    assert {c["file_id"] for c in answer.citations} == {member_id}
+    assert {c["file_name"] for c in answer.citations} == {"瓷器书内副本.txt"}
 
 
 def test_api_key_sent_but_never_echoed(db, scripted):

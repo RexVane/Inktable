@@ -14,12 +14,25 @@ const { spawn } = require('child_process');
 const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
+const { pathToFileURL } = require('url');
 
 let mainWindow = null;
 let sidecar = null;
 let sidecarInfo = null; // { port, token }
+let startupComplete = false;
+let quitting = false;
+let restartTimer = null;
+let restartAttempts = 0;
+let lastRestartError = '';
+let sidecarStatusRevision = 0;
+let lastSidecarStatus = { state: 'starting', revision: sidecarStatusRevision };
 
 const SESSION_TOKEN = crypto.randomBytes(32).toString('base64url');
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+
+if (!hasSingleInstanceLock) {
+  app.quit();
+}
 
 // ---- LLM 配置：safeStorage 加密落盘（§6.3），密钥绝不进渲染进程 ----
 const llmConfigPath = () => path.join(app.getPath('userData'), 'llm.enc');
@@ -65,60 +78,163 @@ function startSidecar() {
     const bin = resolveSidecarPath();
     if (!bin) return reject(new Error('sidecar 二进制未找到，先运行 pyinstaller sidecar.spec'));
 
-    sidecar = spawn(bin, [], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const proc = spawn(bin, [], { stdio: ['pipe', 'pipe', 'pipe'] });
+    sidecar = proc;
 
-    const timer = setTimeout(() => reject(new Error('sidecar 启动超时（15s）')), 15000);
+    let settled = false;
     let buffer = '';
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      if (sidecar === proc) {
+        sidecar = null;
+        sidecarInfo = null;
+      }
+      terminateSidecarProcess(proc);
+      reject(new Error('sidecar 启动超时（15s）'));
+    }, 15000);
 
-    sidecar.stdout.on('data', (chunk) => {
+    const rejectStartup = (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (sidecar === proc) {
+        sidecar = null;
+        sidecarInfo = null;
+      }
+      terminateSidecarProcess(proc);
+      reject(err);
+    };
+
+    proc.stdout.on('data', (chunk) => {
       buffer += chunk.toString();
-      const newline = buffer.indexOf('\n');
-      if (newline === -1 || sidecarInfo) return;
+      let newline;
+      while (!settled && (newline = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+        if (!line) continue;
 
-      try {
-        const info = JSON.parse(buffer.slice(0, newline));
-        if (info.port) {
-          sidecarInfo = { port: info.port, token: SESSION_TOKEN };
-          clearTimeout(timer);
-          resolve(sidecarInfo);
+        try {
+          const info = JSON.parse(line);
+          if (Number.isInteger(info.port) && info.port > 0 && info.port <= 65535) {
+            settled = true;
+            clearTimeout(timer);
+            // 这里只代表端口已上报，不代表 /health 已通过。
+            // 可用连接信息只能由 startHealthySidecar() 在健康检查后公开。
+            resolve({ port: info.port, token: SESSION_TOKEN });
+          }
+        } catch {
+          /* 非 JSON 行忽略，继续检查后续 stdout 行 */
         }
-      } catch {
-        /* 非 JSON 行忽略 */
       }
     });
 
-    sidecar.stderr.on('data', (d) => console.error('[sidecar]', d.toString().trim()));
+    proc.stderr.on('data', (d) => console.error('[sidecar]', d.toString().trim()));
 
-    sidecar.on('exit', (code) => {
+    proc.on('exit', (code, signal) => {
       console.error(`[sidecar] 退出，code=${code}`);
-      sidecar = null;
-      sidecarInfo = null;
+      const wasCurrent = sidecar === proc;
+      if (sidecar === proc) {
+        sidecar = null;
+        sidecarInfo = null;
+      }
+      if (!settled) {
+        rejectStartup(new Error(`sidecar 在就绪前退出（code=${code}, signal=${signal || 'none'}）`));
+      } else if (wasCurrent && !quitting) {
+        publishSidecarStatus({ state: 'stopped', code, signal });
+        scheduleSidecarRestart(new Error(
+          `sidecar 退出（code=${code}, signal=${signal || 'none'}）`
+        ));
+      }
     });
 
-    sidecar.on('error', (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
+    proc.on('error', rejectStartup);
 
     // 令牌与模型配置经 stdin 传入，避免出现在进程表里（§6.2/§6.3）
     const boot = { token: SESSION_TOKEN };
     const llm = loadLLMConfig();
     if (llm) boot.llm = llm;
-    sidecar.stdin.write(JSON.stringify(boot) + '\n');
+    proc.stdin.write(JSON.stringify(boot) + '\n', (err) => {
+      if (err) rejectStartup(err);
+    });
   });
+}
+
+function publishSidecarStatus(info) {
+  lastSidecarStatus = { ...info, revision: ++sidecarStatusRevision };
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('sidecar:status', lastSidecarStatus);
+}
+
+async function startHealthySidecar() {
+  const info = await startSidecar();
+  try {
+    const response = await fetch(`http://127.0.0.1:${info.port}/health`, {
+      headers: { Authorization: `Bearer ${info.token}` },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!response.ok) throw new Error(`health HTTP ${response.status}`);
+    const health = await response.json();
+    if (health.status !== 'ok') {
+      const failed = Object.entries(health.checks || {})
+        .filter(([, check]) => check && check.ok === false)
+        .map(([name]) => name);
+      throw new Error(`sidecar 健康检查未通过${failed.length ? `：${failed.join('、')}` : ''}`);
+    }
+    sidecarInfo = info;
+    publishSidecarStatus({ state: 'ready', health });
+    return info;
+  } catch (err) {
+    stopSidecar();
+    throw err;
+  }
+}
+
+function scheduleSidecarRestart(error = null) {
+  if (error) lastRestartError = String(error.message || error);
+  if (quitting || restartTimer || restartAttempts >= 3) {
+    if (!quitting && restartAttempts >= 3) {
+      publishSidecarStatus({
+        state: 'failed',
+        error: lastRestartError || 'sidecar 多次重启失败',
+      });
+    }
+    return;
+  }
+  const attempt = ++restartAttempts;
+  const delay = Math.min(1000 * (2 ** (attempt - 1)), 10000);
+  publishSidecarStatus({ state: 'restarting', attempt, delay });
+  restartTimer = setTimeout(async () => {
+    restartTimer = null;
+    try {
+      await startHealthySidecar();
+      restartAttempts = 0;
+      lastRestartError = '';
+      console.log('[main] sidecar 已恢复');
+    } catch (err) {
+      console.error('[main] sidecar 重启失败:', err.message);
+      scheduleSidecarRestart(err);
+    }
+  }, delay);
+  restartTimer.unref();
+}
+
+function terminateSidecarProcess(proc) {
+  if (!proc || proc.exitCode !== null || proc.signalCode !== null) return;
+  try { proc.kill('SIGTERM'); } catch {}
+  // 5 秒不退就强杀，避免残留进程占着端口和数据库锁
+  setTimeout(() => {
+    if (proc.exitCode !== null || proc.signalCode !== null) return;
+    try { proc.kill('SIGKILL'); } catch {}
+  }, 5000).unref();
 }
 
 function stopSidecar() {
   if (!sidecar) return;
   const proc = sidecar;
   sidecar = null;
-  proc.kill('SIGTERM');
-  // 5 秒不退就强杀，避免残留进程占着端口和数据库锁
-  setTimeout(() => {
-    try {
-      proc.kill('SIGKILL');
-    } catch {}
-  }, 5000);
+  sidecarInfo = null;
+  terminateSidecarProcess(proc);
 }
 
 function createWindow() {
@@ -138,17 +254,33 @@ function createWindow() {
     },
   });
 
-  mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  const rendererPath = path.join(__dirname, '..', 'renderer', 'index.html');
+  const rendererUrl = pathToFileURL(rendererPath).toString();
+
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (url !== rendererUrl) event.preventDefault();
+  });
+
+  mainWindow.loadFile(rendererPath);
   mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.on('closed', () => { mainWindow = null; });
 
   // 外链走系统浏览器，不在应用内开窗
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    try {
+      const protocol = new URL(url).protocol;
+      if (protocol === 'http:' || protocol === 'https:') {
+        shell.openExternal(url).catch((err) => {
+          console.error('[main] 外链打开失败:', err.message);
+        });
+      }
+    } catch {}
     return { action: 'deny' };
   });
 }
 
 ipcMain.handle('sidecar:info', () => sidecarInfo);
+ipcMain.handle('sidecar:get-status', () => lastSidecarStatus);
 ipcMain.handle('shell:reveal', (_e, filePath) => {
   if (typeof filePath === 'string' && filePath) shell.showItemInFolder(filePath);
 });
@@ -172,6 +304,17 @@ ipcMain.handle('llm:get', () => {
 });
 
 ipcMain.handle('llm:set', async (_e, incoming) => {
+  if (!incoming || typeof incoming !== 'object') {
+    throw new TypeError('LLM 配置格式无效');
+  }
+  if (incoming.clear === true) {
+    try { fs.unlinkSync(llmConfigPath()); } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+    }
+    await pushLLMToSidecar(null);
+    return { endpoint: '', model: '', has_key: false };
+  }
+
   const prev = loadLLMConfig() || {};
   const cfg = {
     endpoint: String(incoming.endpoint || '').trim(),
@@ -189,13 +332,29 @@ ipcMain.handle('llm:set', async (_e, incoming) => {
   return { endpoint: cfg.endpoint, model: cfg.model, has_key: !!cfg.api_key };
 });
 
-app.whenReady().then(async () => {
+if (hasSingleInstanceLock) app.on('second-instance', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    if (app.isReady() && startupComplete) createWindow();
+    return;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  if (!mainWindow.isVisible()) mainWindow.show();
+  mainWindow.focus();
+});
+
+if (hasSingleInstanceLock) app.whenReady().then(async () => {
+  publishSidecarStatus({ state: 'starting' });
   try {
-    const info = await startSidecar();
+    const info = await startHealthySidecar();
+    restartAttempts = 0;
+    lastRestartError = '';
     console.log(`[main] sidecar 就绪，端口 ${info.port}`);
   } catch (err) {
     console.error('[main] sidecar 启动失败:', err.message);
+    // 首次启动失败也走与运行期崩溃相同的 3 次退避重试。
+    scheduleSidecarRestart(err);
   }
+  startupComplete = true;
   createWindow();
 
   app.on('activate', () => {
@@ -208,7 +367,17 @@ app.on('window-all-closed', () => {
 });
 
 // 所有退出路径都必须停掉 sidecar
-app.on('before-quit', stopSidecar);
-process.on('exit', stopSidecar);
+app.on('before-quit', () => {
+  quitting = true;
+  if (restartTimer) {
+    clearTimeout(restartTimer);
+    restartTimer = null;
+  }
+  stopSidecar();
+});
+process.on('exit', () => {
+  quitting = true;
+  stopSidecar();
+});
 process.on('SIGINT', () => app.quit());
 process.on('SIGTERM', () => app.quit());

@@ -1,2622 +1,735 @@
-# AI 个人文件管理库 — 最终实施方案
+# Inktable 个人知识库实施计划
 
-**版本**：v6
-**日期**：2026-08-11
-**仓库**：`~/Documents/code/ai-file-library`
-**平台**：macOS 优先。Windows 暂缓（结构上保留可移植性，但 V1 不实现）。
+**版本**：v7
 
-> **本产品由两个同层的支柱构成**（§2）：
-> - **文件支柱**（§7–§11）：文件如何被自动发现、身份追踪、原位组织
-> - **知识支柱**（§12）：文件内容如何变成可被提问、可被引用的知识
->
-> **v6**：分类改为纯信息层（删除镜像目录与 `rel_path`）；补入界面设计规范（§15 A8）；
-> **RAG 查询管线重构**（§12.3a–e）—— 问题重写拆两步分置路由两侧、四路召回、两级 RRF
-> 修正词法偏置、拒答门限前置、rerank 经实算否决保持 V2；解析提前只做一次（§10.0）。
-> **v5**：经六维独立审计 + 对抗性验证（86 条提出 → 54 条确认），修复 2 条 blocking、
-> 数据模型缺字段、跨章矛盾（`ready` 因果倒置、流式与后置校验互斥、SSE 双通道、`relocate` 一词两义），
-> 并补入实测确认的 **FTS5 中文分词缺陷**。全部差异见 §附录。
-> v4：新增 §12 RAG 完整架构。
-> v3：索引模式（不移动文件）+ 来源自动发现。
-> v2：Python 3.12、打包前置、消除路径攻击面、状态机补全。
+**日期**：2026-08-12
 
----
+**平台**：macOS 优先
 
-## 目录
+**状态**：本文件取代 v6，作为后续产品、架构、实现和验收的唯一计划依据。
 
-1. [产品目标与不可协商约束](#1-产品目标与不可协商约束)
-2. [系统总览：两大支柱](#2-系统总览两大支柱)
-3. [阶段切分](#3-阶段切分)
-4. [技术选型](#4-技术选型)
-5. [仓库结构与契约管线](#5-仓库结构与契约管线)
-6. [运行架构与安全](#6-运行架构与安全)
-7. [来源自动发现](#7-来源自动发现)
-8. [文件身份与追踪](#8-文件身份与追踪)
-9. [数据模型](#9-数据模型)
-10. [状态机](#10-状态机)
-11. [核心流程](#11-核心流程)
-12. **[RAG 架构](#12-rag-架构)** ← 知识支柱
-    - 12.1 两大支柱的接口 · 12.2 摄入管线 · 12.3 检索管线 · 12.4 生成与引用校验
-    - 12.5 增量更新 · 12.6 引用映射 · 12.7 Retriever 抽象 · 12.8 全量重建 · 12.9 V2 扩展点
-13. [API 清单](#13-api-清单)
-14. [SSE 事件清单](#14-sse-事件清单)
-15. [V1.0 任务分解](#15-v10-任务分解)
-16. [V1.5 任务分解](#16-v15-任务分解)
-17. [测试策略](#17-测试策略)
-18. [验收标准](#18-验收标准)
-19. [风险登记](#19-风险登记)
-20. [里程碑](#20-里程碑)
-21. [附录：差异汇总](#附录差异汇总)
+> Inktable 是一个本地优先的个人知识库。文件管理负责让知识来源可靠、可追踪、可治理；分层索引、混合检索、Rerank、上下文压缩和带引用问答负责让知识可查、可问、可复用。
 
----
+## 0. v7 决策摘要
 
-## 1. 产品目标与不可协商约束
+v6 把“文件支柱”和“知识支柱”定义为同层能力，并因本地大模型延迟暂缓 Rerank。这个定位造成了产品重心偏移：文件发现、分类和管理获得了完整工作流，而知识检索仍停留在 child chunk、RRF 和邻居拼接。
 
-### 目标
+v7 作出以下不可逆转的架构决策：
 
-系统**自动发现**本机的文件入口（微信、QQ、浏览器下载、AirDrop 等），实时检测新文件，**在原位建立索引**并自动分类，用户通过一个统一的虚拟视图浏览、搜索、提问 —— 而不需要关心文件物理上在哪。
+1. **个人知识库是产品主体，文件管理是支撑能力。** 首页、API、里程碑和验收均以知识检索质量为中心。
+2. **核心检索链路固定为：分层索引 -> 混合召回 -> RRF 粗融合 -> Child Rerank -> Parent 扩展 -> 证据压缩 -> 上下文装配 -> 带引用生成。**
+3. **Rerank 是固定架构阶段，不再列为远期扩展。** 本地模型、CoreML 或用户显式启用的远程服务只是可替换实现。
+4. **上下文压缩必须保留原文区间映射。** 不允许用无法回溯证据的自由摘要代替压缩。
+5. **分层索引至少包含 Document、Section、Child 三层。** 上层用于软路由和上下文恢复，Child 用于精确召回、Rerank 与引用。
+6. **先建立评测和检索追踪，再改变检索算法。** 不以主观体验代替 Recall、nDCG、证据召回率和引用正确率。
+7. **保留现有可靠摄入底座。** Electron + Python sidecar、SQLite、`files N:1 contents`、inode 身份、内容去重、增量更新、来源许可和保全副本不推倒重做。
 
-一句话：**给散落全机的文件加一层结构化的、可检索的、带 AI 理解的索引层。**
+## 1. 产品定义
 
-### 不可协商约束
+### 1.1 核心任务
 
-1. **默认不移动、不重命名、不删除任何文件。** 组织行为发生在索引层。
-2. **任何写入磁盘的操作（保全副本、可选归档）必须显式确认且可撤销**，撤销后 SHA-256 一致。
-3. **原始文件始终保存在本地。** 云端 AI 仅在用户显式启用后接收必要的文本片段；文件本体永不上传。
-4. **自动发现的来源默认不启用**，必须用户逐个确认后才开始监听。
+Inktable 帮助用户完成四类任务，优先级从高到低排列：
 
----
+1. **找知识**：用自然语言或关键词找到相关事实、章节和原文。
+2. **问知识**：基于个人资料得到有证据、有引用、可拒答的答案。
+3. **组织知识**：用文件书、专题、标签和范围筛选形成长期知识空间。
+4. **治理资料**：管理来源、重复文件、缺失文件、易失文件和保全副本。
 
-## 2. 系统总览：两大支柱
+任何新功能必须回答它主要提升哪一项。只改善文件操作便利、但不改善知识可靠性或知识使用体验的功能，默认低优先级。
 
-### 2.0 产品由两个同层子系统构成
+### 1.2 产品边界
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Vue 桌面界面                              │
-│      文件库 · 待确认 · 文件书 · 搜索/提问 · 设置                    │
-└────────────────────────────┬────────────────────────────────────┘
-                             │  FastAPI (§13) + SSE (§14)
-         ┌───────────────────┴────────────────────┐
-         ▼                                        ▼
-┌──────────────────────────┐        ┌──────────────────────────────┐
-│   文件支柱  §7 – §11       │        │   知识支柱  §12               │
-│                          │        │                              │
-│  §7  来源自动发现          │        │  §12.2 摄入：解析→分片→嵌入    │
-│  §8  身份追踪 (inode)      │        │  §12.3 检索：路由→召回→融合    │
-│  §11 稳定性检测 / 去重      │        │  §12.4 生成：prompt→引用校验   │
-│  §11 分类 / 保全 / 去重     │        │  §12.5 增量：diff 重建         │
-│                          │        │  §12.6 引用：chunk→页/章节跳转 │
-│  ▸ 文件在哪、是什么、归哪类  │        │  ▸ 文件说了什么、答案出自哪    │
-└───────────┬──────────────┘        └──────────────┬───────────────┘
-            │                                      │
-            │   files.id ─FK▶ contents.id ◀FK─ chunks.content_id
-            │   files.state ──事件──▶ 索引生命周期   │
-            └──────────────┬───────────────────────┘
-                           ▼
-                   同一个 SQLite 文件（WAL）
-        files / contents / chunks / chunks_fts / chunks_vec
+**本阶段包含：**
+
+- 本地文件的可靠发现、解析、去重和增量更新。
+- Document / Section / Child 三层知识结构。
+- 词法、子串、向量和层级信号的混合召回。
+- 可替换 Rerank、证据压缩、带引用问答和检索解释。
+- 全库、文件书和专题范围内的搜索与问答。
+- 资料库来源、分类、标签、保全和状态治理。
+
+**本阶段不包含：**
+
+- Windows、跨设备同步、多人协作。
+- OCR、图片理解、音视频转写、压缩包正文索引。
+- 自主执行外部操作的 Agent。
+- 自动生成 Wiki、知识图谱或模型微调。
+- 未经用户明确启用的云端文本上传。
+
+### 1.3 不可协商约束
+
+`docs/HANDOFF.md` 中 H1-H18 继续生效。本版本补充以下知识引擎约束：
+
+- **K1**：最终答案的事实必须由可定位到原文的 EvidenceSpan 支持。
+- **K2**：Rerank 只对 Child 候选打分，不对扩展后的整段 Parent 打分。
+- **K3**：Document/Section 路由只能加权，不能硬排除未命中的 Child。
+- **K4**：压缩输出必须是原文区间选择，不得把生成式摘要当成引用证据。
+- **K5**：检索、Rerank 或压缩降级必须通过响应和界面可见，不得静默伪装为完整管线。
+- **K6**：改变分片、嵌入、融合、Rerank 或压缩策略前后必须运行同一评测集。
+- **K7**：新索引必须带版本号，并支持影子构建、原子切换和回滚。
+- **K8**：任何层级摘要都不是事实来源；最终引用始终落到 Child 原文。
+
+## 2. 系统总览
+
+### 2.1 能力层级
+
+```text
+┌────────────────────────── Desktop Workbench ──────────────────────────┐
+│  搜索 / 问答 / 专题空间 / 证据阅读                      资料库管理      │
+└────────────────────────────────┬──────────────────────────────────────┘
+                                 │ HTTP + Bearer / controlled IPC
+┌────────────────────────────────▼──────────────────────────────────────┐
+│                         Knowledge Engine                              │
+│  ingestion -> hierarchy -> retrieve -> fuse -> rerank -> compress    │
+│                                      -> assemble -> answer -> verify  │
+└────────────────────────────────┬──────────────────────────────────────┘
+                                 │ files / contents / sections / chunks
+┌────────────────────────────────▼──────────────────────────────────────┐
+│                          Library Engine                               │
+│  discovery / permission / watcher / identity / dedupe / preserve     │
+└────────────────────────────────┬──────────────────────────────────────┘
+                                 ▼
+                  SQLite + FTS5 + sqlite-vec + source files
 ```
 
-**两个支柱的耦合面只有一处**：`files` 表。文件侧负责让 `files` 表始终准确反映磁盘现实，知识侧负责把 `files` 里的内容变成可检索、可引用的知识。两者的完整契约是 §12.1 的状态映射表。
+Knowledge Engine 是产品核心；Library Engine 是它的可靠摄入与资料治理基础。两者不是同等优先级，但必须通过稳定数据契约解耦。
 
-这个划分决定了一件事：**文件在磁盘上的移动、重命名、卷离线，都不应该让知识库失效。** 这正是下面选择索引模式的根本原因。
+### 2.2 进程边界
 
-### 2.1 **[架构改 A]** 为什么放弃"移动归档"
+继续沿用当前已经跑通的进程模型：
 
-v2 的核心流程是「检测 → 中转站 → 确认 → **移动到资料库** → 索引」。移动这一步带来了方案里最重的一批复杂度：
+- **Electron 主进程**：窗口、系统权限、目录选择、Finder 跳转、`safeStorage`、sidecar 生命周期。
+- **Renderer**：知识工作台界面，不拥有 Node.js 权限，不接触 LLM 密钥。
+- **Python sidecar**：Library Engine、Knowledge Engine、FastAPI、SQLite 和模型推理。
+- **本地 HTTP**：sidecar 绑定 `127.0.0.1:0`；会话令牌经 stdin 传入；所有业务接口要求 Bearer Token。
 
-| v2 的复杂度 | 索引模式下 |
-|---|---|
-| 跨卷复制 + 哈希校验 + 删源 | **消失** |
-| 移动中途断电的一致性 | **消失** |
-| 目标重名消解、永不覆盖 | **消失** |
-| 撤销归档 + 回滚索引 + 前置哈希校验 | **退化为改一个字段** |
-| `archiving` 中间态的重启恢复 | **消失** |
-| "确认后才移动"的强制人工卡点 | **可去掉**（见 §2.3） |
-| 文件丢失风险 | **归零** |
+不在本阶段迁移到前端框架或 ORM。先按当前原生 JS、FastAPI 和 `sqlite3` 实现拆分模块，避免把产品重构与技术栈替换绑在一起。
 
-而移动换来的收益只有一个：文件在 Finder 里按分类摆放。**而这个收益本身就是伪需求** —— 用户要的是"按分类找到文件"，不是"文件躺在某个文件夹里"。前者用索引层的虚拟树完全满足（§2.4）。
+### 2.3 代码目标结构
 
-### 2.2 索引模式的模型
-
-```
-       物理层（永不改动）                      索引层（全部组织发生在这里）
-┌────────────────────────────┐        ┌──────────────────────────────┐
-│ ~/Downloads/合同.pdf        │◀──────│ file#1  category=合同         │
-│ ~/Library/.../微信/报表.xlsx │◀──────│ file#2  category=财务 tags=[] │
-│ ~/Desktop/临时/说明.docx     │◀──────│ file#3  category=产品         │
-└────────────────────────────┘        └──────────────────────────────┘
-         inode 追踪                            SQLite + FTS5 + vec
-```
-
-- **文件在哪里就在哪里**，系统只记录它的身份、位置、分类、标签、正文分片、向量。
-- 用户看到的"文件库"是一个**虚拟视图**，按分类树、标签、时间、来源、文件书任意组织。
-- 同一个文件可以同时属于多个分类/文件书 —— 物理目录做不到，索引层天然支持。
-
-这正是 Spotlight / DEVONthink 索引模式 / Zotero linked-file 模式的做法。
-
-### 2.3 **[架构改 A 推论]** 人工确认卡点可以去掉
-
-v2 要求"确认后才归档"是因为归档是破坏性的。索引模式下分类**不产生任何破坏性后果** —— 分错了改一下就行，文件本身毫发无损。
-
-因此：
-
-- **自动分类，不阻塞。** 新文件被发现 → 自动分类 → 直接进入文件库，带置信度标记。
-- **低置信度进"待确认"队列**，但这是一个可选的整理入口，而不是流水线的必经卡点。用户不理它，文件也已经可搜索、可提问了。
-- 用户随时可以修正分类，修正会**回流为规则**（"以后来自微信的 .xlsx 都归财务"）。
-
-这把"智能收件箱"从**待办清单**变成了**可选的精修工位** —— 产品体验上是质变。
-
-### 2.4 **[v6 删除]** 虚拟镜像目录
-
-> v3–v5 设计过一个可选功能：在 `~/AI 文件库/` 下按分类树生成符号链接，让用户能在 Finder 里按分类浏览。
->
-> **v6 砍掉它。** 原因：
->
-> 1. **与产品定位冲突**。本产品的分类是**文件信息的分类**，不是文件目录的分类。镜像目录把信息层的组织又投射回磁盘，等于把刚拆掉的东西装回去。
-> 2. **它是 `categories.rel_path` 存在的唯一理由**。砍掉后分类表只剩 `id / parent_id / name`，改名、移动子树、合并都变成纯数据库操作，不需要级联重算路径、不需要重建链接。
-> 3. **消除一整类风险**：R14（镜像目录被自己监听造成循环）、失效链接清理、用户删除链接的语义歧义（删的是链接还是文件？）、Spotlight 重复索引、Time Machine 备份膨胀。
-> 4. 用户真想在 Finder 里看，`files.path` 一直都在 —— 点一下就 Finder 定位。
-
-**替代方案**：UI 里的虚拟分类树（§15 A8）已经完全覆盖这个需求，且不碰磁盘。
-
-### 2.5 **[新]** 易失来源与副本保全
-
-索引模式有一个真实的软肋，必须正面处理：**微信、QQ 的缓存目录会被 app 自己清理。** 索引指向的文件会凭空消失。
-
-方案：
-
-- 来源带 `volatile` 标记。微信、QQ、Mail 附件、浏览器缓存目录标为易失；`~/Downloads`、`~/Documents`、`~/Desktop` 标为持久。
-- 易失来源的文件在 UI 中带明确标记：**"位于微信缓存，可能被自动清理"**，并提供一键 **保全副本**。
-- 保全 = **复制**到用户资料库（默认 `~/Documents/AI 文件库/_保全/`），**不是移动**，原文件不动。复制完成后索引指向副本，原路径记为 `origin_path` 保留追溯。
-- 可设置"易失来源自动保全"（默认关闭）—— 这是唯一一个会自动写盘的行为，因此默认关。
-
-**复制比移动安全一个数量级**：失败时最坏结果是多一个待清理的临时文件，原文件永远完好。
-
-### 2.6 保留的可选"真实归档"
-
-极少数用户确实想把文件物理整理到一起。保留这个能力，但降级为**显式的手动操作**，不在主流程里：
-
-- 单个/批量文件 → "移动到资料库"
-- 遵循 v2 §8.3 的全部安全规则（同卷 rename / 跨卷复制校验删源 / 重名消解 / 永不覆盖）
-- 记入 `operations`，可撤销
-
-代码上它复用保全副本的实现，只多一步"校验通过后删源"。
-
----
-
-## 3. 阶段切分
-
-### V1.0 — 可靠的索引层（无 LLM）
-
-```
-自动发现来源 → 实时检测 → inode 身份追踪 → 规则分类 → 索引层 → FTS5 全文搜索 → macOS DMG
+```text
+services/api/app/
+├── api/
+│   ├── knowledge.py          # search / ask / evidence / explain
+│   ├── library.py            # sources / files / preserve
+│   ├── workspace.py          # books / topics / tags
+│   └── system.py             # health / index / database
+├── library/
+│   ├── discovery/
+│   ├── watcher/
+│   ├── identity/
+│   └── preserve/
+├── knowledge/
+│   ├── ingestion/            # parse once, build hierarchy, version index
+│   ├── hierarchy/            # Document / Section / Child
+│   ├── retrieval/
+│   │   ├── query.py          # QueryPlan and metadata filters
+│   │   ├── routes.py         # lexical / vector / hierarchy routes
+│   │   ├── fusion.py         # weighted RRF
+│   │   ├── rerank.py         # Reranker protocol and adapters
+│   │   ├── diversify.py      # content caps and duplicate control
+│   │   ├── expand.py         # Section / neighbor recovery
+│   │   ├── compress.py       # extractive EvidenceSpan selection
+│   │   └── assemble.py       # token-budgeted ContextPack
+│   └── answering/
+│       ├── generate.py
+│       └── validate.py
+├── workspace/
+└── db/
+    ├── schema.py
+    └── migrations/
 ```
 
-完全不依赖任何模型，不受 API 可用性/成本/限流影响。**这一阶段跑通，产品已经是一个可用的"全机文件统一索引 + 搜索"工具。**
+这是目标边界，不要求一次搬完。迁移期间旧模块作为适配层存在，每一步必须保持测试可运行。
 
-### V1.5 — AI 分类与带引用问答
+## 3. 知识数据模型
 
-```
-LLM 分类 → 向量索引 → 混合检索（RRF）→ 带引用问答 → 文件书
-```
+### 3.1 保留的现有模型
 
-### 明确不做（V1 全阶段）
+以下结构已经验证，继续作为资料与知识的连接层：
 
-Windows 安装包、OCR、图片内容理解、音视频转写、压缩包正文索引、跨设备同步、模型微调、LLM Wiki、Agentic RAG、Reranker。
-
-> LLM Wiki 与 Agentic RAG 需要在普通 RAG 有评测基线之后才有意义。§18.2 的评测集即是这条基线。
-
----
-
-## 4. 技术选型
-
-| 层 | 选型 | 备注 |
-|---|---|---|
-| 桌面壳 | Electron + electron-vite | 窗口、托盘、目录选择、通知、密钥加密、sidecar 生命周期 |
-| 前端 | Vue 3 + TypeScript + Pinia | 仅通过生成的 API 客户端访问后端 |
-| 后端 | FastAPI + Pydantic v2 + SQLAlchemy 2.0 + Alembic | Python sidecar |
-| **Python** | **3.12** **[改]** | 见 §4.1 |
-| **包管理** | **uv** **[改]** | 见 §4.2 |
-| 关系库 | SQLite（WAL 模式） | 元数据、任务、索引 |
-| 全文索引 | SQLite FTS5 | 与主库同文件 |
-| **向量索引** | **sqlite-vec** **[改]** | 见 §4.3 |
-| 文档解析 | PyMuPDF、python-docx、markdown-it-py | |
-| 文件监听 | watchdog（FSEvents 后端） | |
-| **文件身份** | **volume_id + inode** **[新]** | 见 §8 |
-| 打包 | PyInstaller + electron-builder | |
-
-### 4.1 **[改]** Python 3.14.5 → 3.12
-
-本机是 Python 3.14.5。PyMuPDF、pydantic-core、sqlite-vec、PyInstaller 在 3.14 上要么缺预编译 wheel、要么打包 hook 未跟进，会在 `uv sync` 或 PyInstaller 阶段直接失败。
-
-sidecar 锁定 **3.12**，uv 管理独立虚拟环境，**不复用系统 Python**（打包产物必须自带解释器）。
-
-### 4.2 **[改]** 引入 uv
-
-本机 uv / poetry / pipx 均未安装。打包需要可复现依赖树（`uv.lock`）。选 uv 的额外理由：能直接安装并固定 Python 3.12 解释器本身（`uv python install 3.12`），一步解决 §4.1。
-
-### 4.3 **[改]** LanceDB → sqlite-vec
-
-1. **打包成本**：LanceDB 带原生扩展，PyInstaller 下需手写 hook；sqlite-vec 是单文件 SQLite 扩展，与已必须打包的 SQLite 同源。而打包是本项目最高风险项。
-2. **量级匹配**：V1 规模几千至几万 chunk，暴力检索延迟可忽略。LanceDB 的列式存储/大规模 ANN 优势用不上。
-3. **事务一致性**：向量、元数据、FTS5 在同一 SQLite 文件同一事务内，索引更新天然原子。
-
-代价是百万 chunk 级需迁移，因此**所有检索代码只依赖 `Retriever` 抽象**（§16.3），换实现时上层零改动。
-
-> 已有的 `~/Documents/Agent/rag-system` 用 ChromaDB，那套经验在此不适用 —— Chroma 需独立服务进程，不适合桌面打包分发。
-
----
-
-## 5. 仓库结构与契约管线
-
-### 5.1 目录结构
-
-```
-~/Documents/code/ai-file-library/
-├── PLAN.md
-├── package.json
-├── apps/desktop/
-│   ├── electron/
-│   │   ├── main.ts
-│   │   ├── sidecar.ts          # Python sidecar 生命周期
-│   │   ├── secrets.ts          # safeStorage 密钥管理
-│   │   ├── permissions.ts      # macOS TCC 自检与引导
-│   │   └── tray.ts
-│   ├── src/                    # Vue 渲染进程
-│   └── electron-builder.yml
-├── services/api/
-│   ├── pyproject.toml / uv.lock
-│   ├── alembic/
-│   └── app/
-│       ├── domain/             # 纯逻辑，无 IO，便于单测
-│       │   ├── states.py
-│       │   ├── identity.py     # inode 身份与重定位
-│       │   ├── dedupe.py
-│       │   └── naming.py
-│       ├── discovery/          # [新] 来源自动发现
-│       │   ├── registry.py     # 已知应用清单
-│       │   ├── probes.py       # bundle 探测 / 配置读取 / 启发式扫描
-│       │   └── volatile.py     # 易失性判定
-│       ├── watcher/
-│       │   ├── observer.py
-│       │   ├── stability.py
-│       │   └── scanner.py      # 定时全量扫描兜底
-│       ├── organize/           # [改] 原 archive/，现为索引层组织
-│       │   ├── classify_rules.py
-│       │   ├── preserve.py     # 保全副本 / 可选真实归档
-│       │   └── undo.py
-│       ├── classify/           # V1.5 LLM
-│       ├── index/
-│       │   ├── chunker.py
-│       │   ├── fts.py
-│       │   ├── vec.py
-│       │   └── retriever.py
-│       ├── api/
-│       └── db/
-└── packages/contracts/
-    ├── generate.ts
-    └── generated/              # 产物，禁止手写
+```text
+sources 1 -> N files N -> 1 contents
 ```
 
-### 5.2 契约单一来源
+- `files` 表示磁盘上的具体文件，以 `(volume_uuid, inode)` 追踪身份。
+- `contents` 表示内容实体，以 SHA-256 去重。
+- 多个文件副本共享一份内容和知识索引。
+- 文件移动只更新路径；内容不变时不重新解析或嵌入。
 
-后端 Pydantic 模型是唯一真相：
+### 3.2 三层知识结构
 
-```
-FastAPI app → openapi.json ─┐
-                            ├─→ openapi-typescript → packages/contracts/generated/
-Event union → events.json ──┘
-```
-
-前后端**禁止各自维护重复类型定义**。CI 中重新生成并对比，有差异即失败（防手改产物）。
-
-### 5.3 **[改]** SSE 事件纳入契约
-
-初版只让 REST 走 OpenAPI，但 SSE payload 不在 OpenAPI 覆盖范围内，会退化成前后端各写一份、静默漂移 —— 而且漂移无编译错误，只表现为"某个进度条不动了"。
-
-修正：所有 SSE 事件用 Pydantic 定义为**判别联合**（按 `type` 判别），导出 JSON Schema，与 OpenAPI 一起生成 TS。前端 `switch` 时获得穷尽性检查。
-
----
-
-## 6. 运行架构与安全
-
-### 6.1 进程模型
-
-```
-┌─────────────────────────────────────────┐
-│ Electron 主进程                          │
-│  • 窗口 / 托盘 / 通知                     │
-│  • 原生 dialog（授权引导用）               │
-│  • safeStorage 密钥加解密                 │
-│  • sidecar 启停与守护                     │
-└──────────┬──────────────────────────────┘
-           │ stdin: {token, api_key}
-           │ stdout: {port}
-           ▼
-┌─────────────────────────────────────────┐
-│ Python sidecar (FastAPI)                │
-│  127.0.0.1:<随机端口> / Bearer <令牌>     │
-└─────────────────────────────────────────┘
-           ▲ 生成的 TS 客户端
-┌──────────┴──────────────────────────────┐
-│ Vue 渲染进程                              │
-└─────────────────────────────────────────┘
+```text
+contents                         Document 层
+└── sections                     Section 层，可嵌套
+    └── chunks                   Child 层，原始证据
 ```
 
-### 6.2 端口与鉴权
+**Document 层**
 
-- FastAPI 绑定 **127.0.0.1 + 端口 0**（内核分配），启动后将端口写入 stdout。
-- 所有请求需 `Authorization: Bearer <令牌>`，令牌为每次启动随机 32 字节。
-- **[改] 令牌经 stdin 传入，不走命令行参数** —— 命令行参数在 `ps` 中对本机任意进程可见，等于公开令牌。API 密钥同理。
+- 载体：现有 `contents`，增加或关联文档表示。
+- 内容：标题、文件类型、来源集合、时间、结构化大纲、抽取式摘要。
+- 用途：全库软路由、文档级相似搜索、范围提示。
+- 禁止：直接作为最终引用证据。
 
-### 6.3 密钥管理
+**Section 层**
 
-模型 API 密钥用 Electron `safeStorage`（背后是 Keychain）加密存于主进程，**仅在 sidecar 启动时经 stdin 传入，常驻内存**。不写数据库、不写日志、不出现在任何 SSE 事件或 API 响应中。日志层加正则脱敏兜底。
+- 新表 `sections`。
+- 字段：`id`、`content_id`、`parent_id`、`ordinal`、`heading_path`、`title`、`summary_text`、`start_chunk_ordinal`、`end_chunk_ordinal`、`text_hash`、`token_count`、`index_version`。
+- 用途：主题级软路由、Child 命中后的 Parent 恢复、章节浏览。
+- `summary_text` 优先采用抽取式表示；若以后引入生成式摘要，必须标记模型和版本，且不得参与最终引用。
 
-### 6.4 **[改]** macOS TCC 权限自检
+**Child 层**
 
-索引模式下这一条**更加关键** —— 因为要访问的目录远比 v2 多（全部自动发现的来源）。
+- 保留现有 `chunks`，新增 `section_id`、`start_offset`、`end_offset`、`token_count` 和 `index_version`。
+- 内容：约 300-600 字的完整语义片段，表格和代码保持结构完整。
+- 用途：FTS、向量召回、Rerank、压缩和引用。
+- 所有 EvidenceSpan 必须能够映射回 `chunk_id + offset + locator`。
 
-初版把目录当普通路径处理，但本机微信实际路径是 `~/Library/Containers/com.tencent.xinWeChat/Data/...`，沙盒容器目录。两个问题：
+### 3.3 索引表
 
-**① 静默失败。** 打包后的 Electron 访问 `~/Library/Containers` 会触发 TCC 授权。**被拒绝时 watchdog 不抛异常，只是永远收不到事件。** 用户以为在工作，实际什么都没发生 —— 最坏的一类失败。
+- `chunks_fts`：jieba 词法索引。
+- `chunks_fts_tri`：trigram 子串索引。
+- `chunks_vec`：Child 向量。
+- `sections_vec`：Section 表示向量。
+- `documents_vec`：Document 表示向量。
+- `retrieval_runs`：一次检索的配置、耗时、降级状态和最终结果。
+- `retrieval_candidates`：各路候选、route rank、RRF 分和 Rerank 分；默认只在调试或评测模式持久化。
 
-**② 需主动自检 + 引导。** 启用来源时立即真实读取（`os.listdir` + 读一个文件的前若干字节），失败则明确提示：
+sqlite-vec 虚拟表按层分开，避免复合实体类型破坏 rowid 映射。所有表均记录 `model_id` 或 `index_version`，禁止不同模型向量混用。
 
-> 无法访问该目录。请前往 **系统设置 → 隐私与安全性 → 文件与文件夹**，允许本应用访问。
+### 3.4 稳定中间对象
 
-并提供 `x-apple.systempreferences:` 跳转按钮。
+检索管线使用明确的数据契约：
 
-**每次启动对所有启用中的来源重新自检** —— 用户可能事后撤销授权，或系统升级后权限重置。结果在设置页以状态点呈现，异常时托盘角标提醒。
-
-### 6.5 sidecar 生命周期
-
-随 Electron 退出而终止（`will-quit` 发 SIGTERM，超时 SIGKILL）。异常退出时主进程自动重启，重启后扫描非终态记录恢复任务队列（§10.3）。连续 3 次启动失败则停止重试并在 UI 报错、提供日志导出。
-
----
-
-## 7. 来源自动发现
-
-> **[架构改 B]** 用户不再从零配置目录。系统主动探测本机安装了哪些应用、它们把文件放在哪，生成候选列表供用户一键启用。
-
-### 7.1 本机实测结果
-
-编写方案时对本机做了探测，作为发现策略的依据：
-
-| 目标 | 探测结果 |
-|---|---|
-| 微信 | 容器存在 `~/Library/Containers/com.tencent.xinWeChat/`，但用户接收文件目录是**带 hash 的动态路径**，硬编码不可行 |
-| QQ | 容器存在 `~/Library/Containers/com.tencent.qq/` |
-| Chrome | 存在 `~/Library/Application Support/Google/Chrome/Default` |
-| Edge | 存在 `~/Library/Application Support/Microsoft Edge/Default` |
-| Safari | `DownloadsPath` 未设置 → 使用默认 `~/Downloads` |
-| Firefox | 未安装 |
-| Mail 附件 | 无 `Mail Downloads` 目录 |
-
-**结论：三种探测手段缺一不可。**
-
-### 7.2 三种探测手段
-
-**① Bundle 存在性探测**
-维护已知应用清单（bundle id → 文件目录模式）。检查容器/支持目录是否存在，存在则进入下一步。
-
-**② 应用配置读取**（最准确，优先）
-
-| 应用 | 读取方式 |
-|---|---|
-| Chrome / Edge / Brave | 解析 `<Profile>/Preferences` JSON 的 `download.default_directory`；缺省则 `~/Downloads` |
-| Safari | `defaults read com.apple.Safari DownloadsPath`；未设置则 `~/Downloads` |
-| Firefox | `prefs.js` 中 `browser.download.dir`；未设置则 `~/Downloads` |
-
-多 Profile 时逐个读取，去重后合并。
-
-**③ 启发式扫描**（应对微信这类动态路径）
-
-已知模式带通配：
-
-```
-~/Library/Containers/com.tencent.xinWeChat/Data/Library/Application Support/
-    com.tencent.xinWeChat/*/*/Message/MessageTemp/*/File
+```text
+QueryPlan
+  -> CandidateSet
+  -> FusedCandidates
+  -> RankedCandidates
+  -> ExpandedEvidence
+  -> EvidenceSpans
+  -> ContextPack
+  -> GroundedAnswer
 ```
 
-glob 展开后，按以下规则筛选：
-- 目录存在且可读
-- 近 90 天内有文件写入（`mtime`）
-- 目录内文件数 > 0
+每个对象保留 `content_id`、`section_id`、`chunk_id`、分数来源和 trace id。禁止后续阶段靠裸字典猜测字段语义。
 
-再按 `mtime` 降序取前 N 个。这样即使微信升级改了版本号/hash 段，也能自动跟上。
+## 4. 知识摄入管线
 
-**探测失败不算错误** —— 应用可能安装了但从没接收过文件。静默跳过，不在候选列表里制造噪音。
-
-### 7.3 默认候选清单
-
-| 来源 | 路径策略 | 易失 | 默认建议 |
-|---|---|---|---|
-| 浏览器下载 | 读配置，多数为 `~/Downloads` | 否 | **建议启用** |
-| 桌面 | `~/Desktop` | 否 | 建议启用 |
-| 文稿 | `~/Documents` | 否 | 建议启用（排除本应用自己的目录） |
-| 微信接收 | 启发式扫描 | **是** | 建议启用 |
-| QQ 接收 | 启发式扫描 | **是** | 建议启用 |
-| AirDrop | 落在 `~/Downloads`，用 `com.apple.quarantine` 扩展属性区分来源 | 否 | 随下载目录 |
-| Mail 附件 | `~/Library/Containers/com.apple.mail/Data/Library/Mail Downloads` | **是** | 存在才提示 |
-| 截图 | 读 `defaults read com.apple.screencapture location` | 否 | 默认不启用（噪音大） |
-
-### 7.4 首次启动引导
-
-```
-┌────────────────────────────────────────────┐
-│  发现了 5 个文件来源                          │
-│                                            │
-│  ☑ 浏览器下载    ~/Downloads          持久   │
-│  ☑ 桌面          ~/Desktop            持久   │
-│  ☑ 微信接收      …/MessageTemp/…    ⚠ 易失  │
-│  ☑ QQ 接收       …/  			     ⚠ 易失  │
-│  ☐ 截图          ~/Desktop           噪音大  │
-│                                            │
-│  ⚠ 易失来源的文件可能被应用自动清理，           │
-│    可在设置中开启自动保全副本。                │
-│                                            │
-│  [ 全部启用 ]  [ 自定义 ]  [ 手动添加目录 ]     │
-└────────────────────────────────────────────┘
+```text
+source file
+  -> stability check
+  -> identity + SHA-256 dedupe
+  -> parse Blocks once
+  -> build Document / Section hierarchy
+  -> create Child chunks
+  -> build layer representations
+  -> write relational + FTS + vectors atomically
+  -> activate index version
 ```
 
-**关键**：自动发现的来源**默认不启用**，必须用户勾选确认（§1 约束 4）。自动监听用户没同意的目录是隐私问题，不能因为"方便"而跳过。
+### 4.1 解析一次
 
-启用时逐个执行 TCC 自检（§6.4），失败的项在列表里就地显示授权引导，不阻塞其他项。
+解析器只生成一次结构化 Blocks，分类、层级构建、分片和索引复用同一结果。不得为了 Document、Section 和 Child 三层重复解析文件。
 
-### 7.5 持续发现
+### 4.2 层级构建
 
-- 应用后台每 24 小时重跑一次探测。
-- 发现新来源（用户新装了应用、微信升级改了路径）→ 托盘通知"发现新来源：xxx，是否启用？"
-- 已启用来源的路径失效（微信升级导致旧 hash 目录消失）→ 自动重新探测并**迁移绑定**，保留该来源下已索引文件的关联。
+- PDF：优先使用目录和标题特征；没有可靠标题时按页组形成弱 Section。
+- DOCX/Markdown：使用 Heading 层级直接构建 Section 树。
+- TXT：按显式标题、空行和长度形成弱 Section，并标记低结构置信度。
+- 表格与代码块不得被无边界切碎。
+- 标题路径进入 Section 表示和 Child 嵌入文本，但引用正文仍保留原文。
 
-### 7.6 手动添加
+### 4.3 增量更新
 
-保留手动添加目录的入口，用于自动发现覆盖不到的场景（NAS 挂载点、外置硬盘、自定义工作目录）。
+- Child 继续以 `text_hash` 复用嵌入。
+- Section 以规范化标题路径、覆盖 Child hashes 和自身 `text_hash` 判断复用。
+- Document 表示由结构和 Section hashes 派生。
+- 修改一个 Child 时，只重建受影响的 Child、祖先 Section 和 Document 表示。
+- 新索引在影子版本中构建，完成后通过一个事务切换 active version。
 
----
+### 4.4 原子性
 
-### 7.7 **[v5 新增]** 规模控制与排除规则
+关系数据、FTS 和向量必须保持可验证的一致性。任何阶段失败时：
 
-> **审计发现（blocking）**：v4 建议默认启用 `~/Documents` / `~/Desktop`，却没有任何忽略规则、扩展名策略、package 目录识别或规模上限，而 §11.1 还要求每 10 分钟全量扫描。开发者用户的 `~/Documents` 里典型有 node_modules（单项目 3~10 万小文件）、DerivedData、`.git` 对象库、`.photoslibrary`（内部数万文件）。点一次"全部启用"就会插入数十万行垃圾记录、淹没文件库视图、并让兜底扫描每 10 分钟 stat 五十万个 inode。
+- 当前 active index 继续可查。
+- 新影子索引标记失败并可清理。
+- 不允许半完成版本进入检索池。
+- 原始文件不受影响。
 
-**① 目录排除清单（硬编码，不下钻）**
+## 5. 核心检索管线
 
-```
-node_modules  .git  .svn  .hg  Pods  vendor  target
-DerivedData  build  dist  out  .next  .nuxt  .venv  venv
-__pycache__  .pytest_cache  .mypy_cache  .tox
-Library  .Trash  .Spotlight-V100  .fseventsd  .DocumentRevisions-V100
-```
+### 5.1 固定顺序
 
-**② macOS package 不下钻**
-
-带 `com.apple.package` 属性，或后缀属于 `.app / .photoslibrary / .xcodeproj / .xcworkspace / .bundle / .framework / .rtfd / .pages / .numbers / .key` 的目录，**整体视为一个文件**，不递归其内部。
-
-> `.pages` / `.numbers` / `.key` 是目录形态的文档 —— 下钻会得到一堆 XML 碎片，把它当单文件才是用户心智。
-
-**③ 扩展名策略（两级）**
-
-| 级别 | 扩展名 | 处理 |
-|---|---|---|
-| 全文索引 | `.pdf .docx .md .markdown .txt` | 解析正文 + 分片 + 嵌入 |
-| 仅元数据 | `.xlsx .pptx .csv .png .jpg .heic .mp4 .zip .key .pages …` | 登记、去重、分类，**不解析正文** |
-| 忽略 | 其余（`.o .pyc .lock .DS_Store .tmp` 等）+ 无扩展名可执行文件 | 不入库，只计数 |
-
-用户可在设置中调整，但**默认必须是白名单而非黑名单** —— 黑名单永远列不全。
-
-**④ 硬上限**（超限则跳过并记入"已跳过"统计，不静默）
-
-| 项 | 默认值 |
-|---|---|
-| 单文件大小（全文索引） | 200 MB |
-| 单文件大小（仅元数据） | 无限制 |
-| 目录递归深度 | 12 层 |
-| 单来源文件数软上限 | 50,000（超出时暂停并提示用户收窄范围） |
-
-**⑤ 启用前预扫描**
-
-用户勾选来源、点击启用时，**先做一次只计数不入库的预扫描**，展示：
-
-> `~/Documents` 下发现 **487,231** 个文件，按当前规则将索引 **1,842** 个（其余为 node_modules / 构建产物 / 不支持的类型）。
-> [ 确认启用 ]　[ 调整规则 ]
-
-这一步把 blocking 风险转成了用户可见的决策点。
-
-### 7.8 **[v5 新增]** iCloud / 云端占位文件
-
-> **审计发现（blocking）**：`~/Documents` 与 `~/Desktop` 正是 macOS「桌面与文稿」iCloud 同步的两个目录。开启「优化 Mac 储存空间」后（磁盘紧张时系统自动驱逐旧文件为占位符），本地可能只驻留 10 GB 而云端有 200 GB。而 §11.2 要对每个文件流式读取算 SHA-256、§12.2 要解析正文 —— **每一次 read 都会触发 macOS 按需 materialize**，把文件从云端拉下来。结果是应用在后台把 200 GB 全量下载，跑满流量并写满磁盘。
-
-**判定**：`stat` 的 `st_flags & SF_DATALESS`（0x40000000），或文件名匹配 `.<name>.icloud` 占位形态。同样适用于 Dropbox / OneDrive 的按需下载文件。
-
-**新增状态 `cloud_placeholder`**（§10.1）：
-
-- **不读取内容** —— 不算哈希、不解析、不索引正文
-- 仅登记元数据（文件名、扩展名、大小、时间、来源），可按文件名搜索
-- UI 标注「云端未下载」，提供「下载并索引」按钮（显式用户操作才 materialize）
-- 文件被系统或用户下载到本地后，FSEvents 会触发 `on_modified`，此时自动转入正常流程
-
-**设置项**：`索引云端未下载的文件`，**默认关闭**。开启时明确警告会产生下载流量与磁盘占用。
-
-**资料库根目录默认位置改为 `~/Library/Application Support/AIFileLibrary/`**，不再默认放 `~/Documents` —— 后者在 iCloud 同步范围内，会导致保全副本与数据库被同步、并可能被驱逐为占位符。
-
----
-
-## 8. 文件身份与追踪
-
-> **[新]** 索引模式下文件留在原地，用户随时可能在 Finder 里移动、重命名它。如果索引以路径为主键，这些操作会立刻让索引失效。这是索引模式必须解决的核心问题，Spotlight 的做法值得直接借鉴。
-
-### 8.1 身份三元组
-
-每个文件记录三个标识，用途不同：
-
-| 标识 | 用途 | 稳定性 |
-|---|---|---|
-| `(volume_uuid, inode)` | **主身份** | 移动、改名后不变；跨卷复制后改变 |
-| `sha256` | 内容去重、重定位兜底 | 内容不变则不变 |
-| `path` | 显示与打开 | 最易变，仅作缓存 |
-
-**主键用 `(volume_uuid, inode)`，不用路径。** 这样用户在 Finder 里移动/重命名文件，索引自动跟上，无需重新解析、无需重新向量化。
-
-`volume_uuid` 通过 `diskutil info -plist` 或 `statfs` 获取，用于区分不同卷上 inode 号碰撞的情况。
-
-### 8.2 事件到身份的映射
-
-| FSEvents 事件 | 处理 |
-|---|---|
-| `on_created` | 新文件 → 稳定性检测 → 登记 |
-| `on_moved` | 查 `(volume_uuid, inode)`：命中则**仅更新 path**，不重新解析；未命中则按新文件处理 |
-| `on_deleted` | 查 inode：命中则置 `path_missing`，**保留索引**（可能是移到了未监听的目录）→ 触发重定位 |
-| `on_modified` | 比对 `mtime` + `size`，变化则重新计算哈希，变了才重新索引 |
-
-**`on_moved` 走 inode 这条路径是索引模式的性能关键** —— 否则用户整理一次 Downloads 目录，全库就要重新解析一遍。
-
-### 8.3 重定位（文件找不到了）
-
-按代价从低到高：
-
-1. **inode 直查**：`(volume_uuid, inode)` 是否还能解析到某个路径（macOS 可通过 `volfs` / `getattrlist` 路径反查）。
-2. **哈希查找**：在所有已启用来源 + 资料库根目录下，找 `size` 相同的文件，逐个比对 SHA-256。
-3. **标记失效**：以上都失败 → 状态置 `missing`，索引**保留 30 天**（可配置）。期间若在任何来源发现相同哈希的文件，自动重新绑定。
-4. **过期清理**：超期后清理 chunk 与向量，保留元数据供用户追溯（"这个文件曾经存在，最后见于 xxx"）。
-
-**永远不因为文件找不到就立刻删除索引** —— 外置硬盘拔掉、NAS 断连是常态，重插回来应当无缝恢复。卷离线时整卷的文件统一置 `volume_offline`，不走上述流程。
-
-### 8.4 易失来源的额外处理
-
-微信/QQ 缓存被清理时，文件真的消失了（不是移动）。对易失来源：
-
-- `missing` 状态附带明确原因："微信已清理此缓存文件"
-- 若此前做过保全副本 → 自动切换指向副本，用户无感
-- 未保全 → 提示"文件已被微信清理，索引内容仍可搜索但无法打开原文"
-
-这是 §2.5 保全机制存在的直接理由。
-
----
-
-## 9. 数据模型
-
-同一个 SQLite 文件（WAL 模式）。
-
-### `sources` — 来源
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `id` | INTEGER PK | |
-| `name` | TEXT | "微信接收" |
-| `kind` | TEXT | `browser` / `im` / `system` / `manual` |
-| `path` | TEXT | 当前绑定的绝对路径 |
-| `path_pattern` | TEXT NULL | 启发式来源的 glob 模式，用于重新探测 |
-| `discovered_by` | TEXT | `bundle` / `config` / `heuristic` / `manual` |
-| `volatile` | BOOL | 是否易失（§2.5） |
-| `auto_preserve` | BOOL | 易失来源是否自动保全副本，默认 false |
-| `enabled` | BOOL | **默认 false**，需用户确认 |
-| `permission_ok` | BOOL | 最近一次 TCC 自检 |
-| `permission_checked_at` | TIMESTAMP | |
-
-### `files` — 文件
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `id` | INTEGER PK | |
-| `volume_uuid` | TEXT | **身份（1/2）** |
-| `inode` | INTEGER | **身份（2/2）**，与 volume_uuid 联合唯一索引 |
-| `sha256` | TEXT INDEX | 内容哈希 |
-| `path` | TEXT | 当前路径（缓存，可变） |
-| `name` | TEXT | 当前文件名 |
-| `origin_path` | TEXT NULL | 首次发现时的路径（保全后追溯用） |
-| `preserved_path` | TEXT NULL | 保全副本路径 |
-| `source_id` | FK → sources | |
-| `ext` / `mime` / `size` | | |
-| `state` | TEXT | 见 §10 |
-| `error_code` / `retry_count` | TEXT NULL / INTEGER | |
-| `category_id` | FK → categories NULL | |
-| `confidence` | REAL | 分类置信度 |
-| `confirmed_by_user` | BOOL | 用户是否手动确认/修正过 |
-| `mtime` / `detected_at` / `missing_since` | TIMESTAMP | |
-| **`content_id`** | **FK → contents** | **[v5]** 指向内容实体，见下 |
-| **`is_dataless`** | **BOOL** | **[v5]** iCloud/Dropbox 占位文件（§7.8） |
-| **`indexed_at`** | **TIMESTAMP NULL** | **[v5]** 上次索引完成时间，用于判断是否需重建 |
-
-唯一索引：`(volume_uuid, inode)`。
-其余索引：`sha256`、`content_id`、`state`、`source_id`、`volume_uuid`、`category_id`、`(state, source_id)`。
-
-> `volume_uuid` 索引是 §14 `volume.offline` 事件带 `file_count` 所必需的；`state` 索引支撑「待确认」队列与重启恢复扫描。
-
-### **[v5 新增]** `contents` — 内容实体
-
-> **审计发现（major）**：v4 让 `duplicate` 文件"复用已有文件的 chunks 并建立引用关系"，但 `chunks.file_id` 是单值外键，这个关系**无处存储**。更糟的是：原件转 `missing` 超期被清理时会级联删除 chunks，让磁盘上完好的副本失去全部索引，而 `duplicate` 是终态、没有任何重新索引的路径。
-
-**修正：把"内容"从"文件"中分离出来。** chunks 挂在内容上，不挂在文件上。
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `id` | INTEGER PK | |
-| `sha256` | TEXT UNIQUE | 内容唯一标识 |
-| `size` | INTEGER | |
-| `parse_state` | TEXT | `pending` / `parsing` / `indexed` / `parse_failed` / `unsupported` |
-| `chunk_count` | INTEGER | |
-| `embedding_model_id` | TEXT NULL | |
-| `indexed_at` | TIMESTAMP NULL | |
-
-- **N 个 `files` : 1 个 `contents`**（内容相同的文件共享一条）
-- `chunks.content_id` → `contents.id`，**不再直接挂 file_id**
-- `duplicate` 只是"该 content 已有其他 file 指向"的一个视图状态，不需要额外的引用表
-- **任一 file 存活，content 与其 chunks 就保留**；所有指向该 content 的 file 全部被清理后，才级联删除 chunks
-
-这一张表同时解决了四个问题：duplicate 的引用载体、原件消失导致副本失去索引、重复向量化、以及保全副本切换身份后的索引延续（§8.4）。
-
-### `categories` — 分类树（**纯虚拟，磁盘上不存在对应目录**）
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `id` | INTEGER PK | |
-| `parent_id` | FK → categories NULL | 树形层级 |
-| `name` | TEXT | |
-| `sort_order` | INTEGER | 同级排序 |
-
-> **[v6] 删除了 `rel_path` 字段。**
->
-> v5 的 `rel_path` 只有两个用途：符号链接镜像目录、可选真实归档的目标路径。**v6 砍掉镜像目录后，分类不再对应磁盘上的任何位置** —— 它纯粹是索引层的一个字段。
->
-> **这正是本产品分类的定义**：分类是**文件信息的分类**，不是文件目录的分类。用户在界面上按「工作 > 合同 > 2026」浏览，看到的是一个虚拟视图；点进去按 `files.path` 在 Finder 里定位原文件。**磁盘上永远没有一个叫「合同」的文件夹。**
-
-```
-        磁盘上（永不改动）                    索引层（分类只活在这里）
-┌────────────────────────────┐      ┌──────────────────────────────┐
-│ ~/Downloads/合同.pdf        │◀─────│ file#1  category=工作>合同>2026│
-│ ~/Library/.../微信/报表.xlsx │◀─────│ file#2  category=工作>财务     │
-│ ~/Desktop/临时/说明.docx     │◀─────│ file#3  category=工作>产品     │
-└────────────────────────────┘      └──────────────────────────────┘
-   路径只是「怎么找到它」                树形只是「怎么组织信息」
+```text
+1. QueryPlan：意图、范围、时间、来源、文件类型和会话指代
+2. Hierarchy routing：Document / Section 软路由
+3. Deep retrieval：Child 多路深召回
+4. Fusion：weighted RRF 粗融合
+5. Rerank：Child 级精排
+6. Diversify：内容去重、来源与文档多样性控制
+7. Expand：恢复 Section 和相邻 Child
+8. Compress：抽取查询相关 EvidenceSpan
+9. Assemble：按 token 预算装配 ContextPack
+10. Generate + Validate：生成、引用校验、拒答
 ```
 
-**`files.category_id` 单选**（一个文件属于且仅属于一个分类节点）；跨维度的组织用 `tags` 多对多，两者互补。
+阶段顺序属于架构契约。特别是 Rerank 必须早于 Parent 扩展和压缩。
 
-> **[v6] LLM 只能返回本表已存在的 `id`**（§16.1）。v5 时这条约束是为了防止模型生成恶意路径；v6 分类不再对应路径，该风险自然消失，但约束保留 —— 因为它同时保证了模型不会凭空发明分类节点。模型返回未知 id → 判低置信度走人工确认。
+### 5.2 QueryPlan
 
-### `tags` / `file_tags`
+QueryPlan 至少包含：
 
-多对多。索引模式下标签比目录更自然，是主要的组织维度之一。
+- 原始问题和规范化检索文本。
+- 当前范围：全库、文件书、专题、选中文档。
+- 明确的来源、时间、扩展名和标签过滤条件。
+- 元数据问题或正文问题的路由结果。
+- 会话指代解析结果及其置信度。
 
-### `rules` — 分类规则
+元数据问题优先走 SQL。无法可靠判断时走正文检索，不得让 LLM 自由生成 SQL。
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `id` | INTEGER PK | |
-| `priority` | INTEGER | 小的先匹配 |
-| `match_ext` / `match_source_id` / `match_name_pattern` | TEXT NULL | AND 关系，NULL 表示不限 |
-| `category_id` | FK → categories | |
-| `confidence` | REAL | |
-| `learned_from_file_id` | FK → files NULL | 由用户修正回流生成（§11.4） |
+### 5.3 分层软路由
 
-### `tasks` — 任务
+- Document 和 Section 向量各自召回候选。
+- 命中的上层节点为其 Child 提供有限加权。
+- 未命中上层的 Child 仍可通过词法或向量路线进入候选。
+- 上层加权系数必须经评测标定，不能形成硬过滤。
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `id` | INTEGER PK | |
-| `file_id` | FK → files **NULL** | **[v5]** 非文件级任务（全量重建、规则回填）此列为空 |
-| `kind` | TEXT | `stabilize` / `classify` / `index` / `preserve` / `archive_move` / `relocate_lookup` / `index_rebuild` / `rule_backfill` |
-| **`payload`** | **TEXT (JSON)** | **[v5]** 非文件级任务的参数（如 rule_id、重建范围） |
-| `status` | TEXT | pending / running / done / failed |
-| `attempts` / `next_run_at` / `last_error` | | 指数退避 |
-| **`progress_done` / `progress_total`** | **INTEGER** | **[v5]** 支撑 §12.8 的 `index.rebuild_progress` 事件 |
+这保证上层摘要质量不足时不会吞掉正确原文。
 
-**[v5] 唯一约束 `(kind, file_id)` WHERE status IN ('pending','running')** —— 防止同一文件的同类任务重复入队（FSEvents 抖动时极易发生）。
+### 5.4 Child 混合深召回
 
-> **[v5] `kind` 命名修正**：v4 用 `relocate` 同时指代"丢失文件的重定位查找"（§8.3）和"可选真实归档"（§13 API）—— 一词两义，实施者必混。现拆为 `relocate_lookup`（查找）与 `archive_move`（归档移动），全文统一。
+保留当前四路并统一输出 Candidate：
 
-### `operations` — 写盘操作日志（撤销依据）
+1. jieba FTS：正常中文词和中英文混排。
+2. trigram FTS：编号、专名、错别字和子串。
+3. LIKE 子串：短词和分词失败兜底，只在必要时启用。
+4. sqlite-vec：语义改写和无字面重合问题。
 
-索引模式下这张表只记录**真正写盘**的操作（保全副本、可选归档），分类变更不进这里（分类变更走 `file_history`，成本极低）。
+召回深度由评测决定，初始基线为词法/向量各 Top 50-100。RRF 只负责高召回粗融合，不再承担最终头部排序。
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `id` / `file_id` | | |
-| `kind` | TEXT | `preserve` / `archive_move` |
-| `src_path` / `dst_path` | TEXT | |
-| `method` | TEXT | `copy` / `copy_verify_delete` |
-| `sha256_before` | TEXT | 撤销前校验 |
-| `undone` | BOOL | |
-| `created_at` | TIMESTAMP | |
+### 5.5 Rerank
 
-### `file_history` — 分类变更历史
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| **`id`** | **INTEGER PK** | **[v5]** v4 漏了主键 |
-| `file_id` | FK → files | |
-| `field` / `old` / `new` | TEXT | |
-| `by` | TEXT | `rule` / `llm` / `user` |
-| **`batch_id`** | **TEXT NULL** | **[v5]** 批量操作共用一个 id |
-| **`rule_id`** | **FK → rules NULL** | **[v5]** 由哪条规则导致 |
-| `at` | TIMESTAMP | |
-
-> **[v5] `batch_id` 是必需的**：§13 的 `POST /rules/{id}/backfill` 与 `POST /files/batch/classify` 一次影响数百行，没有批次标识就无法整批撤销 —— 用户只能一条条撤，实际等于不可撤销。
-
-### `settings` — 配置
-
-> **[v5 新增]**：v4 的 §13 提供 `GET/PATCH /settings`（资料库根目录、隐私开关、模型端点），但 §9 里**没有任何表存它**。
-
-单行表或 key-value 表均可。必须包含：`library_root`、`cloud_index_placeholders`（默认 false）、`privacy_cloud_ai_enabled`（默认 false）、`model_endpoint`、`embedding_model_id`、`confidence_threshold`、`db_schema_version`。
-
-**API 密钥不存这里**（§6.3，只在 Keychain 与运行时内存）。
-
-### `chunks` — 分片
-
-> **[v5] 相对 v4 补了六个字段。** v4 的 chunks 表装不下 §12 全章的要求：没有 `section_path`（只有语义不同的 `section`）、没有 parent/child 层级、没有 `bbox`（§12.6 的 PDF 高亮必需）、没有 `text_hash`（§12.5 的增量 diff 必需）。
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `id` | INTEGER PK | |
-| **`content_id`** | **FK → contents** | **[v5]** 挂内容而非文件，见 `contents` 表 |
-| **`layer`** | **TEXT** | **[v5]** `child`（检索用，嵌入）/ `parent`（送模型用，不嵌入） |
-| **`parent_id`** | **FK → chunks NULL** | **[v5]** child 指向其 parent |
-| `page` | INTEGER NULL | 起始页 |
-| **`page_end`** | **INTEGER NULL** | **[v5]** 跨页片的结束页 |
-| **`bbox`** | **TEXT (JSON) NULL** | **[v5]** `[{page, x0,y0,x1,y1}, …]`，一片可跨多个矩形 |
-| **`section_path`** | **TEXT** | **[v5]** 全文统一用此名，替代 v4 的 `section` |
-| `ordinal` | INTEGER | 内容内顺序 |
-| `text` | TEXT | |
-| **`text_hash`** | **TEXT** | **[v5]** `sha1(text)`，§12.5 增量 diff 用 |
-| **`token_count`** | **INTEGER** | **[v5]** §12.3 ⑦ 上下文预算用 |
-| `embedding_model_id` | TEXT NULL | 变更时触发重建 |
-
-索引：`content_id`、`(content_id, layer)`、`text_hash`、`parent_id`。
-
-**虚拟表只覆盖 child 层**（parent 不参与检索，否则同一段文字命中两次）：
-
-- `chunks_fts` — FTS5，**分词器见 §9.1**
-- `chunks_vec` — sqlite-vec，`rowid` 对齐 `chunks.id`
-
-### **[v5 新增]** 检索侧过滤的实现方式
-
-> **审计发现（major）**：§12.3 ③ 要求"两路都在过滤后的子集内执行（先过滤后检索）"，但 chunks 表没有任何分类/标签/来源/时间列，而 **sqlite-vec 的 KNN 查询无法直接携带任意 WHERE 条件**。v4 没说这个过滤具体怎么做。
-
-**方案：两段式。**
-
-1. 先在 `files` 上执行元数据过滤，得到 `content_id` 集合（走索引，毫秒级）
-2. 向量检索用 sqlite-vec 的 **`rowid IN (...)` 约束**限定候选；若候选集过大（> 5 万），改为**先取 top-k×4 再后置过滤**，并在日志中标记降级
-3. FTS5 侧直接 JOIN `files` 过滤
-
-**不在 chunks 表冗余分类/标签列** —— 那样每次改分类都要更新几十万行 chunk。§12.1 映射表中"改分类 → 更新 chunk 过滤元数据"这句表述**修正为：过滤元数据始终从 `files` 实时 JOIN 获得，chunk 侧无需变更**。
-
-### 9.1 **[v5 新增]** FTS5 中文分词（实测结论）
-
-> **审计发现（major）+ 本机实测确认**：v4 通篇把 FTS5 当作中文全文检索的既定方案，却从未指定 tokenizer。**这是 V1.0 核心功能的致命缺陷。**
-
-本机 SQLite 3.53.2 实测：
-
-| 分词器 | 查 `保修期`(3字) | 查 `保修`(2字) | 查 `验收`(2字) | 查 `二十四`(3字) |
-|---|---|---|---|---|
-| **默认 unicode61** | ✗ 0 命中 | ✗ | ✗ | ✗ |
-| **trigram** | ✓ | ✗ | ✗ | ✓ |
-| **jieba 分词后 + unicode61** | ✓ | ✗（未成词） | ✓ | ✓ |
-
-**默认配置下中文搜索全军覆没。** trigram 也只能部分救：它只索引 3 字符组，**2 字查询词一律落空** —— 而"保修""验收""甲方"这类双字词恰恰是中文最主流的查询形态。
-
-**结论：必须双索引并用。**
-
-```
-chunks_fts       ← jieba 分词后写入（空格分隔），unicode61
-                   主索引，负责成词查询，BM25 排序质量好
-chunks_fts_tri   ← 原文写入，tokenize='trigram'
-                   副索引，负责 2 字词、专有名词、编号、未登录词
-```
-
-查询时两路都查，结果并入 §12.3 ④ 的 RRF 融合（RRF 天然支持多路，无需额外调参）。
-
-**代价**：索引体积约为单索引的 2.2 倍。V1 数据量下可接受，写入 §18.1 的"索引库体积/1000 文件"观测项。
-
-**验收**：§18.1 增加阻塞项 —— **中文双字词检索必须命中**，测试用例含"保修""验收""甲方""发票""合同"。
-
-### `books` / `book_members`（V1.5）
-
-虚拟集合，多对多。
-
-### `chats` / `citations`（V1.5）
-
-`citations` 记录 `chat_id`、`file_id`、`chunk_id`、`page`、`bbox`、`snippet`。
-
-### 9.2 **[v5 新增]** 数据库位置、备份与损坏恢复
-
-> **审计发现（major）**：v4 **从未定义数据库文件放在哪里**，而 §13 的可配置项里有"资料库根目录"—— 实施者极可能把库放进资料库根目录，即放进 iCloud 同步范围（§7.8），导致多设备并发写坏库。更严重的是：§19 的 14 条风险登记里**没有一条是"数据库损坏或丢失"**，而 §4.3 的核心论证正是"把元数据、FTS5、向量全部放进同一个 SQLite 文件" —— 鸡蛋全在一个篮子里，却没有备份与恢复路径。
-
-**位置（固定，不可配置）**：
-
-```
-~/Library/Application Support/AIFileLibrary/
-├── library.db          # 主库（含 FTS5 + 向量）
-├── library.db-wal
-├── backups/
-│   └── library-<date>.db
-└── logs/
-```
-
-**不放在资料库根目录** —— 后者用户可配，可能落在 iCloud / 外置卷 / 网络卷上。
-
-**单实例互斥**：启动时对 `library.db` 取 `flock(LOCK_EX|LOCK_NB)`，失败则提示"应用已在运行"并退出。防止用户开两个实例并发写。
-
-**完整性与备份**：
-
-| 时机 | 动作 |
-|---|---|
-| 每次启动 | `PRAGMA quick_check`（快，秒级） |
-| 每周一次 / 手动 | `PRAGMA integrity_check`（全量） |
-| 每日首次启动 | `VACUUM INTO backups/library-<date>.db`，保留最近 7 份 |
-| 检出损坏 | 停止写入，UI 报错，提供三个选项：从最近备份恢复 / 导出可读数据后重建 / 仅重建索引 |
-
-**分级重建**（代价从低到高，不要一上来就全删）：
-
-1. 仅 FTS5 损坏 → `DELETE FROM chunks_fts; INSERT INTO chunks_fts SELECT …` 从 chunks 重建，**不重新嵌入**
-2. 仅向量表损坏 → 从 chunks 重新嵌入（有成本，但元数据与正文都还在）
-3. chunks 损坏、files 完好 → 重新解析 + 嵌入
-4. files 也损坏 → 从备份恢复；无备份则全量重扫（用户所有分类标注丢失 —— 这就是为什么必须有每日备份）
-
-**Schema 版本**：`settings.db_schema_version`，启动时比对并跑 Alembic 迁移；版本高于当前程序（用户降级了应用）时拒绝启动，不尝试兼容。
-
----
-
-## 10. 状态机
-
-### 10.0 **[v6 新增]** RAG 的两个阶段与状态机的对应
-
-> **用户框架**：RAG 只有两个阶段 —— **数据准备**（离线，文件进来时做）与**用户提问**（在线，实时）。
-> 这个划分点破了 v5 的一处浪费：**同一个文件被解析了两遍。**
-
-```
-════════ 阶段一：数据准备（离线，每个文件走一次）════════
-
-  检测 → 稳定 → 登记(sha256) → 【解析一次】→ 分片 → 分类 → 嵌入 → 落库
-                                    ↑
-                            解析产物在此复用，不重复打开文件
-
-════════ 阶段二：用户提问（在线，每次查询走一次）════════
-
-  问题 → 路由 → 过滤 → 三路召回 → RRF → 多样性 → parent展开 → 生成 → 校验
-```
-
-**v5 的浪费**：`classifying` 阶段为了给 LLM 喂"正文前 N 字符"解析一次，`indexing` 阶段为了分片又完整解析一次 —— 同一个 PDF 用 PyMuPDF 打开两回。大文件上这是实打实的double 开销。
-
-**v6 修正：解析提前，只做一次。**
-
-```
-registered
-    │
-    ▼
-┌──────────────┐
-│   parsing    │  ← [v6] 新增：解析一次，产出 Document = [Block]
-└──────┬───────┘     解析结果暂存内存（大文件落临时表）
-       │
-       ├─────────────────┬─────────────────┐
-       ▼                 ▼                 ▼
-  规则分类           分片 → chunks      LLM 分类
-  （用元数据）        （用 Block）      （用前 N 字符，取自同一份 Block）
-       │                 │                 │
-       └─────────────────┴─────────────────┘
-                         ▼
-                   嵌入 → 落库
-```
-
-**「文件分类的时候数据就准备好了」** —— 这句话现在字面成立：分类与分片消费的是**同一份解析产物**。
-
-### 10.1 **[v6 修正]** 状态图
-
-```
-                  ┌──────────────┐
-      检测到 ────▶│ stabilizing  │
-                  └──────┬───────┘
-                         │ 三条判据满足（§11.1）
-                         ▼
-                  ┌──────────────┐
-                  │  registered  │  已算出 sha256 + inode 身份
-                  └──────┬───────┘
-                         │
-        哈希命中已有 ─────┼────────────▶ duplicate ●  （复用 content，不再解析）
-                         │
-                         ▼
-                  ┌──────────────┐
-                  │   parsing    │  [v6] 解析一次 → Document = [Block]
-                  └──────┬───────┘  不可解析的类型直接跳到 classifying（仅元数据）
-                         │
-                         ▼
-                  ┌──────────────┐
-                  │  classifying │  规则 →（V1.5）LLM，**复用上一步的 Block**
-                  └──────┬───────┘
-                         │
-          置信度 < 阈值 ──┼──▶ 进入「待确认」队列（非阻塞，仍继续索引）
-                         │
-                         ▼
-                  ┌──────────────┐
-                  │   indexing   │  分片 → FTS5 →（V1.5）向量，**复用同一份 Block**
-                  └──────┬───────┘
-                         ▼
-                  ┌──────────────┐
-                  │    ready     │  终态：可搜索、可提问（非终态，见 §10.1a）
-                  └──────────────┘
-
-  任意状态 ── 用户忽略      ──▶ ignored ●
-  任意状态 ── 路径失效      ──▶ missing（保留索引 30 天，可自动恢复）
-  任意状态 ── 所在卷离线    ──▶ volume_offline（卷回来自动恢复）
-  任意状态 ── 异常          ──▶ failed ●（error_code + retry_count）
-```
-
-`●` = 终态
-
-**解析产物的生命周期**：`parsing` 产出的 `[Block]` 在 `parsing → classifying → indexing` 三个状态间传递，`indexing` 完成后丢弃（chunks 已落库，不需要保留 Block）。
-
-- 常规文件：内存传递
-- 大文件（Block 总量 > 50 MB）：落 `parse_cache` 临时表，`indexing` 完成后删除
-- 崩溃恢复：缓存失效则从 `parsing` 重跑（幂等）
-
-> **[v6] `duplicate` 完全不解析**：哈希命中已有 `content` 时直接跳过 `parsing` —— 内容一样，Block 也一样，chunks 已经在库里了。这是 `contents` 表（§9）带来的又一处红利。
-
-### 10.1a **[v5 修正]** `ready` 的因果倒置
-
-> **审计发现（major）**：v4 里 `ready` 在两章互为因果。§10.1 状态图：`indexing` 完成后才进 `ready`，`ready` 是索引的**结果**；而 §12.2 摄入管线第一行写 `files.state = ready` 是解析的**入口条件**，§12.1 映射表第一行也写"进入 `ready` → 建立索引"。实施者按任一章写都会死锁。
->
-> **附带缺陷**：`ready` 被标为终态，导致"文件被编辑后重新索引"在状态机里**没有合法迁移边**。
-
-**修正如下：**
-
-1. **索引的入口条件是 `classifying` 完成**，不是 `ready`。§12.2 摄入管线的入口条件改为 `files.state = indexing`。
-2. **`ready` 是索引的结果，且不是终态** —— 允许 `ready → indexing` 的回边（文件内容变化时）。
-3. §12.1 映射表第一行"进入 `ready` → 建立索引"**修正为"进入 `indexing` → 建立索引"**。
-
-补充的合法迁移边：
-
-```
-ready ──（on_modified 且哈希变化，经 §11.9 防抖）──▶ indexing   [v5]
-ready ──（embedding 模型变更 / 分片策略变更）──────▶ indexing   [v5]
-cloud_placeholder ──（用户点击下载 或 系统 materialize）──▶ registered   [v5]
-```
-
-### 10.1b **[v5 新增]** `cloud_placeholder` 状态
-
-见 §7.8。iCloud/Dropbox 未下载的占位文件进入此状态：只登记元数据、**不读内容**、不算哈希、不解析。可按文件名搜索。用户显式下载后转 `registered` 走正常流程。
-
-### 10.2 **[改]** 相对 v2 变了什么
-
-| v2 | v3/v5 | 原因 |
-|---|---|---|
-| `waiting_confirm` 是**必经**状态 | 变成一个**非阻塞队列标记** | 索引模式下分类无破坏性，不需要卡点（§2.3） |
-| `archiving` / `archived` | **删除**（移到可选操作） | 主流程不再移动文件 |
-| `source_missing` 终态 | `missing` **非终态**，可自动恢复 | 文件可能只是被移走/卷离线，删索引太粗暴（§8.3） |
-| — | 新增 `volume_offline` | 外置硬盘/NAS 是常态，需与真丢失区分 |
-| — | **[v5]** 新增 `cloud_placeholder` | iCloud 占位文件不能读（§7.8） |
-| — | **[v5]** `ready` 改为非终态 | 文件被编辑后需要重新索引 |
-| `ignored` | 保留 | 用户忽略需要终态记录 |
-| `failed` + error_code | 保留 | 见 §10.4 |
-
-### 10.3 重启恢复
-
-所有状态持久化。启动时扫描非终态记录：
-
-- `stabilizing` / `classifying` → 校验 inode 是否仍可解析，可则续跑，否则置 `missing`
-- `indexing` → 删除该 `content_id` 的既有 chunk 后重跑（幂等）
-- `missing` → 触发一次重定位尝试（§8.3）
-- `volume_offline` → 检查卷是否已挂载，是则恢复
-
-**[v5] 重启恢复必须接入 `tasks` 表的退避与放弃阈值**：v4 只说"删除既有 chunk 后重跑"，没有接 `attempts` / `next_run_at`，导致一个**反复导致崩溃的大文件会无限重试**（每次启动都重跑、再崩、再重启）。修正：
-
-- 恢复时 `attempts += 1`，按指数退避设 `next_run_at`
-- `attempts ≥ 5` 则置 `failed`，`error_code = repeated_crash`，UI 提示"该文件多次导致索引失败，已跳过"
-- 提供手动重试入口
-
-**索引模式下重启恢复大幅简化** —— v2 最麻烦的 `archiving` 中间态（"移动前崩溃还是移动后崩溃？"）在主流程里已经不存在了。只有可选归档操作需要这套判断，且它是显式手动触发的，频率极低。
-
-### 10.4 error_code
-
-| error_code | 可重试 | 处置 |
-|---|---|---|
-| `permission_denied` | 否 | 引导用户授权（§6.4） |
-| `parse_failed` | 是 ×1 | 降级为仅元数据索引，不阻塞 |
-| **`parse_timeout`** | **是 ×1** | **[v5]** 单文件解析超 5 分钟则中止，降级元数据 |
-| **`oom`** | **是 ×1** | **[v5]** 解析内存超限（如超大 PDF），降级元数据 |
-| **`repeated_crash`** | **否** | **[v5]** 重启恢复累计 5 次，跳过并提示 |
-| **`file_too_large`** | **否** | **[v5]** 超 §7.7 上限，仅元数据 |
-| `model_timeout` | 是 ×3 | 指数退避 |
-| `model_invalid_output` | 是 ×1 | 降级规则分类结果 |
-| `disk_full` | 是 | 暂停保全队列，提示清理 |
-| `unknown` | 是 ×1 | 置 failed |
-
----
-
-## 11. 核心流程
-
-### 11.1 **[改]** 稳定性检测
-
-初版是"每 2 秒查大小、连续 3 次不变"。两个问题：
-
-- **微信/QQ** 是"临时目录写完 → move 到最终位置"，文件出现时已完整，纯轮询白等 6 秒；
-- **浏览器** 是"`.crdownload` 持续写入 → 改名去后缀"，此时事件是 `on_moved` 而非 `on_created`。
-
-**修正为三条同时满足：**
-
-1. 文件名不带临时标记：`.crdownload` / `.part` / `.tmp` / `.download` / `~$` / `.` 开头
-2. 大小连续 3 次（间隔 2 秒）不变
-3. 能获取非阻塞独占锁 `flock(LOCK_EX | LOCK_NB)` —— 直接证明无其他进程正在写，最强判据
-
-**必须监听 `on_moved`**，否则上述两种主流下载模式都会漏。
-
-60 秒未稳定则降级为 30 秒低频轮询，不阻塞队列、不报错、不提示（大文件下载可能持续数小时）。
-
-**兜底**：每个来源定时全量扫描（默认 10 分钟），比对已知 inode 集合补漏。FSEvents 对网络卷、iCloud Drive、外置卷不可靠，这条兜底是必需的。
-
-#### **[v5 修正]** 与"10 秒内进入文件库"验收项的冲突
-
-> **审计发现（major）**：§18.1 把"下载完成 → 出现在文件库 ≤ 10 秒"设为阻塞项，但本节的判据是"大小连续 3 次、间隔 2 秒不变" = **最少 6 秒**，再加哈希计算、分类、入库；而 §18.1 又要求验收用例**必须包含 >1 GB 大文件**（1 GB 流式 SHA-256 通常就要数秒）。原方案的两个数字自相矛盾。
-
-**修正为分层判据 —— 能快则快，不能快才退化到轮询：**
-
-| 情形 | 判据 | 典型耗时 |
-|---|---|---|
-| **快路径**：`on_moved` 到达且目标名无临时后缀 | 直接尝试 `flock`，成功即视为稳定 | **< 1 秒** |
-| **快路径**：`.crdownload`/`.part` 改名为正式名 | 同上 | **< 1 秒** |
-| 慢路径：`on_created` 且文件仍在增长 | 大小连续 3 次 × 2 秒不变 + `flock` | 6 秒起 |
-
-微信、QQ、浏览器这三个主要来源**全部走快路径** —— 它们都是"写完再改名/移动"。慢路径只用于直接写入监听目录的少数情况。
-
-**验收项相应修正**（§18.1）：
-
-- 「**检测到** → 出现在文件库」≤ 10 秒，其中"检测到"指稳定性判定通过
-- 「稳定性判定」快路径 ≤ 2 秒、慢路径 ≤ 8 秒
-- **大文件的哈希与解析时间不计入**该指标（另设观测项），但**文件必须在哈希完成前就以 `registered` 状态出现在 UI 上**，带进度条 —— 用户看到的是"文件已被发现，正在处理"，而不是十几秒的空白
-
-### 11.9 **[v5 新增]** 内容变更防抖
-
-> **审计发现（major）**：§8.2 的 `on_modified` 处理没有任何防抖或合并策略 —— 每次保存都会触发完整重解析 + diff。用户在 Word/VSCode 里编辑一个被索引的文件，编辑器每几十秒自动保存一次，甚至连续触发多次 `on_modified`。叠加 §19 R9 的"单写入线程串行化"后，**一个正在编辑的文件会独占索引队列**，其他文件全部排队。
-
-**策略：**
-
-1. **静默窗口**：`on_modified` 后不立即处理，起一个 **60 秒**的定时器；窗口内再次收到同一 inode 的事件则**重置**定时器。用户还在编辑就一直不动。
-2. **先比对再干活**：定时器触发后先比 `mtime` + `size`，无变化直接丢弃（编辑器常做无实质变更的写入）。有变化才算哈希；哈希与 `contents.sha256` 相同也丢弃。
-3. **同一文件的 index 任务合并**：`tasks` 表的 `(kind, file_id)` 唯一约束（§9）保证队列里同一文件最多一个待处理索引任务。
-4. **正在被独占打开的文件推迟**：`flock` 拿不到就重新起窗口，最多推迟 30 分钟后强制处理一次。
-5. **配额**：单个文件 1 小时内最多重新索引 3 次，超出则推迟到空闲时段。防止一个疯狂自动保存的文件拖垮整个队列。
-
-### 11.2 登记与去重
-
-读取文件名、扩展名、MIME、大小、时间戳、`(volume_uuid, inode)`，**分块流式计算 SHA-256**（8 MB/块，避免大文件占满内存）。
-
-哈希命中已有记录 → `duplicate`，**复用已有 chunk 与向量，不重复解析、不重复向量化**。UI 展示为"与《xxx》内容相同"，两个路径都保留（索引模式下不需要删除任何一个）。
-
-### 11.3 索引
-
-- 解析 PDF / DOCX / Markdown / TXT
-- **结构感知分片**：按标题层级、段落、页码切分，保存 `file_id` / `page` / `section` / `ordinal`
-- 写入 FTS5；V1.5 追加向量
-- 解析失败 → 降级为**仅元数据索引**（文件名、类型、时间仍可搜），不置 failed
-
-**索引模式下没有"归档成功后才写索引"这个前置条件** —— 文件一登记就可以索引，用户能更快搜到东西。
-
-### 11.4 **[新]** 分类修正回流为规则
-
-用户修正分类时，弹出可选的规则学习：
-
-> 已将《报表.xlsx》改为「财务」。
-> ☐ 以后来自「微信接收」的 .xlsx 都归到「财务」
-
-勾选则生成一条 `rules` 记录（`learned_from_file_id` 指向本文件），并**询问是否回溯应用到已有的同类文件**。
-
-这是索引模式的另一个红利：回溯重分类只是批量 UPDATE，代价接近零；在移动归档模式下这意味着批量移动几百个文件。
-
-### 11.5 保全副本
-
-见 §2.5。流程：
-
-```
-1. 复制到 <资料库>/_保全/<来源>/<文件名>（重名则加序号）
-2. 校验 SHA-256 == 源文件
-3. 校验通过 → files.preserved_path 指向副本，origin_path 保留原路径
-4. 校验失败 → 删除目标残留，保留源文件，置 failed
-```
-
-**永远是复制，不是移动。** 原文件由微信自己去清理。
-
-### 11.6 可选真实归档
-
-见 §2.6。复用保全实现，多一步"校验通过后删源"，并遵循同卷 `os.rename` / 跨卷复制校验删源 / 重名消解 / 永不覆盖。记入 `operations`，可撤销。
-
-### 11.7 撤销
-
-**[改] 索引模式下撤销分两类，复杂度天差地别：**
-
-| 类型 | 撤销方式 | 复杂度 |
-|---|---|---|
-| 分类/标签变更 | 从 `file_history` 回写字段 | 一条 UPDATE |
-| 保全副本 | 删除副本，指回原路径（原文件仍在则安全） | 低 |
-| 可选真实归档 | 移回原位，需**前置哈希校验** | 与 v2 同 |
-
-**真实归档的撤销必须校验目标文件哈希**：若归档后已被用户编辑，当前哈希 ≠ `operations.sha256_before`，则**拒绝撤销并明确提示**：
-
-> 该文件在归档后已被修改，撤销会覆盖你的改动。请手动处理。
-
-不静默覆盖用户的编辑。
-
-**v2 里"撤销必须回滚索引"的问题在索引模式下消失了** —— 索引本来就跟着 inode 走，文件移回原位后索引自动有效，不需要删 chunk 再重建。
-
-### 11.8 **[v6 删除]** 镜像目录同步
-
-> 随 §2.4 一并删除。分类是纯信息层的，不投射到磁盘，因此不存在需要同步的镜像。
->
-> 连带消除：失效链接清理、镜像目录自排除监听（原 R14）、批量重分类时的链接重建合并。
-
----
-
-## 12. RAG 架构
-
-> **[v4 新增]** 前 11 章描述的是**文件支柱**：文件如何被发现、追踪、组织。本章描述**知识支柱**：文件内容如何变成可被提问的知识。两者通过 §12.1 的接口耦合。
-
-### 12.1 两大支柱的接口
-
-RAG 不是文件管理的下游附属品，两者是同层的两个子系统，**通过 `files` 表与 `chunks` 表的外键耦合，通过状态机事件驱动**。
-
-```
-        文件支柱（§7–§11）                      知识支柱（本章）
-┌──────────────────────────────┐      ┌──────────────────────────────┐
-│  来源发现 → 监听 → 稳定性检测   │      │  解析 → 分片 → 嵌入 → 落库      │
-│  身份追踪 (volume_uuid,inode) │      │  路由 → 召回 → 融合 → 装配      │
-│  去重 / 分类 / 保全           │      │  生成 → 引用校验 → 流式返回      │
-└───────────┬──────────────────┘      └──────────────┬───────────────┘
-            │                                        │
-            │   files.id ─FK▶ contents.id ◀FK─ chunks.content_id
-            │      files.state ──事件──▶ 索引生命周期  │
-            └────────────────┬───────────────────────┘
-                             ▼
-                    同一个 SQLite 文件
-        files / contents / chunks / chunks_fts / chunks_vec
-```
-
-**文件状态 → 索引动作的完整映射**（这张表是两个支柱的契约，实现时必须逐条覆盖）：
-
-| 文件侧事件 | 索引侧动作 | 是否重新嵌入 |
-|---|---|---|
-| **进入 `indexing`** **[v5 修正]** | 建立索引 | 是 |
-| `on_moved`，inode 命中 | **仅更新 `files.path`，chunks 完全不动** | **否** ← 性能关键 |
-| 内容修改（哈希变），经防抖（§11.9） | `ready → indexing`，diff 增量重建（§12.5） | 仅变化的片 |
-| 判定 `duplicate` | **指向同一 `content_id`**，chunks 天然共享（§9 `contents` 表） | **否** |
-| 转 `missing` | **保留全部索引**，标记原文不可打开 | 否 |
-| 转 `volume_offline` | 保留全部索引，仍可搜可问 | 否 |
-| `missing` 超期清理 | **仅当该 content 的所有 file 都已清理**才级联删 chunks **[v5 修正]** | — |
-| 用户改分类或标签 | **chunks 完全不动**，过滤走 JOIN `files` 实时获得 **[v5 修正]** | 否 |
-| **转 `ignored`** **[v5 补]** | 保留索引，但从检索池中排除（`files.state` 参与 §12.3 ② 过滤） | 否 |
-| **转 `failed`** **[v5 补]** | 已建立的部分索引保留；仅元数据降级时正文不可搜 | 否 |
-| **转 `cloud_placeholder`** **[v5 补]** | **不建立正文索引**，仅元数据可搜（§7.8） | 否 |
-| `embedding_model_id` 变更 | 触发全量重建任务（§12.8） | 全部 |
-
-> **[v5] 三处修正的原因**（审计发现）：
-> - **`ready` → `indexing`**：v4 写"进入 `ready` → 建立索引"，但 §10.1 状态图里 `ready` 是索引**完成后**才进入的状态 —— 两处互为因果，实施者按任一边写都会死锁。索引的入口是 `indexing`。详见 §10.1a。
-> - **`duplicate` 的载体**：v4 说"复用已有文件的 chunks，建立引用关系"，但 §9 的 `chunks.file_id` 是单值外键，这个关系无处存储。§9 新增 `contents` 表后，chunks 挂在 content 上，duplicate 天然共享，不需要额外的引用表。同时修复了"原件被清理导致副本失去索引"的缺陷。
-> - **分类变更不碰 chunk**：v4 说"更新 chunk 的过滤元数据"，但 chunks 表没有分类列，且真去冗余会导致改一次分类要更新几十万行。改为过滤时 JOIN `files`（详见 §9「检索侧过滤的实现方式」）。
-
-> 中间三条是索引模式带来的直接红利：文件在 Finder 里被移动、外置盘被拔掉、微信清了缓存 —— 知识库都不受影响。移动归档方案里这三种情况都会导致索引失效或重建。
-
-### 12.2 摄入管线（Ingestion）
-
-```
-files.state = indexing          ← [v5 修正] 入口条件不是 ready，见 §10.1a
-   │
-   ├─ ① 解析 Parse ───────────────────────────────────────────
-   │     PDF   → PyMuPDF     → 页 / 文本块 / bbox / 字号 / 字重
-   │     DOCX  → python-docx → 段落 / 标题层级 / 表格 / 列表
-   │     MD    → markdown-it → AST（heading / para / code / list / table）
-   │     TXT   → 空行切段 + 缩进启发式
-   │                        ↓
-   │     ▸ 统一中间表示（关键抽象）：Document = [Block]
-   │       Block = { type, level, text, page, bbox, order }
-   │       type ∈ { heading, paragraph, list_item, table, code, caption }
-   │
-   │     ▸ 四种格式在此收敛为同一结构，下游分片器只写一次。
-   │       新增格式（PPTX、EPUB…）只需实现 Parser → [Block]，
-   │       分片、嵌入、检索、引用全链路零改动。
-   │
-   ├─ ② 结构感知分片 Chunk ────────────────────────────────────
-   │     ▸ 沿 heading 层级构建 section_path
-   │       例："采购合同 > 第二章 履约 > 2.3 保修条款"
-   │     ▸ 只在 Block 边界切，绝不切断句子
-   │     ▸ 目标 512 token，硬上限 800，重叠 1 个 Block
-   │     ▸ 表格整体成片；超限则按行切分并**为每片复制表头**
-   │     ▸ 代码块整体成片，不参与重叠
-   │     ▸ 每片继承：file_id / page / section_path / ordinal
-   │                        ↓
-   │     ▸ Parent-Child 双层（Small-to-Big）：
-   │         child  = 上述 512 token 片  → **用于检索**（语义集中，召回准）
-   │         parent = 相邻 3 个 child 合并 → **用于送模型**（上下文完整，答得全）
-   │       检索命中 child，送模型时展开为 parent。
-   │       这解决了"片切小了召回准但上下文不够、切大了上下文够但召回糊"的矛盾。
-   │
-   ├─ ③ 嵌入 Embed ──────────────────────────────────────────
-   │     ▸ 批量 64 片一次调用，失败按片重试而非整批
-   │     ▸ **文本前置 section_path 再嵌入** —— 短片段（如"见附件三"）
-   │       单独看毫无语义，带上章节路径后可辨识度大幅提升
-   │     ▸ 记录 embedding_model_id + dim，写入每一片
-   │     ▸ L2 归一化后存储 → 余弦相似度退化为点积，检索更快
-   │     ▸ 仅 child 嵌入，parent 不嵌入（parent 只在装配阶段用）
-   │
-   └─ ④ 落库 Store（单事务）──────────────────────────────────
-         chunks（元数据 + text）
-           → chunks_fts（FTS5，外部内容表）
-           → chunks_vec（sqlite-vec，rowid 对齐 chunks.id）
-         三者同一 SQLite 事务，要么全成功要么全回滚。
-         ← 这是 §4.3 选 sqlite-vec 而非 LanceDB 的核心理由：
-           跨库方案在此需要自己实现两阶段提交或补偿逻辑。
-```
-
-**解析失败的降级**：任一格式解析失败 → 降级为**仅元数据索引**（文件名、类型、来源、时间仍可搜），`error_code = parse_failed`，不置 `failed`、不阻塞。用户至少还能按文件名找到它。
-
-### 12.3 检索管线（Retrieval）
-
-> **[v6 重构]** 本节按「两阶段 RAG」框架（§10.0）的**第二阶段**重写，并入用户提出的
-> 「问题重写 → 检索 → 粗筛 → rerank → 严格按资料生成」管线。三处关键结论：
->
-> 1. **重写拆成两步，分置路由两侧**，且 V1.5 全部用规则、不调 LLM（§12.3a）
-> 2. **rerank 保持 V2**，因算力不可行 —— 实算 M1 上 top-50 需 17 秒（§12.3d）
-> 3. 修正三处 v5 既有缺陷：多样性键 `file_id`→`content_id`、三路 RRF 的词法偏置、
->    拒答误交给模型判断（§12.3b/c/e）
-
-### 12.3a **[v6 新增]** 问题重写：拆成两步，分置路由两侧
-
-**为什么不能整块放在最前面**：LLM 重写会**摧毁元数据信号**。
-「上周微信收到的 PDF」被改写成「查找最近从微信接收的 PDF 格式文档」后，
-`上周` 这个相对时间锚点和 `微信` 这个来源名被泛化掉 —— §12.3 ① 的路由器与
-② 的中文日期正则**同时失效**，一个毫秒级、100% 准确的 SQL 查询退化成
-又慢又可能答错的 RAG。反向错误（先路由后重写）最坏只是多花一次检索。
-**风险不对称 → 路由必须先行，重写必须拆开。**
-
-```
-步骤A 指代消解 ──▶ ① 路由 ──▶ ② 过滤抽取 ──▶ 步骤B 查询扩展 ──▶ ③ 召回
-（在路由之前）                                （在过滤之后）
-```
-
-| | 步骤A 指代消解 | 步骤B 查询扩展 |
-|---|---|---|
-| 解决 | 多轮对话的代词 | 口语转书面、同义词 |
-| 例 | 「它的保修期呢」→「采购合同的保修期」 | 「钱」→「金额 \| 价款 \| 费用」 |
-| 位置 | **路由之前**（否则路由看到裸代词无法判断） | **过滤抽取之后**（否则扩展词污染日期/来源正则） |
-| V1.5 实现 | 规则：取上一轮 `citations[]` 的 `file_name` / `section_path`，正则匹配 `它\|这个\|那份\|该` + 名词后替换 | 本地同义词典（初始约 2 小时人工整理） |
-| 延迟 | <5ms | <5ms |
-| 兜底 | **匹配不到就原样透传，绝不猜** | 词典未命中就用原词 |
-
-**只回溯最近 1 轮**。跨多轮多实体场景（「它」指第 3 轮提到的文件）规则必然出错，
-回溯越深错得越隐蔽。宁可不消解。
-
-**多轮跟随问句的路由**：「还有别的吗？」这类句子路由器看原文无法判断，
-用 `chats.last_route` 存上一轮的路由结果作为先验 —— 而不是靠重写补全。
-
-#### 生成式重写（调 LLM）：**条件触发，不做前置**
-
-无条件前置重写会让**每一次**提问都背上 600–900ms
-（生产实测：重写步骤独占 RAG 总延迟 80% 以上）。改成失败后触发：
-
-```
-首轮检索 → 最高分 < 触发阈值？ ──否──▶ 直接进生成（80% 的查询走这条，零额外延迟）
-                              └─是──▶ LLM 重写 → 二次检索（20% 才付 600–900ms）
-```
-
-触发条件（满足其一）：① 首检最高分低于门限；② 查询长度 < 6 字且步骤B 词典零命中。
-**硬预算 300ms 超时 → 直接用原查询继续**，不等。
-平均延迟增量 ≈ 0.2 × 750ms ≈ **150ms**。
-
-**明确不做本地生成式重写**：0.6B 模型走 llama.cpp GGUF Q4 在 M 系列约 30–60 tok/s，
-输出 80 token 要 **1.3–2.6 秒**，是整条管线的 3 倍；且引入 llama.cpp 意味着
-在 ONNX Runtime 之外再加**第二套原生推理运行时**，DMG 再涨约 400MB，
-直接触发 §19 R2「每加一个原生依赖重跑 A0」。
-
-#### 重写**不替换**原问题，而是多加一路召回
-
-这是本节最重要的设计。用户担心的「表达不清」（单轮「那个文件的钱」）与
-「指代不明」（多轮「它的」）**风险不对等**：前者模型是在**猜**，
-猜错的后果是把模糊变成**明确的错误** —— 比模糊本身更危险，因为它消灭了纠错机会
-（用户想问发票金额，被改写成合同金额，检索结果很自信但方向全错）。
-
-所以重写结果作为**新增一路**进入 RRF，不取代原问题：
-
-```
-        ┌─→ 原问题  ─→ jieba-FTS5   ─┐
-        ├─→ 原问题  ─→ trigram-FTS5 ─┼─→ 两级 RRF → …
-        ├─→ 原问题  ─→ 向量          ─┤
-        └─→ 重写后  ─→ 向量          ─┘   ← 新增，不替换前三路
-```
-
-- 改写**对了** → 多召回一批相关内容，Recall 提升
-- 改写**错了** → 前三路照常工作，错误改写只贡献几条低分噪声，被 RRF 稀释
-
-**这是 fail-safe 的**，且代价极小（多一次本地 embedding ≈10ms + 一次向量检索 ≈20ms）。
-RRF 公式 `Σ 1/(k+rank)` 天然支持任意路数，**连公式都不用改**。
-
-**短路**：重写结果与原问题的编辑距离比 < 0.1（改写没起作用）→ 跳过这一路，省 30ms。
-
-**UX 兜底**：改写必须让用户看见且可退回。
-
-```
-┌────────────────────────────────────────┐
-│ 你问：那个文件的钱                       │
-│ 已理解为：合同金额   [用原问题重搜]      │  ← 一键退回
-└────────────────────────────────────────┘
-```
-
-改写歪了时用户看一眼就知道原因，点一下退回 ——
-比让他反复换措辞猜系统脾气好得多。
-
-> **顺带**：中文错别字/近音字已被 trigram 索引免费覆盖 ——
-> 「保修期」误打成「报修期」时，`修期` 这个 3 字符组仍然命中。
-> 这是当初为绕开 FTS5 中文分词缺陷加的副索引，顺带解决了模糊匹配。
-
-### 12.3b 主管线
-
-```
-用户问题
-   │
-   ├─ ⓐ 指代消解（§12.3a 步骤A，规则，<5ms）─────────────────
-   │
-   ├─ ① 查询路由 Route ──────────────────────────────────────
-   │     规则优先（零成本、零延迟）：
-   │       ▸ 纯元数据模式 → **只走 SQL，完全不进 RAG**
-   │           "上周微信收到的 PDF" / "最大的 10 个文件"
-   │           / "文件名带'合同'的" / "上个月加的文件"
-   │       ▸ 含内容意图（什么/为什么/怎么/总结/对比）→ 走 RAG
-   │       ▸ 两者兼有 → SQL 过滤缩小范围 + 在子集内 RAG
-   │     规则不确定 → V1.5 默认走 RAG（宁可多花一次检索）
-   │                   V2 引入 LLM 路由器（§12.9）
-   │
-   │     ▸ 为什么值得做：文件类问题在本产品中占比很高，
-   │       走 SQL 是毫秒级且 100% 准确，走 RAG 则又慢又可能答错。
-   │
-   ├─ ② 过滤器抽取 Filters ──────────────────────────────────
-   │     从问题中抽取：时间范围 / 来源 / 文件类型 / 分类 / 标签 / 文件书
-   │     V1.5 用规则 + 中文日期正则（"上周""三月份""去年底"）
-   │     ▸ 抽取不确定时**不加过滤** —— 漏召回的代价远大于多召回
-   │
-   ├─ ⓑ 查询扩展（§12.3a 步骤B，词典，<5ms）──────────────────
-   │
-   ├─ ③ 四路召回 Recall ─────────────────────────────────────
-   │     ┌─ jieba-FTS5 / BM25    top-100 ← 中文成词，主索引
-   │     ├─ trigram-FTS5 / BM25  top-30  ← 子串兜底、编号、错别字
-   │     ├─ 向量（原问题）         top-100 ← 同义改写、概念性提问
-   │     └─ 向量（重写后）         top-100 ← 仅在重写生效时，见 §12.3a
-   │     全部在 ② 过滤后的 chunk 子集内执行（先过滤后检索，不是反过来）
-   │
-   │     ▸ [v6] 召回深度 50→100 几乎免费：sqlite-vec 的 vec0 是**暴力全扫**
-   │       （官方 ARCHITECTURE.md），k 只影响 top-k 堆的 sift 次数、
-   │       不影响扫描量，top-50 与 top-200 差异是微秒级；FTS5 的
-   │       `ORDER BY bm25() LIMIT k` 同样要遍历完整倒排交集，无早停。
-   │       真正的成本全在 rerank，所以**不要在召回深度上省**。
-   │       trigram 降到 30：它只是兜底，深度大反而引入噪声，省 10–20ms。
-   │
-   ├─ ④ 两级 RRF 融合 ──【v6 修正既有偏置】────────────────────
-   │     ▸ 问题：jieba-FTS5 与 trigram-FTS5 索引的是**同一份**
-   │       `chunks.text`，是同一信号的两种切法，高度相关；向量是独立信号。
-   │       平铺三路融合 = 「词法 2 票 : 语义 1 票」的系统性偏置：
-   │         词法两路都排 3 的片 → 2 × 1/63 = 0.0317
-   │         向量排 1 的片       →     1/61 = 0.0164
-   │       **语义命中的第一名打不过词法命中的第三名。**
-   │       这会直接压低「同义改写、概念性提问」类问题的 Recall。
-   │
-   │     内层：jieba ⊕ trigram → 词法排名 L
-   │           向量(原) ⊕ 向量(重写) → 语义排名 S
-   │     外层：score(c) = 1/(k+rank_L(c)) + 1/(k+rank_S(c))
-   │           → 词法与语义各占一票
-   │
-   │     k 常数不固定 60：
-   │       无 rerank（V1.5）→ k=20，RRF 输出即最终顺序，要头部精度
-   │       有 rerank（V2）  → k=60，RRF 只需保证金片进 top-N，要高召回
-   │       ▸ k=60 出自 Cormack 2009 对 **1000 深** 的 run 调参；
-   │         我们列表只 100 深，k=60 会把 rank1 与 rank50 的分差压到
-   │         仅 1.8 倍，等于「谁都差不多」。
-   │
-   │     → top-20（V1.5 无 rerank 时直接进 ⑤）
-   │
-   │     ▸ 选 RRF 而非加权求和：BM25 分数与余弦相似度量纲不可比，
-   │       加权方案需要为每个语料调归一化参数，RRF 只用排名，免调参。
-   │
-   ├─ ④.5 拒答门限 Gate ──【v6 新增，见 §12.3c】──────────────
-   │     向量余弦**绝对分** < 阈值 → 直接发 chat.fallback，**不调 LLM**
-   │
-   ├─ ⑤ 多样性约束 ──【v6 修正键 + 拆软硬】────────────────────
-   │     同一 **content_id** 最多保留 3 片 → top-8
-   │
-   │     ▸ [v6 修正] v5 写的是 file_id，**错**。§9 引入 contents 表后
-   │       同一内容可对应多个 file（同一份文件存了 3 处），
-   │       按 file_id 去重会把它们当成 3 个不同来源，
-   │       多样性约束形同虚设。必须按 content_id。
-   │
-   │     ▸ V2 接 rerank 后拆成软/硬两道：
-   │         ④.5 软 cap（每 content ≤ 8 片）→ ⑤ rerank → 硬 cap（≤ 3 片）
-   │       理由：硬 cap 放 rerank 前会用噪声信号（RRF 只是排名投票）
-   │       砍掉交叉编码器本会排第一的片；完全不设 cap 又会让
-   │       一份 300 页 PDF 独占全部候选。
-   │
-   │     ▸ 防止单个长文档霸占整个上下文窗口，
-   │       导致"跨文档综合"类问题只能看到一份材料。
-   │       **rerank 让这条更必要**：交叉编码器对每个 (query, chunk)
-   │       独立打分，一份长合同里 10 个近似段落会全部拿高分。
-   │
-   ├─ ⑥ Parent 展开 ────────────────────────────────────────
-   │     child → 对应 parent；相邻 parent 去重合并
-   │     ▸ **永远在最后**。rerank（V2）必须打 child 分不打 parent 分，
-   │       否则延迟涨 3 倍（20×1536token vs 20×512token）且语义被稀释。
-   │
-   └─ ⑦ 上下文装配 Assemble ─────────────────────────────────
-         Token 预算内按 RRF 分数降序填充，每片带**显式引用锚点**：
-
-         [C1] file_id=42 file="采购合同.pdf" page=3
-              section="第二章 履约 > 2.3 保修条款"
-              ---
-              保修期自验收合格之日起计算，为期二十四个月……
-
-         [C2] file_id=17 file="补充协议.docx" section="一、期限变更"
-              ---
-              原合同第 2.3 条保修期调整为三十六个月……
-```
-
-### 12.3c **[v6 新增]** 拒答门限：不能交给模型判断
-
-`AbstentionBench`（arXiv:2506.09038）的结论：**推理型 LLM 在无解问题上系统性失败**，
-且 RL 微调反而把模型推向「猜一个」而非弃权 —— **换更强的模型救不了拒答率**。
-
-因此 §18.2 的「无依据问题正确拒答率 ≥ 0.80」不能靠 prompt 达成。
-唯一 100% 可靠的机制是**根本不让模型进入生成**：在 ④ 之后、⑤ 之前插一道门限，
-分数低于阈值直接发 `chat.fallback`（只返回检索结果列表），连 LLM 都不调。
-
-**关键陷阱：RRF 分数不可阈值化。**
-
-```
-score(c) = Σ 1/(k+rank)  ← 纯排名函数，绝对值与查询难度无关
-top-1 永远 ≈ 1/(k+1) + 1/(k+1)，无论这个 top-1 是否真的相关
-```
-
-一个库里完全没有答案的问题，它的 top-1 RRF 分数和一个完美命中的问题**一样高**。
-所以门限必须用**向量余弦绝对分**（V1.5，零成本，复用已算出的分数），
-V2 有 rerank 后改用 rerank 分（判别力更强）。
-
-**阈值标定**：在 §18.2 评测集上扫描，取「无依据题拒答率 ≥0.80 且有依据题误拒率 ≤0.05」的点。
-
-> **[v6] 连带修正 §18.2**：原本只要求「≥5 题答案确实不在库中」——
-> **5 个样本标定一个阈值统计上太薄**，4/5 和 5/5 只差一题，
-> 这个验收数字本身没有意义。**提到 10–12 题**（占 30 题的 1/3）。
-
-### 12.3d **[v6 定性]** rerank 保持 V2：算力上不可行
-
-用户提出把 rerank 提到 V1.5。**实算后否决**，理由是算力而非架构：
-
-| 模型 | 规格 | M1 单对 512-token | top-50 总计 |
-|---|---|---|---|
-| `bge-reranker-v2-m3` | XLM-R-large，24 层，568M 参数 | ≈ 0.35 s（int8，已按乐观 2× 修正） | **≈ 17 秒** |
-| `bge-reranker-base` | 12 层，278M | ≈ 15–40 ms（256-token 截断） | ≈ 1–2 秒 |
-
-桌面应用提一个问题等 17 秒不可接受；退到 base + 256 token 截断仍要 1–2 秒，
-且要引入 **ONNX Runtime 这第二套原生推理运行时**（DMG +300MB，触发 §19 R2 的 A0 重跑）。
-
-**决定**：
-- V1.5 **不做** rerank，靠 §12.3b 的四路召回 + 两级 RRF + k=20 拿头部精度
-- 插槽位置已确认：**④ 两级 RRF 之后、⑤ 多样性之前，打 child 分**
-- V2 落地路径：CoreML / ANE（Apple 神经引擎，绕开 CPU）或 opt-in 云端 rerank API
-- **M0 冒烟增加一条**：实测 ONNX Runtime int8 在本机的每对耗时，
-  验证上表的 GFLOPS 推算（这是量级估算，非实测）
-
-**替代方案**（不引入第二个模型）：隐私开关开启时，用已经要调的那个 LLM
-做 listwise 打分（一次调用给 20 片排序），成本 ≈ 一次额外 LLM 调用。
-
-### 12.3e **[v6]** 延迟预算
-
-| 阶段 | V1.5 目标 | 说明 |
-|---|---|---|
-| ⓐ 指代消解 | <5 ms | 规则 |
-| ① 路由 | <1 ms | 纯正则 |
-| ② 过滤抽取 | <5 ms | 中文日期正则 |
-| ⓑ 查询扩展 | <5 ms | 本地词典 |
-| ③ 四路召回 | 30–80 ms | 向量路本地 embedding ≈10ms + 暴力扫描 |
-| ④ 两级 RRF | <1 ms | 纯排序 |
-| ④.5 门限 | 0 ms | 复用已有分数 |
-| ⑤ 多样性 | <1 ms | 字典计数 |
-| ⑥ parent 展开 | <10 ms | SQLite 查询 |
-| ⑦ 装配 | <10 ms | |
-| **检索段合计** | **< 150 ms** | 用户感知为「即时」 |
-| 生成段（云端） | 1–3 s | 流式，首 token 500ms 内 |
-| 条件重写（20% 触发） | +600–900 ms | 300ms 超时兜底 |
-
-**短路逻辑**：
-
-- 候选集 < 12 片 → 跳过多样性约束（本来就不多，砍了就没了）
-- 候选集 = 0 → 直接 `chat.fallback`，不调 LLM
-- 本地 embedding 模型不可用 → 退化为 FTS5 双路（jieba + trigram），语义召回消失但产品不瘫
-- 任一阶段超预算 3× → 记 `query_log`，用于后续调优
-
-### 12.4 生成与引用校验
-
-**Prompt 结构**（三段式，顺序固定）：
-
-```
-System：
-  你只能依据下方【资料】回答。
-  每个事实性陈述后必须紧跟引用标记 [Cn]。
-  资料不足以回答时，只回答"未在文件库中找到足够依据"，
-  不得使用你自己的知识补充，不得推测。
-
-【资料】
-  [C1] …  [C2] …  [C3] …
-
-【问题】
-  用户原始问题
-```
-
-**后置校验**（生成完成后强制执行，不通过不返回给用户）：
-
-| 校验项 | 不通过时的处理 |
-|---|---|
-| 回答中每个 `[Cn]` 都存在于本次上下文 | 剔除虚构标记，标注该句为无引用 |
-| 回答非拒答，但**不含任何** `[Cn]` | 判定幻觉 → 重新生成一次 |
-| 重新生成后仍无引用 | **降级**：不输出自然语言答案，改为直接返回检索结果列表 |
-| 拒答时混入了具体事实陈述 | 截断到拒答句 |
-
-> **为什么必须做后置校验**：§18.2 把"引用正确率 ≥ 0.90"和"无依据问题正确拒答率 ≥ 0.80"设成了阻塞验收项。仅靠 prompt 约束达不到这个数 —— prompt 是建议，校验是执行。
-
-#### **[v6 新增]** 三条硬结论：语法层校验补不上语义层指标
-
-本节现有的四条后置校验全是**语法层**手段（编号是否存在、是否零引用），
-而 §18.2 的两条阻塞项是**语义层**指标（这句话是否真的被这一片支持）。
-中间这条缺口靠以下三件事补，按杠杆排序：
-
-**① 云端轨：用 Anthropic `search_result` + `citations.enabled`，引用从「生成物」变成「API 解析物」**
-
-把 §12.3 ⑦ 装配出的每个 parent 构造成 `search_result` 内容块放进 user message：
-
-```json
-{"type": "search_result",
- "source": "file://<path>#chunk<id>",
- "title": "采购合同.pdf > 第二章 2.3 保修条款",
- "content": [{"type":"text","text":"<句1>"}, {"type":"text","text":"<句2>"}],
- "citations": {"enabled": true}}
-```
-
-模型**不再自己写 `[C1]`**，而是由 API 返回结构化的 `cited_text` + 字符区间。
-「引用了不存在的编号」这个失败模式**从根上消失**。
-成本上 `cited_text` **不计入输出 token**，比让模型抄原文引语更便宜。
-
-> **约束**：与 structured outputs **互斥** —— 同一请求里 `citations.enabled`
-> 与 `output_config.format` 并存直接 400。所以「用 JSON schema 装引用」
-> 和这条路二选一。且仅在隐私开关开启时可用。
-
-**② 本地轨：后置归因（先自由生成，再逐句挂引用）**
-
-不要让 4–8B 模型边写边标 `[Cn]`。`AGRaME` 实测：post-hoc 归因在 4B/7B 上的
-引用质量**显著优于**模型自标，甚至优于 Self-RAG 这类专门微调过的模型。
-原因是带格式约束会占用小模型本就紧张的指令跟随能力，推理质量一起下降。
-
-```
-① 无引用自由生成（不加任何格式约束，保住推理质量）
-② 中文断句切原子句（正则 [。！？；\n] + 引号/括号配对保护）
-③ 每句 × 每片算相关性 → 超阈值才挂引用，否则标「无引用」
-```
-
-> **风险**：后置归因会**掩盖「模型用了自己的知识」这一事实** ——
-> 它给每句都找一个最像的片挂上，看起来有引用，实际可能只是主题相关。
-> 所以阈值必须严（宁可标「无引用」），且必须在 §18.2 的**引用正确率**上验证，
-> 不能只看「有引用的句子比例」这个自欺指标。
-
-**③ 本地轨的 GBNF 约束解码：只锁两件事，不做全句强制**
-
-`llama.cpp` 的 GBNF 能做到 prompt 做不到的两件事：
-
-```gbnf
-# (a) 引用 ID 白名单：逐请求生成，虚构 [C9] 在采样层就不可能出现
-cite ::= "[C" ("1"|"2"|"3"|"4"|"5"|"6"|"7"|"8") "]"
-# (b) 首 token 判决：逼模型在写任何内容之前先决定弃权还是回答
-root ::= "[无依据]" refusal | "[答]" answer
-```
-
-**不要**写成 `sentence ::= text "。" cite+` 这种全句强制 ——
-它会逼模型在没有依据的句子上也硬挂一个引用，把幻觉从「无引用」
-变成「有错误引用」，反而拉低引用正确率。
-
-> GBNF 只解决「标记形状与 ID 合法」，**完全不解决「这个 ID 是不是正确的那一片」**。
-> 语义正确性只能靠 ②。
-
-**④ 引用标记保持 ASCII `[C1]`，明确禁用 `【1】`**
-
-`【】` 是中文正文里的高频字符 —— 合同写「【重要】」、公文写「【第一条】」。
-用 `【1】` 做标记会让后置校验的正则与**原文内容**冲突。
-（`[1]` vs XML 标签的对照消融在公开文献里是空白，此处依据是工程约束而非实测。）
-
-**⑤ 资料在前、问题在后** —— 官方 long-context 指引实测「queries at the end
-can improve response quality by up to 30%」。§12.4 现有顺序已符合。
-增量：在问题**之后**补一行约束复述，占住 recency 槽位。
-
-#### **[v5 修正]** 流式输出与后置校验的冲突
-
-> **审计发现（major）**：v4 同时要求「后置校验在生成完成后执行，不通过不返回给用户」和「`chat.token` 逐 token 实时推送」。**这两条互斥** —— 答案边生成边推，就已经返回给用户了，无法撤回。v4 只意识到"引用收不回"，**没意识到答案正文同样收不回**：上表四条处置里有三条要求修改或废弃已生成的文本。
-
-**修正：两阶段流式 + 显式修订事件。**
-
-```
-阶段一：草稿流（用户立刻看到内容，不干等）
-   chat.draft_token  ──── 逐 token 推送，UI 标记为「生成中」（淡色/斜体）
-
-阶段二：定稿（生成结束后校验）
-   校验通过  → chat.finalized  { text, citations }
-              UI 把草稿替换为定稿文本，转为正常样式
-   轻度修订  → chat.finalized  { text: 剔除虚构标记后的文本, citations }
-              UI 原地替换，无感
-   重新生成  → chat.regenerating { reason }  ← 明确告知用户
-              UI 清空草稿区，显示「正在重新生成」，然后回到阶段一
-   降级      → chat.fallback  { retrieved: [...] }
-              UI 清空草稿，改为渲染检索结果列表 + 说明为什么没有给出答案
-```
-
-**关键点**：
-
-1. **UI 必须在视觉上区分"草稿"与"定稿"**。草稿用淡色+斜体+「生成中」标记，用户知道它可能变。这是唯一诚实的做法 —— 假装流式内容是最终答案，然后偷偷改掉，比等待更糟。
-2. **`chat.citations` 仍然只在定稿时推送**（v4 这条是对的，保留）。
-3. **降级路径必须有对应事件**（`chat.fallback`）—— v4 的 §14 事件清单里没有承载它，前端无从渲染。同理 §12.3 ① 的"纯元数据问题只走 SQL"也需要 `chat.metadata_result` 事件。
-4. 若嫌两阶段复杂，**允许配置为"非流式模式"**（生成完毕、校验通过后一次性返回）。首个版本可以先做非流式，把两阶段流式列为体验优化项 —— 但**不允许"流式 + 不校验"**，那会直接导致 §18.2 的阻塞项不达标。
-
-### 12.5 增量更新
-
-文件内容变化（SHA-256 变了）时，**不整文件重嵌入**：
-
-```
-1. 重新解析 → 新 [Block] → 新 child 片
-2. 与旧片做 diff，diff key = text_hash（内容哈希）        ← [v5 修正]
-   辅助键 = (section_path, ordinal) 仅用于「位置变化」判定
-3. 未变的片（text_hash 命中）：原样保留，向量不动   ← 通常占绝大多数
-   新增的片：解析 + 嵌入 + 入库
-   删除的片：级联删除 chunks / fts / vec
-   仅位置变的片：只更新 ordinal / page / section_path
-4. 单事务提交
-```
-
-> **[v5] diff key 必须以 `text_hash` 为主，不能以 `section_path` 为主。**
->
-> **审计发现（major）**：v4 用 `(section_path, sha1(text))` 联合做 diff。但**最常见的编辑模式恰恰会让 section_path 全变** —— 在文档开头插入一段，后续所有编号从"2.3"变成"2.4"，联合键全部失配，diff 会误判为"整篇都变了"，退化成全量重嵌入。而这正是增量更新要解决的场景。
->
-> 以 `text_hash` 为主键后：正文没变的片一律命中复用，只更新它们的 `section_path` 与 `ordinal`（廉价的 UPDATE），真正需要重新嵌入的只有正文确实变化的片。
-
-典型场景：一份 200 页的合同改了一条条款 —— 重嵌入代价从 200 页降到 1 片。这直接决定了产品在"文件会被反复编辑"的真实使用中是否可用。
-
-### 12.6 引用映射与跳转
-
-`chunk_id` 是引用的唯一锚点，向上映射到用户可见的定位信息：
-
-| 格式 | 存储的定位信息 | UI 跳转行为 |
-|---|---|---|
-| PDF | `page` / `page_end` + `bbox`（**多矩形**） | 打开并跳到起始页，高亮全部矩形 |
-| DOCX | `section_path` + `ordinal` | 打开并滚动到该章节 |
-| Markdown | `section_path`（heading 锚点） | 打开并跳到锚点 |
-| TXT | `ordinal`（段落序号） | 打开并滚动到该段 |
-
-> **[v5 修正]** v4 说 PDF 用 `page + bbox`，但 §12.2 分片后**一个 chunk 会跨多个 Block、甚至跨页**，单个 `page` 加单个 `bbox` 装不下。§9 已改为 `page` / `page_end` + `bbox` 存 JSON 数组 `[{page,x0,y0,x1,y1}, …]`，高亮时遍历渲染。
-
-**引用的文件处于 `missing` / `volume_offline` / `cloud_placeholder` 时**：仍展示 `snippet` 原文片段与定位信息，但跳转按钮置灰，标注具体原因（"外置卷未挂载" / "已被微信清理" / "云端未下载"）。**知识不随文件消失而消失** —— 这是索引模式的关键体验优势。
-
-### 12.7 Retriever 抽象
-
-所有上层代码只依赖此接口，不直接触碰 FTS5 或 sqlite-vec：
+Reranker 是固定协议：
 
 ```python
-class Retriever(Protocol):
-    def search(
-        self,
-        query: str,
-        filters: SearchFilters,
-        top_k: int,
-    ) -> list[RetrievedChunk]: ...
-
-@dataclass
-class RetrievedChunk:
-    chunk_id: int
-    content_id: int      # [v5] chunks 挂在 content 上
-    file_ids: list[int]  # [v5] 同一 content 可能对应多个 file（duplicate）
-    text: str            # parent 展开后的文本
-    score: float         # RRF 融合分
-    page: int | None
-    page_end: int | None # [v5]
-    bbox: list | None    # [v5] 多矩形
-    section_path: str
-    snippet: str         # 用于引用展示的原文片段
+class Reranker(Protocol):
+    def rerank(self, query: str, candidates: list[Candidate]) -> list[RankedCandidate]: ...
 ```
 
-> **[v5]** `file_ids` 是列表而非单值：`contents` 表引入后，一份内容可能对应多个文件路径（重复文件）。展示引用时选择当前可访问的那个 —— 这正好让"原件被微信清理但保全副本还在"的情况自动降级到副本。
+实现优先级：
 
-V1.5 提供 `HybridRetriever`（jieba-FTS5 + trigram-FTS5 + sqlite-vec + RRF）。这层抽象同时对冲三件事：§4.3 选 sqlite-vec 的量级风险、§12.9 的 V2 扩展、以及检索策略的 A/B 评测（换实现跑同一套评测集）。
+1. 本地轻量 Cross-Encoder，首选路径。
+2. CoreML/ANE 适配器，用于达到性能门槛。
+3. 用户显式启用的 OpenAI 兼容或专用 Rerank API。
+4. `RrfOnlyReranker` 仅作为降级实现，响应必须返回 `degraded: ["rerank"]`。
 
-### 12.8 全量重建
+模型不在计划中凭经验拍板。先用真实评测集对候选模型做 benchmark，再根据以下门槛选择：
 
-触发条件：`embedding_model_id` 变更、分片策略变更、解析器升级。
+- 中文和中英混合 nDCG@10、MRR@10 明显优于 RRF 基线。
+- Top 20-30 的本地 P95 满足交互延迟预算。
+- 峰值内存和 DMG 增量可接受。
+- PyInstaller 冻结与 arm64 运行稳定。
 
-**必须是显式任务**，不做隐式静默重建 —— 静默重建会在用户毫无察觉的情况下占满 CPU 和 API 配额。
+若大模型 Top 50 需要 17 秒，应减少候选、使用轻量模型或更换运行时，而不是删除 Rerank 阶段。
 
-要求：带进度（`index.rebuild_progress` 事件，数据来自 `tasks.progress_done/total`）、可中断、可恢复（按 `content_id` 断点续跑）、**重建期间旧索引仍可用**（新索引写入影子表 `chunks_vec_new`，完成后在单事务内 `ALTER TABLE … RENAME` 原子切换）。
+### 5.6 多样性控制
 
-### 12.9 V2 扩展点
+- 内容去重按 `content_id`，不是 `file_id`。
+- Rerank 前使用软 cap，避免一个超长文档占满计算预算。
+- Rerank 后使用硬 cap，初始值为每份内容最多 3 个 Child。
+- 对高度重叠的相邻 Child 合并处理。
+- 文件书范围必须在 SQL/向量路线内执行，不能在 Top-K 后过滤。
 
-三个扩展点的插入位置在 V1.5 阶段就预留好，避免届时改动主链路：
+### 5.7 Parent 扩展
 
-| V2 能力 | 插入位置 | 对 V1.5 的改动 |
+对通过 Rerank 的 Child 执行：
+
+- 恢复所属 Section 标题和结构路径。
+- 根据语义边界取前后相邻 Child。
+- 对表格、列表和定义块采用结构感知扩展。
+- 扩展只增加供压缩选择的候选上下文，不直接全部送入生成模型。
+
+### 5.8 上下文压缩
+
+压缩采用“抽取优先、生成禁入证据”的原则：
+
+```text
+ExpandedEvidence
+  -> sentence / row segmentation
+  -> query relevance scoring
+  -> select exact source spans
+  -> merge overlaps
+  -> cross-document dedupe
+  -> token-budget packing
+```
+
+输出 `EvidenceSpan`：
+
+- `span_id`
+- `chunk_id`
+- `start_offset` / `end_offset`
+- `text`
+- `relevance_score`
+- `content_id` / `section_id`
+- `page` / `heading_path` / locator
+
+第一版使用可解释的抽取式压缩：词法覆盖、向量相似度、Rerank 分和位置特征组合。以后可增加 LLM 选择器，但模型只能返回已有 `span_id`，不能自由改写证据。
+
+### 5.9 Token 预算装配
+
+- ContextPack 根据模型上下文上限和回答预留空间计算预算。
+- 优先保留不同文档的高分证据，再补充必要邻接上下文。
+- 每个证据块携带稳定 `[C1]` 锚点。
+- 装配结果记录被保留和被丢弃的理由，供 explain 和评测使用。
+
+## 6. 生成、引用与拒答
+
+### 6.1 生成原则
+
+- 模型只接收 ContextPack，不直接访问文件系统或数据库。
+- 每个事实性陈述必须引用一个或多个 EvidenceSpan。
+- 资料不足时必须拒答，不允许用模型常识补齐个人资料中的空缺。
+- 云端模型只在用户明确启用后接收必要 EvidenceSpan，不上传文件本体。
+
+### 6.2 后置校验
+
+保留并加强现有四条校验：
+
+1. 删除不存在的引用标签。
+2. 非拒答答案没有引用时重生成一次。
+3. 二次无引用时降级为证据列表，不输出自然语言答案。
+4. 拒答句夹带事实时截断。
+
+新增：
+
+- 引用必须对应本次 ContextPack 中的 EvidenceSpan。
+- 引用展示文本直接取原文 span，不取模型复述。
+- 文件缺失时仍可展示已索引证据，但跳转明确标记不可用。
+- 最终事件只在校验完成后发布；草稿不得被标记为已验证答案。
+
+### 6.3 检索解释
+
+调试模式和评测工具需要展示：
+
+- 各召回路线及排名。
+- Document/Section 路由加权。
+- RRF 分、Rerank 分和多样性淘汰原因。
+- Parent 扩展范围。
+- 压缩保留的原文区间。
+- 当前降级阶段和模型版本。
+
+普通用户界面只显示简化状态，详细 trace 不暴露密钥或完整隐私文本。
+
+## 7. Workspace 与文件管理
+
+### 7.1 Workspace
+
+- 文件书升级为知识空间，可限制搜索和问答范围。
+- 专题空间可以包含文件、Section 和保存的查询，但第一阶段仍以文件成员为主。
+- 标签、来源、时间和文件类型作为检索过滤条件。
+- Workspace 不复制文件和索引，只保存成员与查询范围。
+
+### 7.2 文件管理的职责
+
+文件管理保留以下功能：
+
+- 来源发现、用户授权、启用与停用。
+- 文件身份追踪、内容去重、缺失和卷离线处理。
+- 易失来源提醒与保全副本。
+- 分类、标签、重复文件和索引状态治理。
+- Finder 定位和原始证据回溯。
+
+这些能力集中到“资料库管理”视图，不再占据产品首页的中心位置。
+
+## 8. API 设计
+
+### 8.1 Knowledge API
+
+- `POST /knowledge/search`：统一搜索入口，支持 scope、filters、分页和 explain。
+- `POST /knowledge/ask`：执行同一检索管线后生成答案。
+- `GET /knowledge/evidence/{span_id}`：读取引用证据及 locator。
+- `GET /knowledge/runs/{trace_id}`：调试模式下读取检索 trace。
+- `POST /knowledge/reindex`：按 index version 构建影子索引。
+- `GET /knowledge/index/status`：分层索引数量、版本和降级状态。
+
+搜索与问答必须复用同一 RetrievalPipeline，不能各自实现一套融合逻辑。
+
+### 8.2 Library API
+
+现有来源、文件、保全、分类和数据库接口保持兼容，逐步迁移到 `/library/*` 命名空间。旧路径在桌面端完成迁移前保留适配器。
+
+### 8.3 响应公共字段
+
+知识接口至少返回：
+
+- `trace_id`
+- `index_version`
+- `scope`
+- `degraded`：缺失的 route、rerank、compression 或 generation 阶段
+- `timings`
+- `results` 或 `answer`
+
+密钥、完整模型配置和内部文件系统权限信息绝不回显。
+
+## 9. 桌面信息架构
+
+### 9.1 第一屏：统一三栏知识库
+
+```text
+┌────────────────────┬──────────────────────────────┬─────────────────────┐
+│ 文件管理            │ 文件详情与命中片段             │ 知识问答              │
+│ 搜索、分类、文件书   │ 文件元数据、正文 Section       │ 模型状态、回答、引用   │
+│ 来源、类型、文件列表 │ 页码、章节路径、Finder 定位     │ 独立问题输入框         │
+└────────────────────┴──────────────────────────────┴─────────────────────┘
+```
+
+- 不设置“知识工作台/资料库管理”顶层切换，也不设置“搜索/问答”模式切换；三个区域始终同时存在。
+- 左侧输入框只检索文件名和正文；点击文件或检索结果只更新中栏，不清空右侧回答。
+- 右侧有独立问题输入框；点击回答引用在中栏打开证据与 Section 上下文。
+- 模型状态常驻右栏。配置保存不等于可用，必须提供真实的端到端连接检测，并区分未配置、待检测、可用、鉴权失败、模型不存在、限流、超时、不可达和响应无效。
+- Rerank 或压缩降级时显示安静但可见的状态，不用技术术语打扰普通用户。
+- 来源、重复项、保全和分类规则保留为文件管理的支撑能力，不独立成另一个产品模式。
+
+### 9.2 实现策略
+
+先拆分当前单文件 Renderer 的状态和 API 调用，不同步引入大型前端重写。完成 Knowledge API 和检索 trace 后再决定是否迁移 Vue/React；框架迁移不能阻塞知识管线。
+
+## 10. 评测体系
+
+### 10.1 先冻结基线
+
+在实现新层级和 Rerank 前，使用当前 child + 四路召回 + RRF 管线跑一次完整基线，保存：
+
+- 代码提交和索引版本。
+- 每题各路候选与最终排序。
+- Recall、MRR、nDCG、延迟和内存。
+- 当前问答输出、引用和拒答结果。
+
+### 10.2 评测集
+
+首个正式评测集不少于 60 题：
+
+- 20 题单文档事实定位。
+- 10 题同义改写或无关键词重合。
+- 10 题跨文档综合。
+- 10 题元数据、时间和范围问题。
+- 10 题库内确实没有依据的问题。
+
+每题标注：scope、相关 document、相关 section、gold chunks、gold evidence spans、答案要点和是否应拒答。标注在实现新算法前完成，之后只因资料变化而修订，不因算法结果反向修改。
+
+### 10.3 指标与发布门槛
+
+| 阶段 | 指标 | v7 首个发布门槛 |
 |---|---|---|
-| **Reranker**（交叉编码器精排） | §12.3 ④ 与 ⑤ 之间 | 无，多一个可选阶段 |
-| **LLM 查询路由** | §12.3 ① 规则不确定时的兜底 | 无，替换 fallback 分支 |
-| **LLM Wiki**（实体/主题层） | 新增 `Retriever` 实现，与 Hybrid 并列后融合 | 无，靠 §12.7 抽象隔离 |
-| **Agentic RAG**（多轮检索） | 包在 `Retriever` 外层的编排循环 | 无 |
+| 深召回 | Gold evidence Recall@50 | >= 0.90 |
+| Rerank | nDCG@10 / MRR@10 | 相对 RRF 基线提升 >= 15%，Recall@20 回退 <= 2pp |
+| 压缩 | Evidence Recall | >= 0.95 |
+| 压缩 | 输入 token 减少 | 中位数 >= 35%，且 Evidence Recall 达标 |
+| 问答 | 引用支持率 | >= 0.95 |
+| 问答 | 无依据正确拒答率 | >= 0.85 |
+| 安全 | 虚构引用进入最终答案 | 0 |
+| 增量 | 200 片改 1 片 | 仅重嵌变化 Child 及受影响上层表示 |
 
-> **前置条件（不可跳过）**：以上任何一项都必须在 §18.2 的评测集跑出基线之后才能引入，且引入后必须用同一套评测集证明有提升。否则无法判断它是真的更好，还是只是更复杂。
+绝对门槛与相对提升同时使用：绝对值防止低质量发布，相对值用于证明新增阶段确实产生收益。
 
----
+### 10.4 延迟预算
 
-## 13. API 清单
+延迟用目标硬件的 P50/P95 记录，初始预算：
 
-前缀 `/api/v1`，均需 Bearer 令牌。
+- 非生成搜索 P95：<= 2.5 秒。
+- Rerank Top 20-30 P95：<= 1.5 秒。
+- 压缩 P95：<= 500 毫秒。
+- 问答首个可见状态：<= 1 秒；完整生成延迟单独记录。
 
-### 来源与发现 **[改]**
+模型质量达标但延迟超标时，优先优化候选数、批处理、量化和运行时。不得通过跳过阶段来伪造达标。
 
-```
-GET    /sources                      列表（含权限状态、易失标记）
-POST   /sources/discover             触发自动发现，返回候选列表
-POST   /sources/{id}/enable          启用（触发 TCC 自检）
-POST   /sources/{id}/disable
-PATCH  /sources/{id}                 改名 / auto_preserve 开关
-POST   /sources                      手动添加目录
-DELETE /sources/{id}
-POST   /sources/{id}/recheck         重新自检权限
-POST   /sources/{id}/rescan          手动全量扫描
-POST   /sources/{id}/reprobe         路径失效后重新探测（§7.5）
-```
+## 11. 测试策略
 
-### 文件
+### 11.1 单元测试
 
-```
-GET    /files                        列表（按 state/source/category/tag/时间过滤，分页）
-GET    /files/{id}                   详情（含分类历史、操作历史）
-PATCH  /files/{id}                   修改分类 / 标签 / 名称（仅索引层）
-POST   /files/{id}/confirm           确认低置信度分类
-POST   /files/{id}/ignore
-POST   /files/{id}/reclassify
-POST   /files/{id}/preserve          保全副本
-POST   /files/{id}/relocate          可选真实归档
-POST   /files/{id}/undo              撤销最近一次操作
-POST   /files/{id}/reveal            在 Finder 中显示
-POST   /files/{id}/open              用默认应用打开
-```
+- 层级构建：Heading 树、弱 Section、表格、代码、空标题和超长段落。
+- QueryPlan：scope、时间、来源、文件类型和会话指代。
+- Fusion：多路线缺失、重复候选和权重稳定性。
+- Rerank：排序、批处理、超时、模型不可用和显式降级。
+- Diversify：按 content 去重、软硬 cap 和相邻重叠。
+- Compression：offset 往返、重叠合并、token 预算和 evidence recall。
+- Citation：span -> chunk -> file/page/section 映射一致。
 
-### 批量
+### 11.2 集成测试
 
-```
-POST   /files/batch/classify         批量改分类
-POST   /files/batch/preserve
-POST   /files/batch/tag
-```
+- 摄入一个结构化文档后，Document/Section/Child 数量和父子关系正确。
+- 关系表、FTS 和三层向量表任一写入失败时全部回滚或影子版本失效。
+- Document/Section 未命中时，正确 Child 仍可通过其他路线进入候选。
+- Rerank 只接收 Child，Parent 扩展发生在其后。
+- 压缩后的每个字符都来自标注的原文区间。
+- 文件书范围在每条召回路线内生效。
+- 模型不可用时响应和 UI 明确标记降级。
 
-### 分类与规则
+### 11.3 回归与端到端
 
-```
-GET/POST/PATCH/DELETE  /categories   （删除非空分类时拒绝）
-GET/POST/PATCH/DELETE  /rules
-POST   /rules/learn                  从一次用户修正生成规则（§11.4）
-POST   /rules/{id}/backfill          回溯应用到已有文件
-GET/POST/DELETE        /tags
-```
+- 保留现有文件身份、监听、去重、保全、引用校验和数据库原子性测试。
+- 修复当前桌面测试中依赖函数字面声明的脆弱断言，改测行为和 IPC 契约。
+- E2E 覆盖：导入资料 -> 索引完成 -> 搜索 -> 查看证据 -> 提问 -> 引用跳转。
+- E2E 覆盖 sidecar 重启后检索恢复和 active index 不变。
+- 每次检索策略改动自动运行离线评测并与基线比较。
 
-### 检索
+## 12. 数据迁移与回滚
 
-```
-POST   /search                       { query, filters, top_k }
-```
+### 12.1 Schema 迁移
 
-### 文件书（V1.5）
+当前数据库 `SCHEMA_VERSION = 1`。v7 使用显式、可重复执行的迁移：
 
-```
-GET/POST/PATCH/DELETE  /books
-POST   /books/{id}/members
-```
+1. 新增 `sections`、上层向量、index version 和 retrieval trace 表。
+2. 以 nullable 字段扩展 `chunks`，不立即删除旧字段或旧索引。
+3. 对现有 contents 后台构建 v2 层级索引。
+4. 校验行数、外键、向量数量和抽样检索结果。
+5. 在事务中切换 active knowledge index version。
 
-### 问答（V1.5）
+不在首次迁移中重写 `files` / `contents` 主键，也不引入 ORM。
 
-```
-POST   /chat                         { question, book_id? } → { chat_id }（立即返回，非流式）
-GET    /chats  /  GET /chats/{id}
-```
+### 12.2 双轨和回滚
 
-> **[v5 修正] 问答不再用 POST 响应体做 SSE 流。**
->
-> **审计发现（major）**：v4 的 §13 写 `POST /chat → SSE 流`（POST 响应本身是流），§14 又写"统一走 `GET /events`"并把 `chat.token` 列在全局事件表里 —— **同一批事件被指定了两条互斥通道**，实施者必然二选一，然后另一半代码对不上。
->
-> **统一为：`POST /chat` 立即返回 `chat_id`，所有问答过程事件走全局 `GET /events` 长连接**，用 `chat_id` 关联。好处：单一通道、断线重连后能继续收、多窗口可同时观察同一次问答。
+- `RetrievalPipelineV1` 保留为只读回退路径，直到 v7 评测和 E2E 全部通过。
+- 新索引失败时继续使用旧 active version。
+- 切换后出现错误可将 active version 指回旧索引，不重新扫描原始文件。
+- 清理旧索引必须晚于稳定观察期，并需要明确版本目标。
 
-### 系统
+## 13. 实施里程碑
 
-```
-GET    /health
-GET/PATCH  /settings                 资料库根目录、隐私开关、模型端点
-GET    /events                       SSE 长连接（唯一的事件通道）
-POST   /index/rebuild                全量重建（embedding 模型变更）
-GET    /stats                        文件总数、各状态分布、索引覆盖率、跳过统计
-POST   /db/integrity_check           手动完整性检查（§9.2）
-POST   /db/backup                    手动备份
-```
+### M0：基线与文档收口
 
-### **[v5 新增]** 分类树维护
+**执行状态（2026-08-13）**：已完成。后端 118 项、桌面 10 项测试全绿；72 题 v7 基线已冻结；搜索与问答均返回不含正文的非持久化 trace。
 
-```
-POST   /categories/{id}/move         移动子树（纯数据库操作）
-POST   /categories/{id}/merge        合并到另一分类（迁移全部文件）
-```
+- 将本计划作为唯一权威计划，根目录只保留入口链接。
+- 修复现有桌面测试，使当前分支全绿。
+- 建立不少于 60 题的评测集和当前管线基线。
+- 为检索结果增加非持久化 trace 对象。
 
-> v4 只有 CRUD 加一句"删除非空分类时拒绝"，用户建了几百个文件的分类后**无法整理分类树** —— 只能删空的，不能合并、不能移动。这是功能缺失。
+**完成标志**：当前功能不变；后端和桌面测试全绿；基线结果可重复生成。
 
----
+### M1：检索管线解耦
 
-## 14. SSE 事件清单
+**执行状态（2026-08-13）**：已完成。QueryPlan、四路召回、文件书范围、RRF、Candidate、diversify、expand、assemble 和阶段 timings 已由搜索与问答共享；后端 121 项、桌面 10 项测试全绿。72 题固定评测与 M0 基线逐题等价，Recall@5 保持 78.3%，严格通过率保持 61.7%。
 
-统一走 `GET /events`（**唯一事件通道**，见 §13 问答一节的修正），Pydantic 判别联合，`type` 为判别字段：
+- 从 `qa/answer.py` 拆出 QueryPlan、routes、fusion、diversify、expand 和 assemble。
+- 搜索与问答复用同一 RetrievalPipeline。
+- 引入稳定中间对象和阶段 timings。
 
-| type | payload | 触发时机 |
+**完成标志**：新旧管线在固定输入上结果等价，Recall 不回退。
+
+### M2：Document / Section / Child 分层索引
+
+**执行状态（2026-08-13）**：已完成。schema v2 已支持持久化 Document / Section / Child、Child 原文 offset、每内容索引版本、影子构建、原子激活和已完成版本回滚；检索只读取 active 版本，Document / Section 以低权重软路由进入融合。真实 v1 库迁移前已创建可恢复备份，迁移后 `quick_check` 通过且 3460 个 Child 全部保持 active。72 题 Document Recall@50 为 98.3%（门槛 90%），Recall@5 保持 78.3%；后端 131 项、桌面 10 项测试全绿。当前评测集的 gold 以文档和答案关键词为主，精确 EvidenceSpan 标注在 M4 前补齐，不将 Document Recall 冒充 Evidence Recall。
+
+- 增加 schema migration、Section 树和三层表示。
+- 实现影子构建、索引版本切换和增量祖先更新。
+- 接入 Document/Section 软路由。
+
+**完成标志**：层级关系、原子性和回滚测试通过；Recall@50 达标。
+
+### M3：Rerank
+
+**执行状态（2026-08-13）**：协议与首个本地适配器已完成，模型发布门槛未完成。Rerank 已固定在 RRF 后、diversify 前，支持 `LocalStaticReranker` 与显式 `RrfOnlyReranker` 降级，trace 返回模型、耗时和 `degraded: ["rerank"]`。72 题对照中 local-static 将 Recall@5 从 78.3% 提至 83.3%、严格通过率从 65.0% 提至 76.7%、Recall@20 从 96.7% 提至 98.3%，P50 从 26.8ms 增至 36.7ms；但 MRR@10 / nDCG@10 仅相对提升 5.6% / 4.7%，未达 15% 门槛。当前环境无 Cross-Encoder 运行时或模型资产，且计划禁止未批准的原生依赖，因此 M3 不标完成；现有适配器默认启用并保留可回退路径。
+
+- 建立候选模型 benchmark，不凭模型大小或记忆选型。
+- 实现 Reranker 协议、本地适配器和显式降级适配器。
+- 调整深召回、RRF 和软硬 cap。
+
+**完成标志**：nDCG/MRR 提升和延迟预算同时达标；PyInstaller/DMG 冒烟通过。
+
+### M4：证据压缩
+
+**执行状态（2026-08-13）**：抽取式压缩链路已接入，发布门槛未完成。当前实现支持分句/表格行切分、相邻句窗口、跨文档覆盖、重复控制和字符/token 代理预算；搜索摘要使用最佳原文 EvidenceSpan，问答改为消费 ContextPack，引用可回溯 `span_id`、Child offset 和 Document offset。对 60 个可回答问题的关键词代理评测中，keyword evidence recall 为 90.0%，字符压缩比例中位数约 68%，压缩阶段 P95 约 59ms；漏例为 A10、F20、F30、F31、P19、P20，其中部分由上游候选未召回造成。由于 90.0% 未达 95% Evidence Recall 门槛，且精确 gold span 标注尚未完成，该结果不能替代正式 Evidence Recall，M4 不标完成。
+
+- 实现分句/表格行切分、相关性评分、区间选择、去重和 token 装配。
+- 建立 EvidenceSpan 到原文 locator 的完整映射。
+- 接入搜索摘要和问答 ContextPack。
+
+**完成标志**：Evidence Recall 与 token 减少门槛同时达标，offset 往返零错误。
+
+### M5：带引用问答升级
+
+- 生成改为消费 ContextPack。
+- 引用由 EvidenceSpan 驱动，完善拒答和降级。
+- 增加检索 explain 和可审计 validation。
+
+**完成标志**：引用支持率、正确拒答率和虚构引用门槛通过。
+
+### M6：统一三栏知识库界面
+
+**执行状态（2026-08-13）**：已完成。首页为统一三栏界面：左侧文件管理与检索，中间文件详情、正文和命中证据，右侧常驻知识问答；没有顶层双视图，也没有搜索/问答模式切换。新增受鉴权保护的文件详情 API 和模型端到端连接检测，保存配置后不会伪装成“已验证”。使用正式 Electron bridge 和真实资料库一致性副本完成端到端验证：默认载入 2587 个文件，检索返回 32 个真实文件，文件/结果点击只更新中栏，右侧状态保持；模拟可用模型时显示“模型可用”并启用提问，不可达时显示明确错误并禁用提问。1280x820 与最小 960x640 窗口三栏均完整可见，无横纵溢出、Renderer 控制台错误或安全策略警告。
+
+- 左侧统一承载范围、文件管理、文件书、分类和检索结果。
+- 中栏承载选中文件详情、全部检索命中片段和引用证据。
+- 右栏常驻知识问答及模型检测状态。
+- 来源、重复和保全留在设置与文件管理能力中，不拆成独立主视图。
+
+**完成标志**：用户在同一屏幕完成文件浏览、检索、详情阅读、问答、引用回查和范围切换。
+
+### M7：发布候选
+
+- 全量回归、离线评测、性能测试、数据库升级/回滚演练。
+- 重跑 PyInstaller、Electron DMG 和真实安装冒烟。
+- 更新 README、HANDOFF 和发布说明。
+
+**完成标志**：本计划全部阻塞指标通过，未降级模式下完整知识管线可用。
+
+## 14. 风险登记
+
+| 风险 | 影响 | 应对 |
 |---|---|---|
-| `source.discovered` | source 候选 | 自动发现找到新来源 |
-| `source.permission_changed` | source_id, ok | TCC 自检结果变化 |
-| `source.path_migrated` | source_id, old, new | 路径失效后重新绑定（§7.5） |
-| **`source.scan_progress`** | source_id, scanned, matched | **[v5]** 启用前预扫描进度（§7.7 ⑤） |
-| `file.detected` | file_id, name, source | 稳定性通过、登记完成 |
-| `file.state_changed` | file_id, from, to, error_code? | 状态迁移 |
-| `file.classified` | file_id, category, confidence, by | 分类完成 |
-| `file.indexed` | file_id, content_id, chunk_count | 索引完成 |
-| `file.moved` | file_id, old_path, new_path | 用户在 Finder 移动，inode 追踪到 |
-| `file.missing` | file_id, reason | 路径失效 |
-| `file.recovered` | file_id, new_path | 重定位成功 |
-| `file.preserved` | file_id, preserved_path | 保全副本完成 |
-| `volume.offline` / `volume.online` | volume_uuid, file_count | 卷状态变化 |
-| `index.progress` | done, total | 批量索引进度 |
-| `index.rebuild_progress` | done, total, phase | 全量重建进度 |
-| **`chat.draft_token`** | chat_id, delta | **[v5]** 草稿流（UI 标记「生成中」，可能被替换） |
-| **`chat.finalized`** | chat_id, text, citations[] | **[v5]** 校验通过的定稿，替换草稿 |
-| **`chat.regenerating`** | chat_id, reason | **[v5]** 校验失败正在重新生成 |
-| **`chat.fallback`** | chat_id, retrieved[] | **[v5]** 降级为检索结果列表（§12.4） |
-| **`chat.metadata_result`** | chat_id, files[] | **[v5]** 纯元数据问题的 SQL 结果（§12.3 ①，不走 RAG） |
-| **`db.integrity_warning`** | check, detail | **[v5]** 完整性检查发现问题（§9.2） |
-| **`task.skipped`** | file_id, reason | **[v5]** 因超限/不支持被跳过（§7.7 ④） |
-| `system.error` | code, message | 需用户注意的错误 |
+| 本地 Rerank 太慢 | 搜索不可交互 | Top-N 控制、批处理、量化、轻量模型、CoreML；不删除阶段 |
+| 新模型显著增大 DMG | 分发和启动变差 | 模型基准同时记录质量、大小、内存和冻结结果 |
+| 上层摘要漏掉正确主题 | 层级路由误杀 | 上层只软加权，Child 四路保持独立入口 |
+| 压缩丢失关键限定词 | 回答失真 | Evidence Recall 门槛、保留否定/数值句、原文区间测试 |
+| 三层增量索引复杂 | 更新错误或全量重算 | hash 依赖图、影子版本、祖先最小更新测试 |
+| 检索 trace 泄露隐私 | 敏感内容落盘 | 默认只存 id/score/timing；正文仅评测模式短期保存 |
+| 云端 Rerank/LLM 泄露文本 | 信任边界破坏 | 默认关闭、明确提示、只发必要片段、密钥 safeStorage |
+| 新架构重构范围过大 | 长期无法交付 | 按 M1-M6 垂直里程碑推进，每步保持可运行和可回滚 |
 
-> **[v5]** `chat.token` / `chat.citations` 已被 `chat.draft_token` / `chat.finalized` 取代，原因见 §12.4 的流式修正。新增的 `chat.fallback` 与 `chat.metadata_result` 承载 v4 定义了行为却没有事件的两条输出路径。
+## 15. 开工顺序
 
-前端 `switch (event.type)` 由生成的 TS 联合类型保证穷尽性检查。
+严格按以下顺序执行：
 
----
+1. 修复当前测试基线，不在红灯上做架构迁移。
+2. 标注评测集并冻结当前检索结果。
+3. 只拆管线，不改变行为。
+4. 建三层索引和软路由。
+5. 接入实际 Rerank 并用评测选择模型。
+6. 在 Rerank 之后实现 Parent 扩展和证据压缩。
+7. 升级生成、引用和拒答。
+8. 最后调整桌面信息架构。
 
-## 15. V1.0 任务分解
+文件管理新增功能在 M0-M5 期间只接受数据安全、资料可靠性或知识溯源相关改动。普通管理便利性功能不抢占知识引擎里程碑。
 
-### A0 — 打包冒烟测试（第一天做完）**[改]**
+## 附录 A：v6 到 v7 的关键变化
 
-只有 `GET /health` 的 FastAPI + 空 Electron 窗口，走通：
-
-```
-uv python install 3.12 → uv sync → PyInstaller 打 sidecar
-  → electron-builder 出 DMG → 双击安装 → 窗口起来 → 请求到 /health 返回 200
-```
-
-> **[改] 为什么提前到第一天**：这是全计划最容易翻车的一项 —— PyInstaller 处理原生依赖、arm64 签名与公证，卡两天很正常。初版排在第 11 条，意味着功能全做完才发现打不出包，那时改依赖选型代价极大。
->
-> 空壳跑通后，**每引入一个原生依赖（PyMuPDF、sqlite-vec、python-magic）就重跑一次冒烟** —— 问题立刻定位到具体依赖，而非在几十个依赖里大海捞针。
-
-#### **[v5 新增]** 冒烟必须覆盖"冻结环境的原生依赖加载"
-
-> **审计发现（major）**：v4 的冒烟只跑到 `GET /health` 返回 200，**完全不触发 sqlite-vec 的 dlopen 和 PyMuPDF 的 import**，因此暴露不了冻结环境下最可能翻车的三件事：
-> ① Python 标准库 `sqlite3` 是否编译了 `enable_load_extension`（未启用则 sqlite-vec 无法加载）；
-> ② `vec0.dylib` 在 PyInstaller 单文件产物里的路径是否被正确收集；
-> ③ PyMuPDF 的字体/资源数据是否被打包。
->
-> 本机实测：开发环境 Python 3.14 上 `enable_load_extension` 可用，**但这不代表 PyInstaller 冻结环境可用** —— 这正是冒烟要验的。
-
-**A0 的 `GET /health` 必须做真实健康检查，不能只返回 200**：
-
-```python
-# /health 返回体（全绿才算通过）
-{
-  "sqlite_version": "3.53.2",
-  "enable_load_extension": true,     # ← 直接测 dlopen
-  "vec_loaded": true,                # ← 真实 sqlite-vec 扩展加载 + 建表 + 插入 + 查询
-  "pymupdf_imported": true,          # ← 真实 import fitz + 打开一份测试 PDF
-  "fts5_available": true,            # ← 建 fts5 虚拟表 + 插入 + MATCH 查询
-}
-```
-
-**A0 的验收标准**：`/health` 返回全部 `true`，且 `vec_loaded` 在**打包后的产物里**验证（而不是开发环境）。
-
-### A1 — 仓库骨架与契约管线
-
-workspace 初始化；`services/api` 用 uv 初始化 + Alembic 首迁移；`packages/contracts/generate.ts`（OpenAPI + 事件 Schema → TS）；CI 校验生成物未被手改。
-
-### A2 — 来源自动发现 **[新]**
-
-- 已知应用清单（bundle id → 目录模式）
-- 三种探测手段（§7.2）：bundle 存在性、配置读取、启发式 glob + mtime 筛选
-- 易失性判定
-- 首次启动引导 UI（§7.4），默认全部不启用
-- TCC 权限自检 + 授权引导（§6.4）
-- 24 小时周期重探测 + 路径迁移（§7.5）
-
-### A3 — 监听与稳定性检测
-
-watchdog 多源封装、动态增删；§11.1 三条判据 + `on_moved`；定时全量扫描兜底。
-
-### A4 — 文件身份与追踪 **[新]**
-
-- `(volume_uuid, inode)` 提取与唯一索引
-- 事件到身份的映射（§8.2），`on_moved` 走 inode 快速路径
-- 重定位四级策略（§8.3）
-- 卷挂载/卸载监听 → `volume_offline` 状态
-
-### A5 — 登记、去重与索引
-
-流式 SHA-256；`duplicate` 分支；结构感知分片；FTS5 写入；解析失败降级为元数据索引。
-
-### A6 — 规则分类引擎
-
-按 `priority` 匹配扩展名/来源/文件名模式；输出 `category_id` + 置信度；用户修正回流为规则（§11.4）+ 回溯应用。
-
-### A7 — 保全副本与可选归档
-
-§11.5 保全（复制+校验）；§11.6 可选真实归档（同卷 rename / 跨卷复制校验删源 / 重名消解 / 永不覆盖）；§11.7 两类撤销。
-
-### A8 — 桌面界面
-
-五个主视图：**文件库、待确认、文件书、搜索/提问、设置**。V1.0 阶段文件书与提问为占位。
-
-> **[改] 主视图从"智能收件箱"改为"文件库"** —— 索引模式下文件一进来就已经可用，收件箱不再是必经入口，降级为「待确认」精修工位（§2.3）。
-
-- **文件库**：虚拟视图，按分类树/标签/来源/时间任意组织；易失来源文件带 ⚠ 标记与一键保全
-- **待确认**：仅低置信度文件，批量确认，可从修正生成规则
-- **设置**：来源管理（含权限状态点、易失标记、auto_preserve 开关）、资料库根目录、隐私选项
-
-SSE 实时驱动，不轮询。
-
-#### **[v6 新增]** 界面设计规范
-
-> v2–v5 只写了"五个主视图"和每个视图放什么数据，**完全没写长什么样**。这会导致实施者产出一个功能正确但观感粗糙的界面。本节补齐。
-
-**整体布局**：**两级视图** —— 分类卡片页（概览）→ 列表页（密集）。
-
-> **[v6] 设计来源**：用户提供了 10 张参考图（`UI风格/`），风格为绿色渐变 + 磨砂玻璃 + 卡片堆叠。
->
-> **判断：那批是宣传渲染图，不是 UI 设计稿**（景深虚化、45° 斜置、发光边缘、大面积渐变）。直接照做会有四个硬问题：磨砂叠磨砂导致文字对比度不足；一屏只放 3–5 个卡片而用户有几千个文件；多层 blur 在 Electron 里滚动掉帧；高饱和绿做背景长时间使用疲劳。
->
-> **提取并保留两点**：① 「文件从文件夹里露出来」的卡片比喻 —— 它比一行行列表更直观地表达"这个分类里有什么"；② 绿色作为**强调色**（不做背景，只做选中态与重点数字）。
->
-> **分层解决密度矛盾**：卡片只用在**分类层**（十几到几十个，放得下也好看），文件仍用密集列表（几千个，必须高密度）。
-
-```
-【一级 · 分类卡片页】                      【二级 · 文件列表页】
-
-┌──────────┬─────────────────────┐      ┌──────────┬──────────────────────────┬────────┐
-│          │  ⌘K 搜索或提问…      │      │          │ ← 合同    ⌘K 搜索…        │        │
-│  侧边栏   ├─────────────────────┤      │  侧边栏   ├──────────────────────────┤ 详情面板│
-│          │ ┌───────┐ ┌───────┐ │      │          │ 采购合同.pdf   微信  2小时 │        │
-│ 全部      │ │ ▤▤▤   │ │ ▤▤    │ │  →   │ 全部      │ 服务协议.docx   下载  昨天 │[缩略图] │
-│ 最近      │ │       │ │       │ │      │ 最近      │ 保密协议.pdf   桌面  周一 │        │
-│ ⚠ 待确认  │ │合同 24│ │财务 18│ │      │ ⚠ 待确认  │ 框架协议.pdf   微信  周三 │2.4 MB  │
-│ 🔁 重复   │ └───────┘ └───────┘ │      │ 🔁 重复   │ 补充协议.docx   下载  上周 │工作>合同│
-│          │ ┌───────┐ ┌───────┐ │      │          │ 租赁合同.pdf   桌面  上周 │来源 微信⚠│
-│ ── 分类 ─ │ │ ▤▤▤▤  │ │ ▤     │ │      │ ── 分类 ─ │ 劳动合同.pdf   微信  上月 │        │
-│ ▾ 工作    │ │       │ │       │ │      │ ▾ 工作    │ 采购框架.docx   下载  上月 │[Finder]│
-│   合同    │ │产品  7│ │私人 12│ │      │   合同 ●  │ …                        │[保全]  │
-│   财务    │ └───────┘ └───────┘ │      │   财务    │                          │        │
-└──────────┴─────────────────────┘      └──────────┴──────────────────────────┴────────┘
-   卡片 180×120px，网格自适应              行高 28px，一屏 30+ 行，详情面板可折叠
-```
-
-**卡片规格**（一级页）
-
-| 项 | 值 |
+| v6 | v7 |
 |---|---|
-| 尺寸 | 180×120px，`grid` 自适应列数，间距 12px |
-| 背景 | `--bg-card`（浅 #F7F7F8 / 深 #2A2A2C）**纯色，无渐变、无 blur** |
-| 圆角 | 6px |
-| 内容 | 上部：前 3 个文件的缩略图叠放（露出边缘，15px 偏移）；下部：分类名 13px + 文件数 11px 次要色 |
-| 悬停 | 背景提亮 4%，缩略图偏移增至 20px（120ms ease-out）—— 这是唯一保留的"卡片堆叠"动效 |
-| 选中/进入 | 无边框，直接切到二级页 |
-
-**为什么卡片里放缩略图**：这是从参考图提取的核心价值。看到「合同」里前三个文件长什么样，比只看一个数字 `24` 有用得多。
-
-**列表页规格**（二级页）：沿用下方设计 Token，行高 28px。顶部有返回箭头与当前分类名（面包屑）。
-
-**侧边栏在两级视图中保持不变** —— 它是全局导航，随时可跳到任意分类，不必回一级页。
-
-**设计原则（六条，实施时逐条对照）**
-
-> **[v6] 风格已定：原生极简 + 分类层卡片。** 参照 DEVONthink / Things 3 的密度，卡片层参考 Finder 的图标视图，**不是**参考图里的渲染风。
-
-1. **原生优先，不自造控件**。用 macOS 系统字体（SF Pro / 苹方）、系统强调色、原生滚动条与右键菜单。目标是"像一个 Mac 应用"，不是"像一个网页"。
-2. **信息密度偏高**。这是工具类应用，用户要一屏看到尽量多的文件。行高 28–32px，不做卡片流、不留大片空白。
-3. **默认无边框**。用间距和微弱的背景色差分组，而不是到处画框线。分隔线只用在三栏之间，1px、10% 不透明度。
-4. **状态用颜色点而非文字标签**。易失来源 ⚠、待确认 ●、索引中 ◐、缺失 ○ —— 悬停才出文字说明。
-5. **深色模式必须同时做**，不是"以后再说"。用语义化 CSS 变量（`--bg-primary` / `--text-secondary` / `--accent`），跟随系统切换。
-6. **所有耗时操作有进度，不转圈**。索引、扫描、重建都走 SSE 推真实进度条。永远不出现无限旋转的菊花。
-
-**设计 Token（量化，实施者直接照用）**
-
-> "极简"是形容词，不可执行。以下是它的具体数值。
-
-| 类别 | 值 |
-|---|---|
-| 字体 | `-apple-system, "SF Pro Text", "PingFang SC"` |
-| 字号 | 列表行 13px / 侧边栏 13px / 详情标题 15px / 次要信息 11px |
-| 行高 | 列表行 **28px**（紧凑）、可在设置切换 32px（舒适） |
-| 圆角 | 全局 **4px**（选中态、按钮、输入框）；**不用** 8px+ 的大圆角 |
-| 三栏宽度 | 侧边栏 200px（可拖 160–280）/ 详情 280px（可折叠）/ 中栏自适应 |
-| 分隔线 | `1px solid color-mix(in srgb, currentColor 10%, transparent)`，**仅三栏之间** |
-| 选中态 | 系统强调色 12% 不透明度填充，**无边框、无阴影** |
-| 悬停态 | `currentColor 5%` 填充 |
-| 阴影 | **只有浮层（Quick Look、右键菜单、⌘K 面板）才有**，列表区零阴影 |
-| 动效 | 120ms `ease-out`；仅用于展开/折叠与浮层出现。**列表滚动、选中切换无动效** |
-| 间距基数 | 4px 栅格（4 / 8 / 12 / 16） |
-
-**语义色变量**（浅色 / 深色两套，跟随系统）
-
-```css
---bg-app          窗口底色（浅 #FFFFFF / 深 #1E1E1E）
---bg-sidebar      侧边栏（浅 #F5F5F7 / 深 #252525，均带 vibrancy）
---bg-card         分类卡片（浅 #F7F7F8 / 深 #2A2A2C）纯色，无渐变
---bg-hover        currentColor 5%
---bg-selected     accent 12%
---text-primary    浅 #1D1D1F / 深 #F5F5F7
---text-secondary  浅 #6E6E73 / 深 #98989D
---separator       currentColor 10%
---accent          #1DB954 绿（取自参考图）
---warn            易失来源 ⚠（琥珀 #FF9F0A）
---danger          缺失 / 错误（红 #FF3B30）
-```
-
-> **[v6] 关于绿色**：参考图用高饱和绿做**大面积背景**，工作界面这样做长时间使用会疲劳。这里降级为**强调色**，且**只允许出现在四处**：
->
-> 1. 选中态填充（12% 不透明度）
-> 2. 分类卡片上的文件数字
-> 3. 进度条
-> 4. 主操作按钮（每屏最多一个）
->
-> **禁止**：绿色背景、绿色渐变、绿色边框、彩色分类色块。整个界面的绿色总面积应当远小于 5%。
->
-> 可选：跟随系统强调色（`NSColor.controlAccentColor`）作为设置项，默认用上面的绿。
-
-**窗口质感**：主窗口用 `vibrancy: 'sidebar'`（Electron `BrowserWindow` 选项）+ `titleBarStyle: 'hiddenInset'`，让侧边栏有原生毛玻璃、标题栏与内容融为一体。这是"像 Mac 应用"最关键的一处。
-
-**明确不要**：渐变背景、大面积绿色、磨砂玻璃叠磨砂玻璃、多彩分类色块、大圆角卡片（>8px）、景深虚化、发光边缘、图标装饰、进场动画、自定义滚动条样式。
-
-> 前六项都来自参考图。它们在宣传渲染图里好看，在真实的高密度工作界面里会导致对比度不足、滚动掉帧、视觉疲劳。**参考图的价值已提取（卡片比喻 + 绿色强调），其余不采纳。**
-
-**关键交互**
-
-| 交互 | 行为 |
-|---|---|
-| `⌘K` | 全局搜索框（既能搜文件，也能直接提问 —— §12.3 ① 的路由自动判断走 SQL 还是 RAG） |
-| 双击文件行 | 用默认应用打开 |
-| `⌘↵` | 在 Finder 中显示 |
-| 拖拽文件行到分类 | 改分类（乐观更新，失败回滚） |
-| 右键 | 原生上下文菜单：打开 / Finder 显示 / 改分类 / 加标签 / 保全副本 / 忽略 |
-| 空格 | Quick Look 预览（调 macOS 原生 QLPreviewPanel） |
-
-**空状态与首启**
-
-- 首次启动 = §7.4 的来源发现引导，**不是空白文件列表**。这是用户对产品的第一印象，要做扎实。
-- 各视图空状态给出下一步操作按钮，而不是只写"暂无数据"。
-
-**技术选型**：Vue 3 + 无 UI 框架（或极轻量的 Reka UI / Radix Vue 做无样式基元），**不用 Element Plus / Ant Design** —— 它们的视觉语言是 Web 后台风，与 macOS 原生质感冲突，且会让包体积翻倍。
-
-> **实施提示**：本节的 ASCII 布局图是**信息架构约束**（三栏、侧边栏包含哪些分组、详情面板显示哪些字段），不是像素级设计稿。具体间距、圆角、动效由实施者在上述六条原则内自行决定。
-
-### A9 — **[v6 删除]** 镜像目录
-
-> 随 §2.4 删除。原本的"在 Finder 里按分类浏览"需求，由 A8 的虚拟分类树覆盖。
-
-### A10 — 搜索
-
-FTS5 关键词 + 元数据过滤（分类/标签/来源/类型/日期/易失性）；结果高亮；点击直接在 Finder 显示或打开。
-
-### A11 — 测试（详见 §17）
-
----
-
-## 16. V1.5 任务分解
-
-### 16.1 **[改]** B1 — LLM 分类
-
-规则置信度低于阈值时才解析正文并调用模型，经 OpenAI-compatible 接口获取结构化建议。
-
-> **[改] 模型不返回路径，只返回 `category_id`。**
->
-> **原因**：初版让模型自由生成 `target_path`，同时又在测试项里加"恶意路径"用例 —— 先制造攻击面再去测它。让模型**只能从分类树里选一个既有 id**，模型无法影响任何路径。路径穿越、绝对路径、`../`、符号链接逃逸这几类问题一并消失，那条测试也不再需要。
->
-> 模型返回未知 id → 直接判低置信度走人工确认，而不是尝试"修复"它。
->
-> **[v6]** 砍掉镜像目录后，分类已完全不涉及路径，此风险彻底归零。约束仍保留 —— 它同时保证模型不会凭空发明分类节点。
-
-**输出字段**：`category_id`、`suggested_name`、`tags[]`、`book_ids[]`、`summary`、`confidence`、`reason`。
-
-**输入控制**：只发送文件名 + 正文前 N 字符 + 分类树，不发送完整文件；隐私开关关闭时完全不调用云端。
-
-**缓存**：结果按内容 SHA-256 缓存，同一文件重复出现不重复调用 —— 控制成本的主要手段。
-
-**降级**：超时/返回不合规 → 保留规则结果 + 低置信度标记。**流水线不因模型不可用而阻塞**，这是 V1.0/V1.5 切分的直接好处。
-
-> 具体模型型号与参数在实施时现查最新文档确定，不在方案里写死。若改接 Anthropic Messages API（tool use 做结构化输出比 JSON mode 更稳），在 `classify/` 下新增适配实现即可，上层不动。
-
-### 16.1a **[v5 新增]** 嵌入模型决策
-
-> **审计发现（major）**：v4 全方案对嵌入模型**零决策依据** —— 型号、维度、中文能力、上下文窗口、本地还是云端全部空白。更严重的是：**隐私开关默认关闭时，向量检索没有任何可用路径**（不调云端 = 没有嵌入 = 没有向量库），而 §18.2 的 Recall@5 阻塞项又依赖混合检索。这是个逻辑闭环缺口。
-
-**决策：默认本地嵌入，云端可选。**
-
-| | 本地（默认） | 云端（可选） |
-|---|---|---|
-| 隐私开关关闭时 | ✅ 正常工作 | ❌ 不调用 |
-| 中文能力 | 需选中文友好的多语言模型 | 通常更强 |
-| 成本 | 零 | 按量 |
-| 首次启动 | 需下载模型（几百 MB），走引导 | 无 |
-| 打包 | 推理运行时需进 PyInstaller | 无 |
-
-**选型约束（实施时按此筛，不预先写死型号）**：
-
-- 维度 ≤ 1024（sqlite-vec 存储与暴力检索成本随维度线性增长）
-- 中文语义检索效果经 §18.2 评测集验证，**不看模型卡的宣传指标，看我们自己 30 题的 Recall@5**
-- 本地模型的推理运行时必须能被 PyInstaller 打包（这条在 M0 冒烟时就要验证，见 §15 A0）
-- 模型标识写入 `chunks.embedding_model_id`，换模型触发 §12.8 全量重建
-
-**降级链**：本地模型不可用（下载失败/推理崩溃）→ **FTS5 单路检索仍可用**（jieba + trigram 双索引，§9.1），只是失去语义召回。产品不会因为嵌入不可用而完全瘫痪 —— 这也是 §9.1 坚持做好中文全文检索的原因之一。
-
-### 16.2 B2 — 分片器升级为 Parent-Child
-
-V1.0 的 A5 已产出 child 片。本任务补齐 §12.2 ② 的双层结构：
-
-- parent 层（相邻 3 child 合并）的构建与存储
-- 表格超限时按行切分并**为每片复制表头**
-- 代码块整体成片、不参与重叠
-- 嵌入前**前置 `section_path`**（§12.2 ③）
-
-> 分片策略变更需触发一次全量重建（§12.8），因此这一步必须在 B3 嵌入之前完成，不能反过来。
-
-### 16.3 B3 — 向量索引
-
-批量嵌入（64/批，失败按片重试而非整批）、L2 归一化、`embedding_model_id` + `dim` 落片、sqlite-vec 写入，与 chunks / FTS5 同事务（§12.2 ④）。
-
-配套 §12.8 全量重建任务：进度事件、可中断、可恢复、**影子表原子切换**（重建期间旧索引仍可用）。
-
-### 16.4 B4 — 混合检索
-
-实现 §12.3 完整七阶段：查询路由 → 过滤器抽取 → 双路召回 → RRF 融合 → 多样性约束 → parent 展开 → 上下文装配。
-
-按 §12.7 的 `Retriever` 协议封装为 `HybridRetriever`，**上层只依赖协议**。
-
-两个易被省略但必须实现的点：
-- **多样性约束**（同一 **content_id** 最多 3 片）—— 否则跨文档综合类问题只能看到一份材料。**[v6] 键从 file_id 改为 content_id**：同一内容存多处时按 file_id 去重会当成多个来源，约束形同虚设
-- **纯元数据问题不进 RAG** —— 走 SQL 是毫秒级且 100% 准确
-
-### 16.5 B5 — 增量更新
-
-§12.5 的 diff 重建：按 `(section_path, sha1(text))` 比对，只对新增/变化片重新嵌入。
-
-> 决定产品在"文件被反复编辑"这一真实场景下是否可用。200 页合同改一条条款，重嵌入代价应从 200 页降到 1 片 —— 这是本任务的验收方式。
-
-### 16.6 B6 — 问答与引用
-
-§12.4 的三段式 prompt + **后置校验**（虚构引用剔除、无引用重生成、二次失败降级为检索结果列表、拒答混入事实则截断）。
-
-§12.6 的引用映射与跳转：PDF 按 `page` + `bbox` 高亮，DOCX/MD 按 `section_path` 锚点。
-
-流式：**两阶段** —— `chat.draft_token` 推草稿（UI 标记「生成中」），校验通过后 `chat.finalized` 推定稿并替换；校验失败走 `chat.regenerating` 或 `chat.fallback`。详见 §12.4 的流式修正。**不允许"流式 + 不校验"**。
-
-`missing` / `volume_offline` 的文件仍展示 snippet 与定位，跳转置灰并说明原因。
-
-> **后置校验不是可选项**：§18.2 把引用正确率 ≥ 0.90、正确拒答率 ≥ 0.80 设为阻塞验收项，仅靠 prompt 约束达不到 —— prompt 是建议，校验是执行。
-
-### 16.7 B7 — 文件书
-
-虚拟集合，一个文件可属多本书。书内可限定检索范围提问（`filters.book_id` 作为 §12.3 ② 的过滤条件）。索引模式下文件书与分类是同一层的两种组织方式，实现上共享大部分逻辑。
-
-### 16.8 B8 — 评测集与调优
-
-见 §18.2。**评测集标注必须先于 B3–B6 完成**，标注完成后每次改动分片策略、检索参数、prompt 都重跑一次，用同一套指标判断是改好了还是改坏了。
-
----
-
-## 17. 测试策略
-
-### pytest（后端）
-
-**领域逻辑（`domain/`，纯函数无 IO）**
-- 状态机全部合法/非法迁移
-- inode 身份比对与重定位决策树
-- 重名消解序列
-- 文件名净化（路径分隔符、控制字符、超长中文名）
-- RRF 融合正确性
-
-**来源发现（`discovery/`）**
-- Chrome/Edge `Preferences` JSON 解析（含缺省、多 Profile、损坏 JSON）
-- Safari `defaults` 未设置时回落 `~/Downloads`
-- 启发式 glob：路径不存在、多个匹配按 mtime 排序、90 天过滤
-- 易失性判定
-- **探测失败必须静默跳过，不产生候选、不报错**
-
-**文件流水线（真实文件系统，tmpdir）**
-- 稳定性检测：大小变化中、`.crdownload` 改名、`flock` 被占用
-- 临时文件过滤全覆盖
-- `on_moved` 两种模式（微信 move / 浏览器改名）
-- **移动文件后 inode 命中 → 仅更新 path，不重新解析**（断言解析函数未被调用）
-- 哈希去重
-- 保全副本：校验失败必须保留源文件
-- 可选归档：同卷原子性、跨卷校验失败源文件完好
-- 撤销：分类回滚、保全撤销、归档撤销 + 前置哈希校验（已修改则拒绝）
-
-**失败路径（必测）**
-- TCC 权限被拒（chmod 000）→ 明确 error_code，不静默
-- 文件处理中被删除 → `missing` 而非直接清索引
-- 卷卸载 → `volume_offline`；重新挂载 → 自动恢复
-- 应用重启后任务恢复（各中间态分别测）
-- 磁盘写满（小容量 sparse image 模拟）
-- 模型超时 / 返回不合规 JSON（V1.5）
-- 模型返回不存在的 `category_id`（V1.5）
-
-### pytest — 知识支柱（§12）**[v4 新增]**
-
-初版与 v3 的测试策略几乎只覆盖文件侧，RAG 侧仅有一句"引用映射"。补齐：
-
-**解析与统一表示（§12.2 ①）**
-- 四种格式各自产出的 `[Block]` 结构正确（标题层级、页码、表格、代码块）
-- 加密 PDF / 纯扫描件 PDF（无文本层）/ 损坏 DOCX → 降级为元数据索引，**不置 failed**
-- 空文件、仅有图片的 PDF → 不产生空 chunk
-
-**分片（§12.2 ②）**
-- 句子不被切断
-- 超长表格按行切分后**每片都带表头**
-- 代码块不参与重叠
-- `section_path` 沿标题层级正确累积（含跳级标题 h1→h3）
-- parent 恰好覆盖其全部 child，无空洞无重叠错位
-
-**嵌入与落库（§12.2 ③④）**
-- 批量中单片失败 → 只重试该片，不整批重跑
-- **三表写入的事务性**：向量写入失败时 chunks 与 FTS5 必须回滚（注入异常验证）
-- 向量已 L2 归一化
-
-**检索（§12.3）**
-- 查询路由：纯元数据问题**不触发向量检索**（断言 embed 函数未被调用）
-- 中文日期表达抽取（"上周""三月份""去年底"）
-- 抽取不确定时不加过滤（宁可多召回）
-- RRF 融合分计算正确（构造已知排名验证）
-- **多样性约束**：单文件命中 10 片时最终最多保留 3 片
-- 过滤在召回之前执行（不是先召回后过滤）
-
-**生成与引用校验（§12.4）**
-- 模型输出虚构的 `[C9]`（上下文中不存在）→ 被剔除
-- 模型输出无任何引用 → 触发重新生成
-- 二次仍无引用 → 降级为检索结果列表，**不输出自然语言答案**
-- 拒答句后混入具体事实 → 被截断
-- **`chat.finalized` 不早于**草稿流结束，**`chat.citations` 只在定稿事件里携带**
-
-**增量更新（§12.5）**
-- 200 片文档改 1 片 → **只有 1 片被重新嵌入**（断言 embed 调用次数）
-- 片被删除 → chunks / fts / vec 三处级联删除
-- 仅顺序变化 → 只更新 ordinal，不重嵌入
-
-**引用映射（§12.6）**
-- chunk → PDF 页码 + bbox / DOCX 章节锚点 往返一致
-- 文件 `missing` 时仍返回 snippet，跳转标记为不可用
-
-**两支柱接口（§12.1）—— 逐条覆盖那张映射表**
-- `on_moved` inode 命中 → **chunks 完全不动**（断言解析与嵌入均未被调用）
-- `duplicate` → 指向同一 `content_id`，不重复嵌入
-- **[v5]** 原件 `missing` 超期清理，但副本仍在 → **chunks 必须保留**（`contents` 仍被引用）
-- **[v5]** 同一 content 的**所有** file 都清理后 → 才级联删 chunks
-- `missing` / `volume_offline` / `cloud_placeholder` → 索引保留，仍可搜可问
-- **[v5]** `ignored` → 索引保留但从检索池排除（`files.state` 参与过滤）
-- 改分类标签 → **chunks 完全不动**，过滤走 JOIN files
-- 全量重建期间旧索引仍可查询（影子表切换）
-
-### **[v5 新增]** pytest — 新增设计的测试项
-
-**中文检索（§9.1）—— 阻塞验收项，必须自动化**
-- unicode61 单路对 `保修`/`验收`/`甲方` 零命中（**回归防护**：证明为什么需要双索引）
-- jieba + trigram 双路 RRF 融合后，双字词命中率 100%
-- 专有名词、编号（`HT-2024-001`）、英文混排
-
-**规模控制（§7.7）**
-- 构造含 `node_modules`/`.git`/`.photoslibrary` 的目录树 → 断言这些路径**未被下钻**
-- `.pages`/`.app` 被当作单文件而非目录
-- 扩展名白名单：`.o`/`.pyc` 不入库
-- 超 200 MB 文件 → 仅元数据，`error_code = file_too_large`
-- 预扫描只计数不入库（断言 files 表行数未变）
-
-**iCloud 占位（§7.8）**
-- 模拟 `SF_DATALESS` 标志 → 断言**未发生任何 read**（这是 blocking 项，用 mock 拦截 `open`）
-- 占位文件转 `cloud_placeholder`，仅元数据可搜
-- 下载后 `on_modified` → 自动转 `registered` 走正常流程
-
-**防抖（§11.9）**
-- 60 秒窗口内连续 5 次 `on_modified` → 只触发 1 次重索引
-- `mtime`/`size` 未变的写入 → 直接丢弃，不算哈希
-- 1 小时内超 3 次 → 推迟
-
-**数据库健壮性（§9.2）**
-- `flock` 互斥：第二个实例启动失败
-- 注入损坏的 FTS5 表 → 分级重建只重建 FTS5，**不重新嵌入**（断言 embed 未被调用）
-- `VACUUM INTO` 备份可恢复且 `integrity_check` 通过
-- schema 版本高于程序 → 拒绝启动
-
-**流式与校验（§12.4）**
-- `chat.draft_token` → `chat.finalized` 的替换语义
-- 校验失败 → `chat.regenerating` 事件先于新一轮草稿
-- 二次失败 → `chat.fallback` 且**不含自然语言答案**
-- 纯元数据问题 → `chat.metadata_result`，断言 embed 未被调用
-
-**增量 diff 以 text_hash 为主键（§12.5）**
-- **文档开头插入一段导致全部 section_path 编号变化** → 断言仅新增片被嵌入，其余只更新 ordinal
-- 200 片改 1 片 → embed 调用次数 == 1
-
-**重启恢复退避（§10.3）**
-- 反复崩溃的文件累计 5 次 → 置 `failed`，`error_code = repeated_crash`，不再重试
-
-**inode 复用（R21）**
-- 构造 inode 相同但 size/mtime 不同 → 按新文件处理，不错误关联
-
-### Vitest（前端）
-
-Pinia store 状态流转、SSE 事件处理（含全部事件类型，特别是 `chat.draft_token` → `chat.finalized` 的替换与 `chat.fallback` 的降级渲染）、乐观更新与回滚。
-
-### Playwright Electron（E2E）
-
-**主流程**：首次启动 → 发现来源 → 勾选启用 → 投放文件 → 出现在文件库 → 搜索命中 → 在 Finder 中显示。
-
-**追加**：在 Finder 里移动该文件 → 索引自动跟上、路径更新、搜索仍命中。
-
-V1.5 追加：提问 → 返回带引用的答案 → 点击引用跳转正确页。
-
-### 手工验证清单
-
-TCC 权限拒绝后的引导流程（无法自动化，每次发布前手动走一遍）。
-
----
-
-## 18. 验收标准
-
-> **[改] 原因**：初版写了"记录 Recall@5、引用正确率"，但没说 ground truth 从哪来、谁标注、通过线是多少 —— 这样的指标无法判定通过与否，只能"记录"，等于没有验收。
-
-### 18.1 V1.0 验收
-
-**发现能力**：在本机执行自动发现，必须正确识别浏览器下载目录、桌面、文稿；微信/QQ 容器存在时必须通过启发式扫描定位到其接收目录（本机实测微信为动态 hash 路径，硬编码不可行）。
-
-**索引可靠性**：连续导入 **≥100 个混合文件**，必须包含：大文件（>1 GB）、同名文件、内容重复文件、下载中被取消的文件、无扩展名文件、超长中文名文件、外置卷文件。
-
-| 指标 | 通过线 | 性质 |
-|---|---|---|
-| 未经用户启用的目录被监听 | **0** | 阻塞 |
-| **任何未经确认的文件移动/删除/改名** | **0** | 阻塞 |
-| 检测到 → 出现在文件库 | ≤ 10 秒（**[v5]** 快路径稳定性判定 ≤ 2 秒，见 §11.1） | 阻塞 |
-| 半成品文件被误处理 | **0** | 阻塞 |
-| Finder 中移动/改名后索引跟上 | **100%**，且不触发重新解析 | 阻塞 |
-| 重复文件被正确识别 | 100% | 阻塞 |
-| **[v5] 中文双字词全文检索命中** | **100%**（"保修/验收/甲方/发票/合同"）| 阻塞 |
-| 保全副本哈希一致 | **100%** | 阻塞 |
-| 可选归档可撤销率 | **100%**，撤销后哈希一致 | 阻塞 |
-| 卷卸载→重挂载后索引恢复 | **100%** | 阻塞 |
-| 应用强杀（SIGKILL）后恢复 | 无丢失、无重复索引 | 阻塞 |
-| **[v5] 启用 `~/Documents` 后入库文件数** | 符合 §7.7 规则，不含 node_modules 等 | 阻塞 |
-| macOS DMG | 可安装、可运行、通过签名校验 | 阻塞 |
-| 100 文件全流程耗时 | 记录 | 观测 |
-| 索引库体积 / 1000 文件 | 记录 | 观测 |
-| **[v5] 大文件（1 GB）哈希耗时** | 记录 | 观测 |
-
-**所有"阻塞"项任意一项不达标即不得发布。** 这些是 §1 的数据安全与隐私边界，不接受"绝大多数情况正常"。
-
-#### **[v5 新增]** 两条"零发生"阻塞项的判定方法
-
-> **审计发现（major）**：v4 最重要的两条阻塞项 —— "未经用户启用的目录被监听 = 0" 和 "未经确认的文件移动/删除/改名 = 0" —— **都没有给出判定方法**。它们本质上是"证明某事从未发生"，功能测试判不了，实施者只能跳过或口头声称通过。
-
-**判定方法（必须自动化，不接受人工声称）：**
-
-**① "未经确认的文件移动/删除/改名 = 0"**
-
-- **快照比对**：验收开始前对全部监听目录做递归快照（路径 + inode + size + mtime + SHA-256），跑完 100 文件全流程后重新快照，**逐条比对必须完全一致**（新增文件除外）。
-- **系统调用拦截**（更强，推荐）：测试环境下用 `DYLD_INSERT_LIBRARIES` 或在代码层注入一个 `fs_guard` 模块，**拦截 `rename` / `unlink` / `replace` 三个系统调用**，记录每次调用的调用栈与目标路径。断言：所有调用的目标路径**必须**在"保全副本目录"或"用户显式确认的归档操作"白名单内，否则测试失败并打印调用栈。
-- 这个 guard 建议**在开发期一直开着**，而不只在验收时 —— 它能在写代码的当下就抓住违规，而不是等到验收。
-
-**② "未经用户启用的目录被监听 = 0"**
-
-- **断言 watchdog 的实际句柄集**：在 observer 上暴露 `list_watched_paths()`，测试中断言它与 `sources WHERE enabled=1` 的路径集合**完全相等**（既不多也不少）。
-- 覆盖三个时机：启动后、动态启用/禁用来源后、来源路径迁移后（§7.5）。
-- **§7.5 的自动路径迁移必须受约束**：审计指出"自动重新探测并迁移绑定"与"未经用户启用的目录被监听 = 0"存在张力。**修正**：自动迁移**仅允许在同一 bundle id 的容器目录内**（如微信从旧 hash 路径迁到新 hash 路径），跨 bundle 或跨用户目录的迁移**必须重新征求用户确认**。测试需覆盖这条边界。
-
-### 18.2 V1.5 验收
-
-> **评测集必须在写检索代码之前标注完成。** 否则会不自觉地照着已有实现出题，指标失去意义。
-
-**评测集构建**（先做）：
-- 30 个检索问题，覆盖：事实查找、跨文档综合、时间范围、否定式提问
-- 每题人工标注答案所在的 `file` + `page`
-- 其中 **≥10–12 题答案确实不在库中**（占 30 题的 1/3），用于检验"未找到足够依据"的诚实度
-  > **[v6]** v5 定的 5 题**统计上太薄** —— 4/5 与 5/5 只差一题，"拒答率 ≥0.80"这个数字本身没有意义；且 §12.3c 的拒答门限要在这批题上标定阈值，样本太少必然过拟合
-
-| 指标 | 通过线 | 性质 |
-|---|---|---|
-| Recall@5 | ≥ 0.80 | 阻塞 |
-| 引用正确率（引用确实支持答案） | ≥ 0.90 | 阻塞 |
-| 无依据问题的正确拒答率 | ≥ 0.80 | 阻塞 |
-| 重复文件重复向量化 | **0** | 阻塞 |
-| 平均端到端延迟 | 记录 | 观测 |
-| Token 成本 / 100 文件 | 记录 | 观测 |
-| LLM 分类准确率（vs 人工标注） | 记录 | 观测 |
-
----
-
-## 19. 风险登记
-
-| # | 风险 | 影响 | 应对 | 阶段 |
-|---|---|---|---|---|
-| R1 | macOS TCC 拒绝访问沙盒目录 | **静默**收不到文件 | 启用时 + 每次启动自检 + UI 引导（§6.4） | A2 |
-| R2 | PyInstaller 打不出可用包 | 无法交付 | A0 第一天冒烟，每加原生依赖重跑 | A0 |
-| R3 | **易失来源文件被 app 清理** | 索引指向死链 | 易失标记 + 保全副本 + missing 保留期（§2.5、§8.4） | A2/A7 |
-| R4 | 微信升级改变路径结构 | 来源失效 | 启发式 glob + 24h 重探测 + 路径迁移（§7.5） | A2 |
-| R5 | 用户大批量整理 Finder | 全库重解析 | inode 追踪，`on_moved` 只更新 path（§8.2） | A4 |
-| R6 | 外置卷/NAS 断连 | 误判文件丢失 | `volume_offline` 与 `missing` 分离（§8.3） | A4 |
-| R7 | 模型返回不合规结构 | 分类失败 | 校验后降级规则结果，不阻塞流水线 | B1 |
-| R8 | FSEvents 对网络卷/iCloud 不可靠 | 漏检 | 定时全量扫描兜底（§11.1） | A3 |
-| R9 | SQLite 并发写冲突 | 任务失败 | WAL + 单写入线程串行化 | A1 |
-| R10 | 大文件哈希耗时 | 界面卡顿 | 流式分块 + 独立线程 + 进度事件 | A5 |
-| R11 | arm64 签名/公证失败 | DMG 无法分发 | A0 阶段验证；无开发者账号时先出未签名包自用 | A0 |
-| R12 | sqlite-vec 量级不够 | 检索变慢 | Retriever 抽象隔离，可换 LanceDB（§16.3） | B3 |
-| R13 | 云端 AI 泄露隐私文本 | 信任崩塌 | 默认关闭；开启时明示发送内容；只发片段不发文件 | B1 |
-| **R15** | **SQLite 库损坏/丢失** | **全部索引与用户分类标注归零，嵌入成本重花** | 每日 `VACUUM INTO` 备份保留 7 份 + 启动 `quick_check` + 分级重建（§9.2） | A1 |
-| **R16** | **`~/Documents` 含数十万开发文件** | 文件库被淹没，兜底扫描拖垮性能 | 排除清单 + 扩展名白名单 + 启用前预扫描（§7.7） | A2 |
-| **R17** | **iCloud 占位文件被读取触发全量下载** | 跑满流量、写满磁盘 | `SF_DATALESS` 检测 + `cloud_placeholder` 状态 + 默认不索引（§7.8） | A2 |
-| **R18** | **FTS5 默认分词器中文零命中** | V1.0 核心功能不可用 | jieba + trigram 双索引（§9.1，已实测验证） | A5 |
-| **R19** | **正在编辑的文件独占索引队列** | 其他文件全部排队 | 60 秒静默窗口 + 频次配额（§11.9） | A5 |
-| **R20** | **反复崩溃的文件无限重试** | 每次启动都重跑、再崩 | 重启恢复接入 attempts 退避 + 5 次后放弃（§10.3） | A5 |
-| **R21** | **inode 被系统复用** | 索引错关联到无关的新文件 | `(volume_uuid, inode)` 之外附加 `size + mtime` 校验；不符则按新文件处理 | A4 |
-
----
-
-## 20. 里程碑
-
-| 里程碑 | 内容 | 完成标志 |
-|---|---|---|
-| **M0** | A0 打包冒烟 | 双击 DMG 能起来并请求到 `/health` |
-| **M1** | A1–A2 | 首次启动能自动发现本机来源，勾选启用后通过权限自检 |
-| **M2** | A3–A5 | 文件被检测、身份追踪、去重、索引；Finder 里移动不掉链 |
-| **M3** | A6–A8 | 规则分类 + 文件库视图 + 保全/撤销全链路可用 |
-| **M4** | A10 | FTS5 全文搜索可用 |
-| **M5** | A11 + §18.1 | **V1.0 发布**：全部阻塞项通过，DMG 可分发 |
-| **M6** | 评测集标注 | 30 题 ground truth 完成（**先于 B3**） |
-| **M7** | B1–B3 | LLM 分类 + Parent-Child 分片 + 向量索引可用 |
-| **M8** | B4–B5 | 混合检索七阶段 + 增量更新达标（改 1 片只重嵌 1 片） |
-| **M9** | B6–B8 + §18.2 | **V1.5 发布**：带引用问答 + 后置校验达标 |
-
-**M0 是硬门槛** —— 冒烟不过不进 M1。
-**M6 必须先于 B3** —— 否则评测集会被实现污染；且 B2 的分片策略变更会触发全量重建，基线必须在此之前锚定。
-
----
-
-## 附录：差异汇总
-
-### v6 相对 v5
-
-**A 组：产品形态**
-
-| # | v5 | v6 | 原因 |
-|---|---|---|---|
-| M1 | 分类对应磁盘目录（`rel_path` + 符号链接镜像） | **纯信息层**，`categories(id,parent_id,name,sort_order)` | 分类是文件**信息**的分类，不是目录分类。砍掉镜像同时消除 R14、失效链接、删链接语义歧义、Spotlight 重复索引 |
-| M2 | 界面只写"五个主视图" | **§15 A8 完整规范**：两级视图 + 量化 Token + 语义色变量 | 只说"极简"不可执行 |
-| M3 | — | 参考图判定为**宣传渲染图**，提取卡片比喻与绿色强调，舍弃渐变/磨砂/景深 | 磨砂叠磨砂对比度不足、一屏放不下几千文件、多层 blur 掉帧 |
-
-**B 组：RAG 两阶段框架（本轮核心）**
-
-| # | v5 | v6 | 原因 |
-|---|---|---|---|
-| M4 | `classifying` 解析一次、`indexing` 又解析一次 | **新增 `parsing` 状态，解析只做一次**，分类与分片共用同一份 `[Block]` | 同一个 PDF 用 PyMuPDF 打开两回。「分类时数据就准备好了」现在字面成立 |
-| M5 | 无问题重写 | **拆两步分置路由两侧**：指代消解（路由前）+ 查询扩展（过滤后），均为规则、<5ms | LLM 重写会摧毁元数据信号：「上周微信收到的PDF」被泛化后日期正则与路由同时失效 |
-| M6 | — | 重写**新增一路召回，不替换原问题** | 改写把模糊变成**明确的错误**更危险。多加一路是 fail-safe 的，RRF 公式不用改 |
-| M7 | — | 生成式重写改为**首检失败后条件触发**（20%），300ms 超时兜底 | 无条件前置重写占 RAG 总延迟 80%+；条件触发平均只加 150ms |
-| M8 | 三路平铺 RRF | **两级 RRF**：内层融合两路词法、外层与语义各占一票 | jieba 与 trigram 索引同一份 text，平铺 = 词法 2 票 : 语义 1 票，**语义第一名打不过词法第三名** |
-| M9 | RRF k 固定 60 | **无 rerank 时 k=20** | k=60 出自对 1000 深 run 的调参；100 深列表下 rank1 与 rank50 只差 1.8 倍，等于"谁都差不多" |
-| M10 | 召回各 top-50 | jieba/向量 **top-100**，trigram top-30 | sqlite-vec 是暴力全扫，k 只影响堆 sift，深度几乎免费；成本全在 rerank |
-| M11 | 多样性键 `file_id` | **`content_id`** | v5 引入 contents 表后，同一内容存 3 处会被当成 3 个来源，约束形同虚设 |
-| M12 | rerank 列 V2 扩展点 | **实算后确认保持 V2** | `bge-reranker-v2-m3` 在 M1 上单对 ≈0.35s，top-50 **≈17 秒**；且需引入 ONNX Runtime（DMG +300MB，触发 A0 重跑） |
-| M13 | 拒答靠 prompt + 后置校验 | **生成前的检索分门限**，低于阈值不调 LLM | `AbstentionBench`：LLM 在无解问题上系统性失败，RL 微调反而推向"猜一个"。**陷阱：RRF 分数不可阈值化**（纯排名函数），必须用向量余弦绝对分 |
-| M14 | 引用靠模型自己写 `[Cn]` | 云端轨用 `search_result` + `citations.enabled`；本地轨用**后置归因** | 引用从"生成物"变成"API 解析物"，虚构编号从根上消失；`AGRaME` 实测后置归因在 4B/7B 上优于模型自标 |
-| M15 | — | GBNF 只锁**ID 白名单 + 首 token 判决**，不做全句强制 | 全句强制会逼模型在无依据的句子上硬挂引用，把"无引用"变成"错误引用" |
-| M16 | 评测集 ≥5 题无依据 | **≥10–12 题**（占 1/3） | 5 个样本标不出阈值，4/5 与 5/5 只差一题，"拒答率 ≥0.80"本身没意义 |
-| M17 | — | §12.3e **延迟预算表**：检索段 <150ms，含短路逻辑 | 无预算就无法判断某个阶段是否该砍 |
-
-### v5 相对 v4（六维审计后）
-
-| # | v4 | v5 | 原因 |
-|---|---|---|---|
-| L1 | 无规模控制，默认启用 `~/Documents` | **§7.7** 排除清单 / 扩展名白名单 / package 不下钻 / 硬上限 / 启用前预扫描 | blocking：开发者的 Documents 有数十万 node_modules 文件 |
-| L2 | 无 iCloud 占位文件概念 | **§7.8** `cloud_placeholder` 状态 + 默认不读 | blocking：读占位文件触发后台全量下载 |
-| L3 | `chunks.file_id`，duplicate 复用无处承载 | **`contents` 表**，chunks 挂内容不挂文件 | duplicate 共享、原件消失副本仍可检索、保全切换身份后索引延续 |
-| L4 | chunks 表缺 `section_path`/`bbox`/`text_hash`/`parent_id`/`layer` | §9 chunks 表补齐六字段 | 设计依赖的字段表里没有 |
-| L5 | 检索过滤未定义实现 | §9「两段式」：files 过滤出 content_id → sqlite-vec `rowid IN` | sqlite-vec KNN 无法带任意 WHERE |
-| L6 | 未指定 FTS5 分词器 | **§9.1 jieba + trigram 双索引**（实测：unicode61 中文零命中） | V1.0 核心功能缺陷，已实测验证 |
-| L7 | 库位置/备份/损坏恢复空白 | **§9.2** 固定位置 + 每日备份 + 分级重建 | 鸡蛋全在一个篮子却无备份，14 条风险无一条提 DB 损坏 |
-| L8 | `ready` 因果倒置 | **§10.1a** 修正：索引入口是 `indexing`，`ready` 可回退 | 状态图与摄入管线互为因果，实施必卡死 |
-| L9 | `ignored`/`failed` 无索引动作，映射表仅 9 行自称 12 | §12.1 补全 12 行并修正三处 | 契约表不完整，附录声称与实际不符 |
-| L10 | 流式与后置校验互斥 | **§12.4 两阶段流式**（草稿/定稿 + 4 个新事件） | 答案边推边改无法撤回，v4 只想到引用收不回 |
-| L11 | 增量 diff 以 section_path 为主键 | **§12.5 以 text_hash 为主键** | 开头插一段导致全部编号变化，diff 退化成全量 |
-| L12 | `relocate` 一词两义 | tasks/operations `kind` 拆 `relocate_lookup` / `archive_move` | 同名异义实施必混 |
-| L13 | §13 `POST /chat → SSE 流` vs §14 `GET /events` 双通道 | 统一 `POST /chat` 返回 `chat_id`，事件全走 `GET /events` | 两条互斥通道实施者必二选一 |
-| L14 | 无分类树整理能力 | §13 `POST /categories/{id}/move` / `merge` | 只能删空分类，用户无法整理 |
-| L15 | 无 settings 表、无 batch_id | §9 新增 `settings` 表，`file_history.batch_id` | API 提供的东西无处存储，批量撤销无标识 |
-| L16 | 无内容变更防抖 | **§11.9** 60 秒静默窗口 + 频次配额 | 正在编辑的文件独占索引队列 |
-| L17 | 稳定性 6 秒与"10 秒验收"冲突 | §11.1 快路径判据 + §18.1 修正 | 两个数字自相矛盾，且 >1GB 文件哈希就数秒 |
-| L18 | A0 冒烟只到 `/health` 200 | A0 `/health` 真实检查：dlopen vec / import fitz / fts5 | 冻结环境的扩展加载才是冒烟要验的 |
-| L19 | 嵌入模型零决策 | **§16.1a 默认本地嵌入**，云端可选 | 隐私开关默认关 → 无嵌入 → Recall@5 无路径 |
-| L20 | "零发生"验收项无法判定 | §18.1 快照比对 + `fs_guard` 系统调用拦截 + `list_watched_paths()` | 证明"从未发生"不能靠人工声称 |
-| L21 | 风险登记无 DB 损坏/规模/占位文件 | R15–R21 补 7 条 | 最大风险反而没登记 |
-| L22 | — | §7.8 资料库默认位置移出 `~/Documents`（`~/Library/Application Support/`） | 防 iCloud 同步 |
-| L23 | — | §16.1a 本地嵌入降级链：嵌入不可用 → FTS5 单路仍可用 | 产品不因嵌入瘫痪 |
-
-### v4 相对 v3（本次变更）
-
-前三版把绝大部分设计密度给了文件管理（完整数据模型、状态机、API 清单、事件表），RAG 只有一个 `Retriever` 协议桩加一段 RRF 描述 —— 而 RAG 是本产品的另一半。v4 补平这个失衡。
-
-| # | v3 | v4 | 原因 |
-|---|---|---|---|
-| K1 | RAG 散落在 V1.5 任务里约 15 行 | **独立成 §12，九个小节** | 知识支柱与文件支柱同层，不是下游附属品 |
-| K2 | 两个子系统的关系未定义 | §12.1 **状态映射表**（12 条） | 这是两支柱唯一的耦合面，必须逐条覆盖 |
-| K3 | 解析未提统一表示 | §12.2 `Document = [Block]` 中间层 | 新增格式只需写 Parser，下游全链路零改动 |
-| K4 | 只说"结构感知分片" | §12.2 **Parent-Child 双层** + 表格/代码规则 | 解决"切小召回准但上下文不够、切大反之"的矛盾 |
-| K5 | 嵌入细节缺失 | 批量 64 / 前置 section_path / L2 归一化 | 短片段脱离章节路径无语义，是召回质量的实际瓶颈 |
-| K6 | 落库未提事务 | 三表**单事务**，注入异常测回滚 | 这才是 §4.3 选 sqlite-vec 的核心理由 |
-| K7 | 检索只有"过滤+双路+RRF" | §12.3 **七阶段**，含查询路由与多样性约束 | 元数据问题走 SQL 快且准；多样性防单文档霸占上下文 |
-| K8 | "prompt 约束 + 后置校验"一句话 | §12.4 **四条校验规则 + 降级路径** | 验收把引用正确率设为阻塞项，prompt 是建议、校验才是执行 |
-| K9 | 无增量更新设计 | §12.5 按 `(section_path, text_hash)` diff | 200 页合同改一条条款不该重嵌 200 页 |
-| K10 | 引用映射一句话 | §12.6 四种格式的定位与跳转 + missing 降级 | 知识不随文件消失而消失，是索引模式的关键优势 |
-| K11 | 全量重建"可中断可恢复" | 补**影子表原子切换** | 重建期间旧索引仍需可用 |
-| K12 | V2 能力无落点 | §12.9 四个扩展点的插入位置 | 避免届时改动主链路 |
-| K13 | 测试策略几乎无 RAG 项 | §17 新增 **9 组、约 35 条** RAG 测试 | 原本 RAG 侧只有一句"引用映射" |
-| K14 | 里程碑 M6–M8 | 拆为 M6–M9，评测集前置到 B3 之前 | B2 改分片会触发全量重建，基线须先锚定 |
-
-### v3 相对 v2
-
-| # | v2 | v3 | 原因 |
-|---|---|---|---|
-| **A** | 确认后**移动**文件到资料库 | **索引模式**，默认不移动 | 消灭整类文件丢失风险；跨卷/断电/重名/撤销回滚等复杂度一并消失（§2.1） |
-| **B** | 用户手动配置监听目录 | **自动发现 + 用户确认启用** | 微信路径是动态 hash，用户根本配不出来（§7） |
-| C | 路径为主要标识 | **`(volume_uuid, inode)` 为主身份** | 用户在 Finder 移动/改名后索引不失效（§8） |
-| D | `waiting_confirm` 是必经卡点 | 降级为非阻塞的「待确认」队列 | 分类无破坏性，不需要卡点（§2.3） |
-| E | `source_missing` 是终态 | `missing` 非终态 + `volume_offline` | 外置盘/NAS 断连是常态，删索引太粗暴（§8.3） |
-| F | — | 新增**易失来源 + 保全副本** | 微信/QQ 会自己清缓存，索引会指向死链（§2.5） |
-| G | — | ~~新增符号链接镜像目录~~ | **v6 已删除**，见 §2.4 |
-| H | — | 新增**修正回流为规则 + 回溯** | 索引模式下回溯重分类代价接近零（§11.4） |
-| I | 撤销需回滚索引 | 索引跟 inode 走，无需回滚 | 架构改动的直接红利（§11.7） |
-| J | 主视图「智能收件箱」 | 主视图「文件库」 | 文件一进来就可用，收件箱不再是必经入口 |
-
-### v2 相对初版（已并入）
-
-| # | 初版 | 修订 | 原因 |
-|---|---|---|---|
-| 1 | Python 未指定（本机 3.14.5） | 锁定 3.12 + uv | 3.14 缺 wheel / 打包 hook |
-| 2 | 目录当普通路径处理 | TCC 自检 + 引导 | 微信在沙盒容器内，拒绝时静默失败 |
-| 3 | 大小轮询 ×3 | 三条判据 + `on_moved` | 微信 move 模式、浏览器改名模式会漏 |
-| 4 | LLM 返回 `target_path` | LLM 返回 `category_id` | 消除路径穿越攻击面而非测试它 |
-| 5 | LanceDB | sqlite-vec + Retriever 抽象 | 打包成本、事务一致性、量级匹配 |
-| 6 | 状态机 9 态 | 补 `ignored` / `error_code` / `retry_count` | 已写在测试项里的场景状态机无处落脚 |
-| 7 | SSE 不在契约内 | 事件判别联合纳入生成 | 前后端类型静默漂移，且无编译错误 |
-| 8 | 令牌传参方式未定 | 经 stdin，不走命令行 | `ps` 对本机任意进程可见 |
-| 9 | 打包排第 11 条 | 提为 A0 第一天 | 最高风险项不能排最后 |
-| 10 | 11 条一次做完 | V1.0 / V1.5 两阶段 | 实为 3~4 个 V1 的体量 |
-| 11 | "记录 Recall@5" | 阈值 + 先标注后实现 | 无 ground truth、无通过线的指标不可验收 |
+| 文件支柱与知识支柱同层 | Knowledge Engine 为核心，Library Engine 为基础设施 |
+| 产品先成为全机文件索引工具 | 产品首先交付可评测的个人知识检索与问答 |
+| Parent-Child 主要靠命中邻居拼接 | Document / Section / Child 持久层级 + Rerank 后扩展 |
+| RRF 输出作为最终排序 | RRF 只粗融合，Child Rerank 决定精排 |
+| Rerank 因大模型慢推迟到 V2 | Rerank 固定存在，模型和运行时通过 benchmark 选择 |
+| Top 片段直接送模型 | Parent 扩展后做 EvidenceSpan 抽取式压缩 |
+| 30 题 Recall@5 为主 | 60+ 题，分阶段评测 Recall/nDCG/Evidence/引用/拒答 |
+| 文件库是第一主视图 | 文件管理、详情阅读与知识问答统一为同屏三栏，文件管理是知识库的支撑入口 |
+| V2 再考虑检索扩展 | 分层、Rerank、压缩全部进入当前主路线 |
+
+## 附录 B：当前实现基线
+
+截至 v7 编写时：
+
+- 已实现 Electron + Python sidecar、本地鉴权和 LLM 密钥加密。
+- 已实现来源发现、扫描监听、inode 身份、SHA-256 去重、缺失恢复和保全副本。
+- 已实现 PDF/DOCX/Markdown/TXT 解析和约 500 字 Child 分片。
+- 已实现 jieba、trigram、LIKE、向量四路召回和 RRF。
+- 已实现命中 Child 的前后邻居动态扩展、带引用问答和四条后置校验。
+- 已实现文件书范围、虚拟分类和增量嵌入。
+- 尚未实现持久化 Document/Section 层级索引。
+- 尚未实现实际 Reranker。
+- 尚未实现带原文 offset 的查询相关上下文压缩。
+
+因此 v7 是在可靠底座上的检索质量升级，不是从零重写。

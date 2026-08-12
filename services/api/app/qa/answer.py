@@ -15,12 +15,17 @@ import re
 import sqlite3
 from dataclasses import dataclass, field
 
-from app.index.search import search as multi_search
+from app.retrieval.pipeline import (
+    assemble_context,
+    compress_evidence,
+    expand_neighbors,
+    load_context_candidates,
+    run as run_retrieval,
+)
 from app.qa import llm
 
 log = logging.getLogger("inktable.qa")
 
-RRF_K = 60
 TOP_CONTEXT = 6          # 送入模型的资料片数（§12.4：放太多会 lost in the middle）
 MAX_PER_CONTENT = 3      # 多样性：同一内容最多几片（§12.3b ⑤，v6 修正为按 content）
 NEIGHBOR_SPAN = 1        # B2：命中片向前后各扩展几片（parent = 邻居合并的动态形态）
@@ -41,6 +46,11 @@ class ContextPiece:
     section_path: str
     text: str                # 扩展后的文本（命中片 + 邻居）
     snippet: str             # 命中片原文（引用展示用）
+    span_id: str = ""
+    start_offset: int = 0
+    end_offset: int = 0
+    document_start_offset: int | None = None
+    document_end_offset: int | None = None
 
 
 @dataclass
@@ -51,91 +61,48 @@ class Answer:
     retrieved: list[dict] = field(default_factory=list)   # fallback 时给的检索结果
     hedge: str = ""
     validation: dict = field(default_factory=dict)         # 校验过程留痕，可审计
+    trace: dict = field(default_factory=dict)              # 非持久化检索 trace
 
 
 # ---------------------------------------------------------------- 检索与装配
 
-def _allowed_contents(conn, book_id: int | None) -> set[int] | None:
-    """书内问答的范围限定（B7）。None = 不限。"""
-    if book_id is None:
-        return None
-    rows = conn.execute(
-        """SELECT DISTINCT f.content_id FROM book_members bm
-           JOIN files f ON f.id = bm.file_id
-           WHERE bm.book_id = ? AND f.content_id IS NOT NULL""",
-        (book_id,),
-    ).fetchall()
-    return {r["content_id"] for r in rows}
-
-
-def retrieve_context(conn, question: str, book_id: int | None = None) -> list[ContextPiece]:
-    routes = multi_search(conn, question, limit=60)
-
-    fused: dict[int, float] = {}
-    for hits in routes.values():
-        for rank, (cid, _s) in enumerate(hits):
-            fused[cid] = fused.get(cid, 0.0) + 1.0 / (RRF_K + rank + 1)
-    if not fused:
-        return []
-
-    ordered = sorted(fused, key=lambda k: -fused[k])
-    marks = ",".join("?" * len(ordered))
-    rows = {r["id"]: r for r in conn.execute(
-        f"""SELECT ch.id, ch.content_id, ch.page, ch.section_path, ch.ordinal, ch.text,
-                   f.id AS file_id, f.name, f.path
-            FROM chunks ch JOIN files f ON f.content_id = ch.content_id
-            WHERE ch.id IN ({marks})
-            GROUP BY ch.id""",
-        ordered,
-    )}
-
-    allowed = _allowed_contents(conn, book_id)
-    picked: list = []
-    per_content: dict[int, int] = {}
-    for cid in ordered:
-        r = rows.get(cid)
-        if r is None:
-            continue
-        if allowed is not None and r["content_id"] not in allowed:
-            continue
-        # 多样性按 content_id（§12.3b ⑤ 的 v6 修正）：同一内容存了 3 处
-        # 也只算一个来源，防止长文档霸占全部上下文
-        if per_content.get(r["content_id"], 0) >= MAX_PER_CONTENT:
-            continue
-        per_content[r["content_id"]] = per_content.get(r["content_id"], 0) + 1
-        picked.append(r)
-        if len(picked) >= TOP_CONTEXT:
-            break
-
-    pieces: list[ContextPiece] = []
-    for i, r in enumerate(picked):
-        expanded = _expand_neighbors(conn, r)
-        pieces.append(ContextPiece(
-            tag=f"C{i + 1}",
-            chunk_id=r["id"], content_id=r["content_id"],
-            file_id=r["file_id"], file_name=r["name"], file_path=r["path"],
-            page=r["page"], section_path=r["section_path"] or "",
-            text=expanded, snippet=r["text"][:300],
-        ))
-    return pieces
-
-
-def _expand_neighbors(conn, row) -> str:
-    """B2 的动态形态：命中片 + 同内容相邻片合并送模型。
-
-    方案原设计是预存 parent 层（相邻 3 child 合并、不参与检索）。
-    这里改为**查询时按 ordinal 现取邻居**：效果相同（送模型的上下文
-    完整、检索仍只用 child），但零额外存储、零重建成本 ——
-    个人库的邻居查询是主键范围扫，微秒级，不值得为它维护第二层数据。
-    """
-    rows = conn.execute(
-        """SELECT text FROM chunks
-           WHERE content_id = ? AND ordinal BETWEEN ? AND ?
-           ORDER BY ordinal""",
-        (row["content_id"], row["ordinal"] - NEIGHBOR_SPAN,
-         row["ordinal"] + NEIGHBOR_SPAN),
-    ).fetchall()
-    return "\n".join(r["text"] for r in rows)
+def retrieve_context(conn, question: str, book_id: int | None = None,
+                     *, return_trace: bool = False):
+    retrieval = run_retrieval(
+        conn, question, route_limit=60, candidate_limit=60, book_id=book_id,
+    )
+    if not retrieval.candidates:
+        return ([], retrieval.trace.to_dict()) if return_trace else []
+    candidates = load_context_candidates(
+        conn, retrieval, limit=TOP_CONTEXT,
+        max_per_content=MAX_PER_CONTENT, book_id=book_id,
+    )
+    candidates = expand_neighbors(
+        conn, candidates, neighbor_span=NEIGHBOR_SPAN, trace=retrieval.trace,
+    )
+    source_chars = sum(len(source.text) for source in {
+        (source.file_id, source.chunk_id): source
+        for candidate in candidates for source in candidate.expanded_sources
+    }.values())
+    spans = compress_evidence(question, candidates, trace=retrieval.trace)
+    pack = assemble_context(
+        spans, trace=retrieval.trace, source_chars=source_chars,
+    )
+    pieces = [
+        ContextPiece(
+            tag=f"C{i + 1}", chunk_id=span.chunk_id,
+            content_id=span.content_id, file_id=span.file_id,
+            file_name=span.file_name, file_path=span.file_path,
+            page=span.page, section_path=span.heading_path,
+            text=span.text, snippet=span.text,
+            span_id=span.span_id, start_offset=span.start_offset,
+            end_offset=span.end_offset,
+            document_start_offset=span.document_start_offset,
+            document_end_offset=span.document_end_offset,
+        )
+        for i, span in enumerate(pack.spans)
+    ]
+    return (pieces, retrieval.trace.to_dict()) if return_trace else pieces
 
 
 # ---------------------------------------------------------------- Prompt
@@ -201,9 +168,9 @@ def ask(conn: sqlite3.Connection, question: str, book_id: int | None = None) -> 
         return Answer(status="not_configured", answer=None,
                       hedge="尚未配置模型服务，可先使用搜索")
 
-    pieces = retrieve_context(conn, question, book_id)
+    pieces, trace = retrieve_context(conn, question, book_id, return_trace=True)
     if not pieces:
-        return Answer(status="refused", answer=REFUSAL)
+        return Answer(status="refused", answer=REFUSAL, trace=trace)
 
     from app.index.confidence import assess
     conf = assess(conn, question, 0.0)
@@ -219,7 +186,7 @@ def ask(conn: sqlite3.Connection, question: str, book_id: int | None = None) -> 
 
         if cleaned == REFUSAL:
             return Answer(status="refused", answer=REFUSAL,
-                          hedge=conf.hedge, validation=validation)
+                          hedge=conf.hedge, validation=validation, trace=trace)
 
         cited = _cited_tags(cleaned)
         if cited:
@@ -228,7 +195,7 @@ def ask(conn: sqlite3.Connection, question: str, book_id: int | None = None) -> 
                 cited, key=lambda x: int(x[1:])) if t in by_tag]
             return Answer(status="answered", answer=cleaned,
                           citations=citations, hedge=conf.hedge,
-                          validation=validation)
+                          validation=validation, trace=trace)
 
         # ② 非拒答却零引用 = 无依据的断言 → 重新生成一次（§12.4）
         if attempt == 1:
@@ -245,6 +212,7 @@ def ask(conn: sqlite3.Connection, question: str, book_id: int | None = None) -> 
         retrieved=[_citation_dict(p) for p in pieces],
         hedge="模型未能给出带依据的回答，以下是检索到的原文片段",
         validation=validation,
+        trace=trace,
     )
 
 
@@ -254,4 +222,9 @@ def _citation_dict(p: ContextPiece) -> dict:
         "file_name": p.file_name, "file_path": p.file_path,
         "page": p.page, "section_path": p.section_path,
         "snippet": p.snippet,
+        "span_id": p.span_id,
+        "start_offset": p.start_offset,
+        "end_offset": p.end_offset,
+        "document_start_offset": p.document_start_offset,
+        "document_end_offset": p.document_end_offset,
     }

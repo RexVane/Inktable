@@ -5,7 +5,8 @@
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder"
+    "dist": "electron-builder",
+    "test": "node --test tests/*.test.js"
   },
   "devDependencies": {
     "electron": "^43.3.0",

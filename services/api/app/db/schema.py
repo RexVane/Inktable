@@ -14,7 +14,7 @@ v5 之前 chunks 直接挂 file_id，导致"复用 chunks"这件事无处承载�
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 PRAGMA journal_mode = WAL;
@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS contents (
     parse_state        TEXT NOT NULL DEFAULT 'pending',  -- pending/parsing/indexed/parse_failed/unsupported
     chunk_count        INTEGER NOT NULL DEFAULT 0,
     embedding_model_id TEXT,
-    indexed_at         REAL
+    indexed_at         REAL,
+    active_index_version INTEGER NOT NULL DEFAULT 1
 );
 
 -- 文件（§9 files）
@@ -128,12 +129,69 @@ CREATE TABLE IF NOT EXISTS chunks (
     text               TEXT NOT NULL,
     text_hash          TEXT NOT NULL, -- 增量 diff 的主键（§12.5）
     token_count        INTEGER,
-    embedding_model_id TEXT
+    embedding_model_id TEXT,
+    section_id         INTEGER REFERENCES sections(id) ON DELETE SET NULL,
+    start_offset       INTEGER,
+    end_offset         INTEGER,
+    index_version      INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE INDEX IF NOT EXISTS idx_chunks_content ON chunks(content_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_layer   ON chunks(content_id, layer);
 CREATE INDEX IF NOT EXISTS idx_chunks_hash    ON chunks(text_hash);
+
+-- Document / Section / Child 分层索引（v7 M2）。Document 与 Section 表示按
+-- index_version 保存，contents.active_index_version 是唯一激活指针。
+CREATE TABLE IF NOT EXISTS document_representations (
+    id                   INTEGER PRIMARY KEY,
+    content_id           INTEGER NOT NULL REFERENCES contents(id) ON DELETE CASCADE,
+    index_version        INTEGER NOT NULL,
+    title                TEXT NOT NULL DEFAULT '',
+    summary_text         TEXT NOT NULL DEFAULT '',
+    full_text            TEXT NOT NULL DEFAULT '',
+    text_hash            TEXT NOT NULL,
+    token_count          INTEGER NOT NULL DEFAULT 0,
+    structure_confidence REAL NOT NULL DEFAULT 0,
+    UNIQUE(content_id, index_version)
+);
+
+CREATE TABLE IF NOT EXISTS sections (
+    id                   INTEGER PRIMARY KEY,
+    content_id           INTEGER NOT NULL REFERENCES contents(id) ON DELETE CASCADE,
+    parent_id            INTEGER REFERENCES sections(id) ON DELETE CASCADE,
+    index_version        INTEGER NOT NULL,
+    ordinal              INTEGER NOT NULL,
+    heading_path         TEXT NOT NULL DEFAULT '',
+    title                TEXT NOT NULL,
+    summary_text         TEXT NOT NULL DEFAULT '',
+    start_chunk_ordinal  INTEGER NOT NULL,
+    end_chunk_ordinal    INTEGER NOT NULL,
+    start_offset         INTEGER,
+    end_offset           INTEGER,
+    text_hash            TEXT NOT NULL,
+    token_count          INTEGER NOT NULL DEFAULT 0,
+    structure_confidence REAL NOT NULL DEFAULT 0,
+    UNIQUE(content_id, index_version, heading_path)
+);
+
+CREATE TABLE IF NOT EXISTS index_versions (
+    content_id    INTEGER NOT NULL REFERENCES contents(id) ON DELETE CASCADE,
+    version       INTEGER NOT NULL,
+    status        TEXT NOT NULL, -- building / active / superseded / failed
+    document_hash TEXT,
+    section_count INTEGER NOT NULL DEFAULT 0,
+    chunk_count   INTEGER NOT NULL DEFAULT 0,
+    error         TEXT,
+    created_at    REAL NOT NULL,
+    activated_at  REAL,
+    PRIMARY KEY(content_id, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_document_representations_version
+    ON document_representations(content_id, index_version);
+CREATE INDEX IF NOT EXISTS idx_sections_version
+    ON sections(content_id, index_version, ordinal);
+CREATE INDEX IF NOT EXISTS idx_sections_parent ON sections(parent_id);
 
 -- 任务队列（§9 tasks）
 CREATE TABLE IF NOT EXISTS tasks (
@@ -218,6 +276,14 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
 
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts_tri USING fts5(
     text, content='', contentless_delete=1, tokenize='trigram'
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
+    text, content='', contentless_delete=1, tokenize='unicode61'
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS sections_fts USING fts5(
+    text, content='', contentless_delete=1, tokenize='unicode61'
 );
 """
 

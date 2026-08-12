@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import multiprocessing
 import os
 import secrets
 import sys
@@ -16,34 +18,114 @@ from pathlib import Path
 import time
 
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from app.db.database import connect, init_db, quick_check
+from app.db.database import (
+    BackupError,
+    acquire_single_instance_lock,
+    connect,
+    create_daily_backup,
+    init_db,
+    integrity_check,
+    quick_check,
+    release_single_instance_lock,
+)
 from app.discovery.sources import discover_all
 from app.health import collect_health
-from app.index.pipeline import index_pending, indexable_exts
+from app.index.pipeline import (
+    activate_index_version,
+    count_readable_pending,
+    index_pending,
+)
 from app.index.confidence import assess as assess_confidence
-from app.index.search import search as fts_search
+from app.retrieval.pipeline import run as run_retrieval
+from app.retrieval.compress import EvidenceSource, best_span
 from app.watcher.scanner import preview_source, scan_source
 from app.watcher.service import WatchService
 
 app = FastAPI(title="Inktable API", version="0.1.0")
+log = logging.getLogger("inktable.main")
 
 _db = None
 _db_lock = threading.Lock()
+_db_init_lock = threading.Lock()
 _watch: WatchService | None = None
+
+
+def _empty_database_status() -> dict:
+    return {
+        "quick_check": {"ok": None, "checked_at": None},
+        "backup": {
+            "ok": None, "path": None, "error": "",
+            "checked_at": None, "skipped": False,
+        },
+        "integrity": {
+            "ok": None, "results": [], "checked_at": None,
+        },
+    }
+
+
+_database_status = _empty_database_status()
+
+
+def _status_snapshot() -> dict:
+    """返回可安全序列化的数据库维护状态副本。"""
+    return {name: dict(value) for name, value in _database_status.items()}
 
 
 def db():
     """单写入线程串行化（PLAN §19 R9）。"""
-    global _db
-    if _db is None:
-        _db = connect()
-        init_db(_db)
-        if not quick_check(_db):
-            raise RuntimeError("数据库完整性检查失败")
+    global _db, _database_status
+    if _db is not None:
+        return _db
+
+    # 生产入口会在启动 HTTP 服务前先调用 db()，这里的锁仍然保留：测试、
+    # 嵌入式调用或未来改为 lifespan 后，多个首请求也不能各自创建一条连接。
+    with _db_init_lock:
+        if _db is not None:
+            return _db
+
+        _database_status = _empty_database_status()
+        conn = connect()
+        try:
+            # Integrity is checked before schema/default writes so a damaged
+            # database is never modified merely by launching the application.
+            checked_at = time.time()
+            check_ok = quick_check(conn)
+            _database_status["quick_check"] = {
+                "ok": check_ok, "checked_at": checked_at,
+            }
+            if not check_ok:
+                raise RuntimeError("数据库完整性检查失败")
+            init_db(conn)
+
+            # 每日首次启动备份失败（例如磁盘满/目录无权限）不应让整个文件库
+            # 不可用，但绝不能静默忽略：保留 degraded 状态，供 /db/status、
+            # /stats 与设置页明确展示，用户可修复后手动重试。
+            if os.environ.get("INKTABLE_DB") == ":memory:":
+                _database_status["backup"] = {
+                    "ok": None, "path": None, "error": "",
+                    "checked_at": time.time(), "skipped": True,
+                }
+            else:
+                try:
+                    backup = create_daily_backup(conn)
+                    _database_status["backup"] = {
+                        "ok": True, "path": str(backup), "error": "",
+                        "checked_at": time.time(), "skipped": False,
+                    }
+                except Exception as exc:  # 启动降级，状态必须对外可见
+                    _database_status["backup"] = {
+                        "ok": False, "path": None, "error": str(exc),
+                        "checked_at": time.time(), "skipped": False,
+                    }
+                    log.error("每日数据库备份失败，应用以降级状态继续：%s", exc)
+        except Exception:
+            conn.close()
+            raise
+        _db = conn
     return _db
 
 
@@ -56,8 +138,13 @@ def watch_service() -> WatchService:
 
 @app.on_event("shutdown")
 def _shutdown() -> None:
+    global _db, _watch
     if _watch is not None:
         _watch.stop()
+        _watch = None
+    if _db is not None:
+        _db.close()
+        _db = None
 
 # 令牌优先从 stdin 读取；缺省时自生成（开发态）
 #
@@ -251,18 +338,9 @@ def _delete_content(conn, content_id: int) -> None:
     都不会自动跟随主表删除。漏删任何一个都会让搜索命中已消失的分片，
     点开报错；向量表漏删还会让语义检索永远"记得"已删除的内容。
     """
-    ids = [r["id"] for r in conn.execute(
-        "SELECT id FROM chunks WHERE content_id = ?", (content_id,)
-    )]
-    if ids:
-        marks = ",".join("?" * len(ids))
-        conn.execute(f"DELETE FROM chunks_fts WHERE rowid IN ({marks})", ids)
-        conn.execute(f"DELETE FROM chunks_fts_tri WHERE rowid IN ({marks})", ids)
-        try:
-            conn.execute(f"DELETE FROM chunks_vec WHERE rowid IN ({marks})", ids)
-        except Exception:
-            pass  # 向量表不存在（扩展未加载）时忽略
-        conn.execute("DELETE FROM chunks WHERE content_id = ?", (content_id,))
+    from app.index.pipeline import _delete_content_indexes
+
+    _delete_content_indexes(conn, content_id)
     conn.execute("DELETE FROM contents WHERE id = ?", (content_id,))
 
 
@@ -293,6 +371,14 @@ def get_llm() -> dict:
     return llm.status()
 
 
+@app.post("/settings/llm/test", dependencies=[Depends(require_token)])
+def test_llm() -> dict:
+    """User-triggered end-to-end model connectivity check."""
+    from app.qa import llm
+
+    return llm.probe()
+
+
 class AskRequest(BaseModel):
     question: str
     book_id: int | None = None
@@ -313,9 +399,12 @@ def post_ask(req: AskRequest) -> dict:
             a = ask(conn, q, req.book_id)
         except LLMError as e:
             raise HTTPException(status_code=502, detail=str(e)) from e
+    trace = a.trace
     return {
         "status": a.status, "answer": a.answer, "citations": a.citations,
         "retrieved": a.retrieved, "hedge": a.hedge, "validation": a.validation,
+        "trace_id": trace.get("trace_id"), "timings": trace.get("stages", []),
+        "degraded": trace.get("degraded", []), "trace": trace,
     }
 
 
@@ -616,9 +705,17 @@ def add_source(req: AddSourceRequest) -> dict:
 
 
 @app.get("/files", dependencies=[Depends(require_token)])
-def list_files(limit: int = 100, offset: int = 0, q: str | None = None,
-               category_id: int | None = None, unclassified: bool = False,
-               book_id: int | None = None) -> dict:
+def list_files(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0, le=1_000_000),
+    q: str | None = None,
+    category_id: int | None = None,
+    unclassified: bool = False,
+    book_id: int | None = None,
+    source: str | None = None,
+    ext: str | None = None,
+    duplicate: bool = False,
+) -> dict:
     conn = db()
     conds, params = [], []
     if q:
@@ -639,22 +736,196 @@ def list_files(limit: int = 100, offset: int = 0, q: str | None = None,
     if book_id is not None:
         conds.append("f.id IN (SELECT file_id FROM book_members WHERE book_id = ?)")
         params.append(book_id)
+    if source is not None:
+        # renderer 侧来源导航使用展示名；这里必须服务端过滤，否则分页后再
+        # 前端过滤会漏掉后续页中属于该来源的文件。
+        conds.append("s.name = ?")
+        params.append(source)
+    if ext is not None:
+        # Query 中 ``ext=`` 是有意义的：筛选无扩展名文件。数据库历史数据
+        # 可能用 NULL 或空串表示，统一视作空扩展名。
+        conds.append("lower(COALESCE(f.ext, '')) = lower(?)")
+        params.append(ext)
+    if duplicate:
+        # duplicate 是共享同一 content 的视图状态；返回该重复组的全部文件，
+        # 方便用户看到原件与各副本，而不是只返回任意一个“后来的”路径。
+        conds.append(
+            """(f.content_id IS NOT NULL AND EXISTS (
+                   SELECT 1 FROM files other
+                   WHERE other.content_id = f.content_id AND other.id != f.id
+               ))"""
+        )
     where = ("WHERE " + " AND ".join(conds)) if conds else ""
+    from_sql = "FROM files f LEFT JOIN sources s ON f.source_id = s.id"
 
-    total = conn.execute(f"SELECT count(*) c FROM files f {where}", params).fetchone()["c"]
+    total = conn.execute(
+        f"SELECT count(*) c {from_sql} {where}", params
+    ).fetchone()["c"]
     rows = conn.execute(
         f"SELECT f.id, f.name, f.path, f.ext, f.size, f.state, f.mtime, f.preserved_path, "
-        f"s.name AS source_name, s.volatile "
-        f"FROM files f LEFT JOIN sources s ON f.source_id = s.id {where} "
-        f"ORDER BY f.mtime DESC LIMIT ? OFFSET ?",
+        f"f.source_id, s.name AS source_name, s.volatile "
+        f"{from_sql} {where} "
+        f"ORDER BY f.mtime DESC, f.id DESC LIMIT ? OFFSET ?",
         [*params, limit, offset],
     ).fetchall()
     return {"total": total, "files": [dict(r) for r in rows]}
 
 
+FILE_DETAIL_SECTION_LIMIT = 24
+FILE_DETAIL_TEXT_LIMIT = 4000
+
+
+def _decode_locator(value: str | None) -> dict:
+    if not value:
+        return {}
+    try:
+        decoded = json.loads(value)
+    except (TypeError, ValueError):
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+@app.get("/files/{file_id}/detail", dependencies=[Depends(require_token)])
+def file_detail(file_id: int) -> dict:
+    """Return bounded detail for the selected file and its active index only."""
+    conn = db()
+    row = conn.execute(
+        """SELECT f.id, f.volume_uuid, f.inode, f.content_id, f.path, f.name,
+                  f.origin_path, f.preserved_path, f.source_id, f.ext, f.mime,
+                  f.size, f.state, f.error_code, f.retry_count, f.category_id,
+                  f.confidence, f.confirmed_by_user, f.is_dataless, f.mtime,
+                  f.detected_at, f.indexed_at, f.missing_since,
+                  s.name AS source_name, s.path AS source_path,
+                  s.kind AS source_kind, s.discovered_by AS source_discovered_by,
+                  s.volatile AS source_volatile, s.enabled AS source_enabled,
+                  cat.parent_id AS category_parent_id,
+                  cat.name AS category_name,
+                  c.sha256 AS content_sha256, c.size AS content_size,
+                  c.parse_state, c.chunk_count, c.embedding_model_id,
+                  c.indexed_at AS content_indexed_at, c.active_index_version
+           FROM files f
+           LEFT JOIN sources s ON s.id = f.source_id
+           LEFT JOIN categories cat ON cat.id = f.category_id
+           LEFT JOIN contents c ON c.id = f.content_id
+           WHERE f.id = ?""",
+        (file_id,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    tags = [dict(item) for item in conn.execute(
+        """SELECT t.id, t.name, t.color
+           FROM tags t JOIN file_tags ft ON ft.tag_id = t.id
+           WHERE ft.file_id = ? ORDER BY t.name, t.id""",
+        (file_id,),
+    )]
+    books = [dict(item) for item in conn.execute(
+        """SELECT b.id, b.name
+           FROM books b JOIN book_members bm ON bm.book_id = b.id
+           WHERE bm.file_id = ? ORDER BY b.name, b.id""",
+        (file_id,),
+    )]
+
+    source = None
+    if row["source_id"] is not None:
+        source = {
+            "id": row["source_id"], "name": row["source_name"],
+            "path": row["source_path"], "kind": row["source_kind"],
+            "discovered_by": row["source_discovered_by"],
+            "volatile": bool(row["source_volatile"]),
+            "enabled": bool(row["source_enabled"]),
+        }
+    category = None
+    if row["category_id"] is not None:
+        category = {
+            "id": row["category_id"], "parent_id": row["category_parent_id"],
+            "name": row["category_name"],
+        }
+    content = None
+    if row["content_id"] is not None:
+        content = {
+            "id": row["content_id"], "sha256": row["content_sha256"],
+            "size": row["content_size"], "parse_state": row["parse_state"],
+            "chunk_count": row["chunk_count"],
+            "embedding_model_id": row["embedding_model_id"],
+            "indexed_at": row["content_indexed_at"],
+            "active_index_version": row["active_index_version"],
+        }
+
+    file = {
+        "id": row["id"], "content_id": row["content_id"],
+        "volume_uuid": row["volume_uuid"], "inode": row["inode"],
+        "name": row["name"], "path": row["path"],
+        "origin_path": row["origin_path"],
+        "preserved_path": row["preserved_path"],
+        "ext": row["ext"], "mime": row["mime"], "size": row["size"],
+        "state": row["state"], "error_code": row["error_code"],
+        "retry_count": row["retry_count"], "confidence": row["confidence"],
+        "confirmed_by_user": bool(row["confirmed_by_user"]),
+        "is_dataless": bool(row["is_dataless"]), "mtime": row["mtime"],
+        "detected_at": row["detected_at"], "indexed_at": row["indexed_at"],
+        "missing_since": row["missing_since"], "source": source,
+        "category": category, "tags": tags, "books": books,
+        "content": content,
+    }
+
+    document = None
+    sections: list[dict] = []
+    truncated = False
+    if row["content_id"] is not None:
+        active_version = row["active_index_version"]
+        document_row = conn.execute(
+            """SELECT title, summary_text, token_count, structure_confidence,
+                      index_version
+               FROM document_representations
+               WHERE content_id = ? AND index_version = ?""",
+            (row["content_id"], active_version),
+        ).fetchone()
+        if document_row is not None:
+            document = dict(document_row)
+
+        passage_rows = conn.execute(
+            """SELECT ch.id, ch.section_id, sec.title AS section_title,
+                      ch.section_path, ch.page, ch.page_end, ch.ordinal,
+                      substr(ch.text, 1, ?) AS text, length(ch.text) AS text_length,
+                      ch.start_offset, ch.end_offset, ch.bbox
+               FROM chunks ch
+               LEFT JOIN sections sec
+                 ON sec.id = ch.section_id AND sec.index_version = ch.index_version
+               WHERE ch.content_id = ? AND ch.index_version = ?
+                 AND ch.layer = 'child'
+               ORDER BY ch.ordinal, ch.id LIMIT ?""",
+            (FILE_DETAIL_TEXT_LIMIT + 1, row["content_id"], active_version,
+             FILE_DETAIL_SECTION_LIMIT + 1),
+        ).fetchall()
+        truncated = len(passage_rows) > FILE_DETAIL_SECTION_LIMIT
+        for passage in passage_rows[:FILE_DETAIL_SECTION_LIMIT]:
+            text = passage["text"] or ""
+            text_truncated = passage["text_length"] > FILE_DETAIL_TEXT_LIMIT
+            truncated = truncated or text_truncated
+            sections.append({
+                "id": passage["id"], "section_id": passage["section_id"],
+                "title": passage["section_title"],
+                "section_path": passage["section_path"],
+                "page": passage["page"], "page_end": passage["page_end"],
+                "ordinal": passage["ordinal"],
+                "text": text[:FILE_DETAIL_TEXT_LIMIT],
+                "text_truncated": text_truncated,
+                "start_offset": passage["start_offset"],
+                "end_offset": passage["end_offset"],
+                "locator": _decode_locator(passage["bbox"]),
+            })
+
+    return {
+        "file": file, "document": document, "sections": sections,
+        "truncated": truncated,
+    }
+
+
 class SearchRequest(BaseModel):
     q: str
-    limit: int = 40
+    limit: int = Field(default=40, ge=1, le=100)
+    book_id: int | None = None
 
 
 @app.post("/search", dependencies=[Depends(require_token)])
@@ -668,41 +939,63 @@ def search_content(req: SearchRequest) -> dict:
     而不是一堆散落的分片。
     """
     conn = db()
-    routes = fts_search(conn, req.q, limit=req.limit * 3)
-
-    # RRF 融合（§12.3b ④）：只用排名，免去 BM25 与余弦分数的量纲归一化
-    K = 60
-    fused: dict[int, float] = {}
-    for hits in routes.values():
-        for rank, (chunk_id, _score) in enumerate(hits):
-            fused[chunk_id] = fused.get(chunk_id, 0.0) + 1.0 / (K + rank + 1)
+    route_limit = 200 if req.book_id is not None else req.limit * 3
+    retrieval = run_retrieval(
+        conn, req.q, route_limit=route_limit,
+        candidate_limit=req.limit * 3, book_id=req.book_id,
+    )
+    routes = retrieval.routes
+    fused = {candidate.chunk_id: candidate.final_score
+             for candidate in retrieval.candidates}
 
     # 向量路的最高余弦是唯一有绝对含义的信号，用于置信度判定（§12.3c）
     top_cosine = routes["vector"][0][1] if routes.get("vector") else 0.0
     conf = assess_confidence(conn, req.q, top_cosine)
 
     if not fused:
+        trace = retrieval.trace.to_dict()
         return {"query": req.q, "total": 0, "files": [],
-                "confidence": conf.level, "hedge": conf.hedge}
+                "confidence": conf.level, "hedge": conf.hedge,
+                "trace_id": trace["trace_id"], "timings": trace["stages"],
+                "degraded": trace["degraded"], "trace": trace}
 
     top = sorted(fused.items(), key=lambda kv: kv[1], reverse=True)[: req.limit * 3]
     ids = [cid for cid, _ in top]
     marks = ",".join("?" * len(ids))
+    book_file_filter = ""
+    row_params: list[object] = list(ids)
+    if req.book_id is not None:
+        # content 可能被书内、书外多个 file 共享。这里必须限定具体 file_id，
+        # 不能只限定 content_id，否则同一 chunk 会再次展开成书外副本。
+        book_file_filter = (
+            " AND f.id IN (SELECT file_id FROM book_members WHERE book_id = ?)"
+        )
+        row_params.append(req.book_id)
     rows = conn.execute(
-        f"""SELECT ch.id, ch.content_id, ch.text, ch.section_path, ch.page, ch.ordinal,
+        f"""SELECT ch.id, ch.content_id, ch.section_id, ch.text,
+                   ch.section_path, ch.page, ch.ordinal, ch.start_offset,
+                   ch.end_offset,
                    f.id AS file_id, f.name, f.path, f.ext, f.mtime,
                    s.name AS source_name, s.volatile
             FROM chunks ch
             JOIN files f ON f.content_id = ch.content_id
             LEFT JOIN sources s ON f.source_id = s.id
-            WHERE ch.id IN ({marks})""",
-        ids,
+            WHERE ch.id IN ({marks}){book_file_filter}""",
+        row_params,
     ).fetchall()
 
     # 按文件聚合，每个文件保留最相关的几个片段
     by_file: dict[int, dict] = {}
     for r in rows:
         score = fused.get(r["id"], 0)
+        span = best_span(req.q, EvidenceSource(
+            chunk_id=r["id"], content_id=r["content_id"],
+            section_id=r["section_id"], file_id=r["file_id"],
+            file_name=r["name"], file_path=r["path"], page=r["page"],
+            section_path=r["section_path"] or "", ordinal=r["ordinal"],
+            text=r["text"], document_start_offset=r["start_offset"],
+            document_end_offset=r["end_offset"], candidate_score=score,
+        ))
         entry = by_file.setdefault(
             r["file_id"],
             {
@@ -716,9 +1009,14 @@ def search_content(req: SearchRequest) -> dict:
         if len(entry["snippets"]) < 3:
             entry["snippets"].append({
                 "chunk_id": r["id"],
-                "text": r["text"][:220],
+                "span_id": span.span_id,
+                "text": span.text,
                 "section_path": r["section_path"],
                 "page": r["page"],
+                "start_offset": span.start_offset,
+                "end_offset": span.end_offset,
+                "document_start_offset": span.document_start_offset,
+                "document_end_offset": span.document_end_offset,
                 "score": score,
             })
 
@@ -726,6 +1024,7 @@ def search_content(req: SearchRequest) -> dict:
     for f in files:
         f["snippets"].sort(key=lambda s: s["score"], reverse=True)
 
+    trace = retrieval.trace.to_dict()
     return {
         "query": req.q,
         "total": len(files),
@@ -735,11 +1034,18 @@ def search_content(req: SearchRequest) -> dict:
         "confidence": conf.level,
         "hedge": conf.hedge,
         "routes": {k: len(v) for k, v in routes.items() if v},
+        "trace_id": trace["trace_id"], "timings": trace["stages"],
+        "degraded": trace["degraded"], "trace": trace,
     }
 
 
 class IndexRequest(BaseModel):
     limit: int = 500
+
+
+class IndexVersionRequest(BaseModel):
+    content_id: int = Field(ge=1)
+    version: int = Field(ge=1)
 
 
 @app.post("/index/run", dependencies=[Depends(require_token)])
@@ -754,14 +1060,58 @@ def run_index(req: IndexRequest) -> dict:
         total = {"indexed": 0, "chunks": 0, "no_text": 0, "failed": 0,
                  "unsupported": 0, "total": 0}
         while True:
+            pending_before = count_readable_pending(conn)
             r = index_pending(conn, limit=min(req.limit, 200))
             if r["total"] == 0:
                 break
             for k in total:
                 total[k] += r.get(k, 0)
+            # ``unsupported`` 可以被 index_pending 反复选中（例如扩展名在
+            # 白名单内但解析器拒绝了文件）。没有这个护栏，单次请求会把
+            # 同一个文档重复尝试直到耗尽 req.limit，看起来像 sidecar 卡死。
+            pending_after = count_readable_pending(conn)
+            if pending_after >= pending_before:
+                break
             if total["total"] >= req.limit:
                 break
         return total
+
+
+@app.get("/index/versions", dependencies=[Depends(require_token)])
+def index_versions(content_id: int = Query(ge=1)) -> dict:
+    conn = db()
+    content = conn.execute(
+        "SELECT active_index_version FROM contents WHERE id = ?", (content_id,),
+    ).fetchone()
+    if content is None:
+        raise HTTPException(status_code=404, detail="内容不存在")
+    rows = conn.execute(
+        """SELECT version, status, document_hash, section_count, chunk_count,
+                  error, created_at, activated_at
+           FROM index_versions WHERE content_id = ? ORDER BY version DESC""",
+        (content_id,),
+    ).fetchall()
+    return {
+        "content_id": content_id,
+        "active_version": content["active_index_version"],
+        "versions": [dict(row) for row in rows],
+    }
+
+
+@app.post("/index/activate", dependencies=[Depends(require_token)])
+def activate_version(req: IndexVersionRequest) -> dict:
+    with _db_lock:
+        conn = db()
+        try:
+            result = activate_index_version(conn, req.content_id, req.version)
+            conn.commit()
+        except ValueError as exc:
+            conn.rollback()
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            conn.rollback()
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return result
 
 
 @app.post("/watch/start", dependencies=[Depends(require_token)])
@@ -785,6 +1135,47 @@ def watch_status() -> dict:
     return watch_service().status
 
 
+@app.get("/db/status", dependencies=[Depends(require_token)])
+def database_status() -> dict:
+    """数据库启动检查与最近一次维护动作的可见状态。"""
+    db()  # 首次请求也必须先完成 quick_check / 每日备份
+    return _status_snapshot()
+
+
+@app.post("/db/integrity_check", dependencies=[Depends(require_token)])
+def database_integrity_check() -> dict:
+    """手动执行完整 ``PRAGMA integrity_check``（PLAN §9.2）。"""
+    with _db_lock:
+        results = integrity_check(db())
+        ok = results == ["ok"]
+        _database_status["integrity"] = {
+            "ok": ok, "results": results, "checked_at": time.time(),
+        }
+    if not ok:
+        log.error("数据库完整性检查未通过：%s", "; ".join(results[:10]))
+    return {"ok": ok, "results": results}
+
+
+@app.post("/db/backup", dependencies=[Depends(require_token)])
+def database_backup() -> dict:
+    """手动确保当天的一致性快照存在；不会覆盖或自动恢复主库。"""
+    with _db_lock:
+        try:
+            path = create_daily_backup(db())
+        except (BackupError, OSError) as exc:
+            _database_status["backup"] = {
+                "ok": False, "path": None, "error": str(exc),
+                "checked_at": time.time(), "skipped": False,
+            }
+            log.error("手动数据库备份失败：%s", exc)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _database_status["backup"] = {
+            "ok": True, "path": str(path), "error": "",
+            "checked_at": time.time(), "skipped": False,
+        }
+    return {"ok": True, "path": str(path)}
+
+
 @app.get("/index/status", dependencies=[Depends(require_token)])
 def index_status() -> dict:
     conn = db()
@@ -792,21 +1183,19 @@ def index_status() -> dict:
         "SELECT parse_state, count(*) c FROM contents GROUP BY parse_state"
     ).fetchall()
     by_state = {r["parse_state"]: r["c"] for r in rows}
-    chunks = conn.execute("SELECT count(*) c FROM chunks").fetchone()["c"]
+    chunks = conn.execute(
+        """SELECT count(*) c FROM chunks ch JOIN contents c ON c.id = ch.content_id
+           WHERE ch.index_version = c.active_index_version"""
+    ).fetchone()["c"]
+    sections = conn.execute(
+        """SELECT count(*) c FROM sections s JOIN contents c ON c.id = s.content_id
+           WHERE s.index_version = c.active_index_version"""
+    ).fetchone()["c"]
 
     # pending 只算**真正会被解析的** —— 源码/媒体虽然也是 pending 状态，
     # 但永远不会进解析流水线。把它们算进去会让界面显示一个永降不到 0
     # 的数字，用户以为卡住了。
-    exts = indexable_exts()
-    marks = ",".join("?" * len(exts))
-    real_pending = conn.execute(
-        f"""SELECT count(DISTINCT c.id) c
-            FROM contents c JOIN files f ON f.content_id = c.id
-            WHERE c.parse_state = 'pending'
-              AND f.state != 'missing'
-              AND lower(f.ext) IN ({marks})""",
-        list(exts),
-    ).fetchone()["c"]
+    real_pending = count_readable_pending(conn)
 
     return {
         "by_state": by_state,
@@ -814,6 +1203,8 @@ def index_status() -> dict:
         "pending_raw": by_state.get("pending", 0),
         "indexed": by_state.get("indexed", 0),
         "chunks": chunks,
+        "sections": sections,
+        "index_schema_version": 2,
     }
 
 
@@ -835,6 +1226,7 @@ def stats() -> dict:
         "deduped": files - contents,
         "by_ext": [dict(r) for r in by_ext],
         "by_source": [dict(r) for r in by_source],
+        "database": _status_snapshot(),
     }
 
 
@@ -858,26 +1250,36 @@ def _read_stdin_secrets() -> None:
 
 
 def main() -> None:
-    if not sys.stdin.isatty():
-        threading.Thread(target=_read_stdin_secrets, daemon=True).start()
+    acquire_single_instance_lock()
+    try:
+        # Open and validate the database before reporting a listening port.  A
+        # corrupt or newer database must fail closed instead of producing a UI
+        # that appears ready and errors only on its first request.
+        db()
 
-    config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning")
-    server = uvicorn.Server(config)
+        if not sys.stdin.isatty():
+            threading.Thread(target=_read_stdin_secrets, daemon=True).start()
 
-    # 端口由内核分配，启动后经 stdout 回传主进程
-    original_startup = server.startup
+        config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning")
+        server = uvicorn.Server(config)
 
-    async def startup_with_port_report(sockets=None):
-        await original_startup(sockets=sockets)
-        for srv in server.servers:
-            for sock in srv.sockets:
-                port = sock.getsockname()[1]
-                print(json.dumps({"port": port, "token": SESSION_TOKEN}), flush=True)
-                return
+        # 端口由内核分配，启动后经 stdout 回传主进程
+        original_startup = server.startup
 
-    server.startup = startup_with_port_report  # type: ignore[method-assign]
-    server.run()
+        async def startup_with_port_report(sockets=None):
+            await original_startup(sockets=sockets)
+            for srv in server.servers:
+                for sock in srv.sockets:
+                    port = sock.getsockname()[1]
+                    print(json.dumps({"port": port, "token": SESSION_TOKEN}), flush=True)
+                    return
+
+        server.startup = startup_with_port_report  # type: ignore[method-assign]
+        server.run()
+    finally:
+        release_single_instance_lock()
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     main()

@@ -17,17 +17,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.db.database import connect  # noqa: E402
-from app.index.search import search  # noqa: E402
+from app.db.database import connect, init_db  # noqa: E402
+from app.retrieval.pipeline import run as run_retrieval  # noqa: E402
 from tests.evalset import ALL_CASES, ANSWERABLE, UNANSWERABLE, summary  # noqa: E402
 
 TOP_K = 5
+DEEP_K = 50
+RERANK_K = 20
 
 # 拒答门限（§12.3c）。
 #
@@ -43,19 +46,13 @@ TOP_K = 5
 ABSTAIN_THRESHOLD = 0.0
 
 
-def rrf_fuse(routes: dict, k: int = 60) -> dict[int, float]:
-    """RRF 融合（§12.3b ④）。只用排名，免去分数量纲归一化。"""
-    fused: dict[int, float] = {}
-    for hits in routes.values():
-        for rank, (cid, _score) in enumerate(hits):
-            fused[cid] = fused.get(cid, 0.0) + 1.0 / (k + rank + 1)
-    return fused
-
-
 def retrieve(conn, query: str, limit: int = 40) -> tuple[list[dict], float]:
     """检索并按文件聚合，返回 (文件列表, 最高融合分)。"""
-    routes = search(conn, query, limit=limit)
-    fused = rrf_fuse(routes)
+    retrieval = run_retrieval(
+        conn, query, route_limit=limit, candidate_limit=limit,
+    )
+    fused = {candidate.chunk_id: candidate.final_score
+             for candidate in retrieval.candidates}
     if not fused:
         return [], 0.0
 
@@ -72,12 +69,19 @@ def retrieve(conn, query: str, limit: int = 40) -> tuple[list[dict], float]:
     by_file: dict[str, dict] = {}
     for r in rows:
         sc = fused.get(r["id"], 0.0)
-        e = by_file.setdefault(r["name"], {"name": r["name"], "score": 0.0, "texts": []})
+        e = by_file.setdefault(
+            r["name"], {"name": r["name"], "score": 0.0, "ranked_texts": []},
+        )
         e["score"] = max(e["score"], sc)
-        if len(e["texts"]) < 3:
-            e["texts"].append(r["text"])
+        e["ranked_texts"].append((sc, r["text"]))
 
     files = sorted(by_file.values(), key=lambda e: -e["score"])
+    for entry in files:
+        entry["texts"] = [
+            text for _score, text in sorted(
+                entry.pop("ranked_texts"), key=lambda item: item[0], reverse=True,
+            )[:3]
+        ]
     return files, max(fused.values())
 
 
@@ -96,19 +100,57 @@ def judge(case, files: list[dict], top_score: float) -> dict:
                 "top": files[0]["name"] if files else None}
 
     topk = files[:TOP_K]
-    doc_hit = any(case.doc_hint in f["name"] for f in topk)
-    rank = next((i + 1 for i, f in enumerate(topk) if case.doc_hint in f["name"]), None)
+    deep = files[:DEEP_K]
+    rerank_top = files[:RERANK_K]
+    hints = case.doc_hints
+    doc_hit = all(any(hint in f["name"] for f in topk) for hint in hints)
+    doc_hit_50 = all(any(hint in f["name"] for f in deep) for hint in hints)
+    doc_hit_20 = all(any(hint in f["name"] for f in rerank_top) for hint in hints)
+    ranks = [
+        next((i + 1 for i, f in enumerate(topk) if hint in f["name"]), None)
+        for hint in hints
+    ]
+    rank = max((r for r in ranks if r is not None), default=None)
+    deep_ranks = [
+        next((i + 1 for i, f in enumerate(deep) if hint in f["name"]), None)
+        for hint in hints
+    ]
+    rank_50 = max((r for r in deep_ranks if r is not None), default=None)
+
+    matched_hints: set[str] = set()
+    gains: list[int] = []
+    reciprocal_rank = 0.0
+    for index, file in enumerate(files[:10], start=1):
+        match = next(
+            (hint for hint in hints
+             if hint not in matched_hints and hint in file["name"]),
+            None,
+        )
+        gains.append(1 if match else 0)
+        if match:
+            matched_hints.add(match)
+            if reciprocal_rank == 0.0:
+                reciprocal_rank = 1.0 / index
+    dcg = sum(gain / math.log2(index + 2) for index, gain in enumerate(gains))
+    ideal = min(len(hints), 10)
+    idcg = sum(1.0 / math.log2(index + 2) for index in range(ideal))
+    ndcg_10 = dcg / idcg if idcg else 0.0
 
     # 关键词检查：答案 chunk 是否真的含有答案（防止"文档对了但片段不对"）
     kw_hit = True
     if case.answer_keywords and doc_hit:
-        matched = next(f for f in topk if case.doc_hint in f["name"])
-        blob = " ".join(matched["texts"])
+        matched = [
+            f for f in topk if any(hint in f["name"] for hint in hints)
+        ]
+        blob = " ".join(text for f in matched for text in f["texts"])
         kw_hit = any(kw in blob for kw in case.answer_keywords)
 
     return {"qid": case.qid, "kind": "answerable", "difficulty": case.difficulty,
             "pass": doc_hit and kw_hit and not abstained,
-            "doc_hit": doc_hit, "kw_hit": kw_hit, "rank": rank,
+            "doc_hit": doc_hit, "doc_hit_20": doc_hit_20,
+            "doc_hit_50": doc_hit_50,
+            "kw_hit": kw_hit, "rank": rank, "rank_50": rank_50,
+            "mrr_10": reciprocal_rank, "ndcg_10": ndcg_10,
             "abstained": abstained, "top_score": top_score,
             "top": topk[0]["name"] if topk else None}
 
@@ -122,6 +164,7 @@ def main() -> int:
     args = ap.parse_args()
 
     conn = connect()
+    init_db(conn)
     n_chunks = conn.execute("SELECT count(*) c FROM chunks").fetchone()["c"]
     if n_chunks == 0:
         print("库里没有分片，先启用来源并跑 /index/run")
@@ -136,7 +179,7 @@ def main() -> int:
     t0 = time.perf_counter()
     for case in ALL_CASES:
         t = time.perf_counter()
-        files, top_score = retrieve(conn, case.query)
+        files, top_score = retrieve(conn, case.query, limit=200)
         latency = (time.perf_counter() - t) * 1000
         r = judge(case, files, top_score)
         r["latency_ms"] = latency
@@ -159,6 +202,10 @@ def main() -> int:
     una = [r for r in results if r["kind"] == "unanswerable"]
 
     recall = sum(r["doc_hit"] for r in ans) / len(ans)
+    recall_50 = sum(r["doc_hit_50"] for r in ans) / len(ans)
+    recall_20 = sum(r["doc_hit_20"] for r in ans) / len(ans)
+    mrr_10 = sum(r["mrr_10"] for r in ans) / len(ans)
+    ndcg_10 = sum(r["ndcg_10"] for r in ans) / len(ans)
     strict = sum(r["pass"] for r in ans) / len(ans)
     abstain_ok = sum(r["pass"] for r in una) / len(una)
     false_abstain = sum(r["abstained"] for r in ans) / len(ans)
@@ -168,6 +215,10 @@ def main() -> int:
     print("-" * 58)
     rows = [
         ("Recall@5（文档命中）", recall, 0.80, True),
+        ("Recall@50（文档深召回）", recall_50, 0.90, True),
+        ("Recall@20（精排保真）", recall_20, None, None),
+        ("MRR@10", mrr_10, None, None),
+        ("nDCG@10", ndcg_10, None, None),
         ("严格通过率（含关键词）", strict, None, None),
         ("正确拒答率", abstain_ok, 0.80, True),
         ("误拒率（越低越好）", false_abstain, 0.05, False),
@@ -198,7 +249,10 @@ def main() -> int:
     if args.json:
         Path(args.json).write_text(json.dumps({
             "label": args.label,
-            "summary": {"recall_at_5": recall, "strict": strict,
+            "summary": {"recall_at_5": recall, "recall_at_20": recall_20,
+                        "recall_at_50": recall_50, "mrr_at_10": mrr_10,
+                        "ndcg_at_10": ndcg_10,
+                        "strict": strict,
                         "abstain_ok": abstain_ok, "false_abstain": false_abstain,
                         "p50_ms": p50, "chunks": n_chunks,
                         "by_difficulty": {d: sum(v) / len(v) for d, v in by_diff.items()}},

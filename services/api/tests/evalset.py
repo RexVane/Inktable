@@ -3,8 +3,12 @@
 **必须在向量检索实现之前标注完成**（方案 §20：M6 先于 B3）。
 否则出题会不自觉地贴合已有实现，指标失去意义 —— 这是评测集最常见的失效方式。
 
-30 题构成：
-  · 18 题有依据（answerable）—— 答案确实在库中某个 chunk 里
+72 题构成：
+  · 20 题单文档事实定位
+  · 10 题同义改写或无关键词重合
+  · 10 题同文档跨片综合
+  · 10 题跨文档综合
+  · 10 题元数据、文件类型和范围问题
   · 12 题无依据（unanswerable）—— 答案不在库中，用于标定拒答门限
 
 为什么无依据题要 12 而不是方案初版的 5：5 个样本标不出可靠阈值，
@@ -27,10 +31,20 @@ class EvalCase:
     qid: str
     query: str
     # None 表示答案不在库中（应当拒答）
-    doc_hint: str | None          # 期望命中文档的文件名片段
+    doc_hint: str | list[str] | None  # 期望命中文档的文件名片段
     answer_keywords: list[str] = field(default_factory=list)  # 答案 chunk 应含的词
     difficulty: str = "exact"     # exact / paraphrase / synthesis
     note: str = ""
+    category: str = ""
+    scope: str = "all"
+
+    @property
+    def doc_hints(self) -> list[str]:
+        if self.doc_hint is None:
+            return []
+        if isinstance(self.doc_hint, str):
+            return [self.doc_hint]
+        return list(self.doc_hint)
 
     @property
     def answerable(self) -> bool:
@@ -91,6 +105,133 @@ ANSWERABLE = [
              "平台网站思路", ["glb", "拆"], "paraphrase"),
 ]
 
+# ---------------------------------------------------------------- v7 扩展：事实定位（补足到 20 题）
+
+V7_FACT = [
+    EvalCase("F19", "FTP 服务器默认使用哪个控制端口",
+             "FTP服务器课程设计报告", ["2121"], "exact", category="single_fact"),
+    EvalCase("F20", "PyFTP 使用什么 Python 版本开发",
+             "FTP服务器课程设计报告", ["3.11.9"], "exact", category="single_fact"),
+    EvalCase("F21", "FTP 项目支持哪两种数据连接模式",
+             "FTP服务器课程设计报告", ["主动", "被动"], "exact", category="single_fact"),
+    EvalCase("F22", "FTP 断点续传使用什么命令",
+             "FTP服务器课程设计报告", ["REST"], "exact", category="single_fact"),
+    EvalCase("F23", "FAT12 的目录项长度是多少字节",
+             "操作系统实验报告", ["32 字节"], "exact", category="single_fact"),
+    EvalCase("F24", "FAT12 每个 FAT 表项占多少位",
+             "操作系统实验报告", ["12 位"], "exact", category="single_fact"),
+    EvalCase("F25", "银行家算法判断资源不足时比较哪两个向量",
+             "操作系统实验报告", ["Request", "Available"], "exact", category="single_fact"),
+    EvalCase("F26", "FTP 未登录时返回什么状态码",
+             "FTP服务器课程设计报告", ["530"], "exact", category="single_fact"),
+    EvalCase("F27", "PyFTP 默认使用哪种并发模型",
+             "FTP服务器课程设计报告", ["thread"], "exact", category="single_fact"),
+    EvalCase("F28", "PyFTP 默认总根目录是什么",
+             "FTP服务器课程设计报告", ["examples/ftproot"], "exact", category="single_fact"),
+    EvalCase("F29", "FTP 项目要求的最低 TLS 版本是什么",
+             "FTP服务器课程设计报告", ["TLS 1.2"], "exact", category="single_fact"),
+    EvalCase("F30", "FTP 命令未实现时返回什么状态码",
+             "FTP服务器课程设计报告", ["502"], "exact", category="single_fact"),
+    EvalCase("F31", "PyFTP 按职责拆成多少个模块",
+             "FTP服务器课程设计报告", ["10 个模块"], "exact", category="single_fact"),
+]
+
+# ---------------------------------------------------------------- v7 扩展：同义改写（补足到 10 题）
+
+V7_PARAPHRASE = [
+    EvalCase("P19", "网络文件传到一半断了以后怎样接着传",
+             "FTP服务器课程设计报告", ["REST", "断点续传"], "paraphrase",
+             "查询避开协议命令名", category="paraphrase"),
+    EvalCase("P20", "怎样防止用户用相对路径跑出自己的文件目录",
+             "FTP服务器课程设计报告", ["目录穿越", "chroot"], "paraphrase",
+             "查询使用口语描述路径逃逸", category="paraphrase"),
+]
+
+# ---------------------------------------------------------------- v7 扩展：同文档跨片综合（补足到 10 题）
+
+V7_SYNTHESIS = [
+    EvalCase("S14", "FTP 项目如何同时保证客户端兼容性和传输安全",
+             "FTP服务器课程设计报告", ["RFC 959", "TLS"], "synthesis",
+             category="cross_chunk"),
+    EvalCase("S15", "FTP 项目的四道安全防线分别是什么",
+             "FTP服务器课程设计报告", ["目录穿越", "chroot", "登录", "FTPS"],
+             "synthesis", category="cross_chunk"),
+    EvalCase("S16", "FAT12 读取文件时依次会用到哪些区域和簇链信息",
+             "操作系统实验报告", ["BPB", "FAT", "根目录", "数据区"],
+             "synthesis", category="cross_chunk"),
+    EvalCase("S17", "银行家算法收到资源请求后的完整判断流程是什么",
+             "操作系统实验报告", ["Need", "Available", "试分配", "安全"],
+             "synthesis", category="cross_chunk"),
+    EvalCase("S18", "FTP 项目的基础功能和增强功能分别有哪些",
+             "FTP服务器课程设计报告", ["认证", "上传", "断点", "并发"],
+             "synthesis", category="cross_chunk"),
+    EvalCase("S19", "为什么 FTP 适合作为计算机网络课程设计题目",
+             "FTP服务器课程设计报告", ["协议", "并发", "可验证"],
+             "synthesis", category="cross_chunk"),
+    EvalCase("S20", "PyFTP 使用了哪些 Python 标准库，各自负责什么",
+             "FTP服务器课程设计报告", ["socket", "selectors", "ssl", "threading"],
+             "synthesis", category="cross_chunk"),
+]
+
+# ---------------------------------------------------------------- v7 扩展：跨文档综合
+
+V7_CROSS_DOCUMENT = [
+    EvalCase("X01", "Inktable 和 PyFTP 分别怎样保护本地服务边界与文件路径",
+             ["PLAN", "FTP服务器课程设计报告"], [], "synthesis",
+             category="cross_document"),
+    EvalCase("X02", "Inktable 与墨洞项目分别如何处理本地文件和传输",
+             ["PLAN", "墨洞InkHole"], [], "synthesis", category="cross_document"),
+    EvalCase("X03", "操作系统实验和 FTP 项目分别用了哪些资源或并发管理机制",
+             ["操作系统实验报告", "FTP服务器课程设计报告"], [], "synthesis",
+             category="cross_document"),
+    EvalCase("X04", "Inktable 和 FTP 项目各自如何做测试与验收",
+             ["PLAN", "FTP服务器课程设计报告"], [], "synthesis",
+             category="cross_document"),
+    EvalCase("X05", "中文检索和 FTP 命令解析分别如何处理特殊字符带来的歧义",
+             ["PLAN", "FTP服务器课程设计报告"], [], "synthesis",
+             category="cross_document"),
+    EvalCase("X06", "Inktable 与大湾区智慧城市调研分别如何使用 AI",
+             ["PLAN", "大湾区AI智慧城市调研"], [], "synthesis",
+             category="cross_document"),
+    EvalCase("X07", "墨洞项目与 FTP 课程项目的文件传输定位有什么不同",
+             ["墨洞InkHole", "FTP服务器课程设计报告"], [], "synthesis",
+             category="cross_document"),
+    EvalCase("X08", "Inktable 与 FTP 项目的本地运行架构有哪些共同点和差异",
+             ["PLAN", "FTP服务器课程设计报告"], [], "synthesis",
+             category="cross_document"),
+    EvalCase("X09", "操作系统实验中的文件管理与 Inktable 资料治理有什么不同",
+             ["操作系统实验报告", "PLAN"], [], "synthesis",
+             category="cross_document"),
+    EvalCase("X10", "计算机组成原理和操作系统实验分别使用了哪些核心数据结构",
+             ["计算机组成原理", "操作系统实验报告"], [], "synthesis",
+             category="cross_document"),
+]
+
+# ---------------------------------------------------------------- v7 扩展：元数据、类型与范围
+
+V7_METADATA = [
+    EvalCase("M01", "找出文件名中带 FTP 服务器课程设计报告的文档",
+             "FTP服务器课程设计报告", [], "metadata", category="metadata"),
+    EvalCase("M02", "哪份 Markdown 文件记录了杭州三日旅行规划",
+             "杭州三日旅行规划", [], "metadata", category="metadata"),
+    EvalCase("M03", "找出 PDF 格式的学生社团综合素质测评文件",
+             "学生社团学生骨干综合素质测评", [], "metadata", category="metadata"),
+    EvalCase("M04", "哪份 Markdown 文档是墨洞项目全面总结",
+             "墨洞InkHole项目全面总结", [], "metadata", category="metadata"),
+    EvalCase("M05", "找出 2026 年春季体育课成绩要求文档",
+             "体育课成绩评定具体要求", [], "metadata", category="metadata"),
+    EvalCase("M06", "哪份文档记录了 Inktable 的 M0 实测结果",
+             "M0-RESULTS", [], "metadata", category="metadata"),
+    EvalCase("M07", "哪份 Markdown 文件是 Inktable 的完整实施计划",
+             "PLAN", [], "metadata", category="metadata"),
+    EvalCase("M08", "找出计算机网络课程设计成绩单 PDF",
+             "计算机网络课程设计12班-成绩单", [], "metadata", category="metadata"),
+    EvalCase("M09", "哪份 DOCX 文件记录了平台网站思路",
+             "平台网站思路", [], "metadata", category="metadata"),
+    EvalCase("M10", "找出揭阳校区本科生综合素质测评实施细则",
+             "揭阳校区本科生综合素质测评实施细则", [], "metadata", category="metadata"),
+]
+
 # ---------------------------------------------------------------- 无依据（12 题）
 #
 # 这些问题的答案确实不在库中。检索应当返回低分，系统应当拒答而不是硬编。
@@ -121,15 +262,28 @@ UNANSWERABLE = [
              "同为社团文件，但只讲加分不讲经费"),
 ]
 
+ANSWERABLE = (
+    ANSWERABLE + V7_FACT + V7_PARAPHRASE + V7_SYNTHESIS
+    + V7_CROSS_DOCUMENT + V7_METADATA
+)
 ALL_CASES = ANSWERABLE + UNANSWERABLE
 
 
 def summary() -> dict:
     from collections import Counter
     diff = Counter(c.difficulty for c in ANSWERABLE)
+    categories = Counter(
+        c.category or (
+            "single_fact" if c.difficulty == "exact" else
+            "paraphrase" if c.difficulty == "paraphrase" else
+            "cross_chunk"
+        )
+        for c in ANSWERABLE
+    )
     return {
         "total": len(ALL_CASES),
         "answerable": len(ANSWERABLE),
         "unanswerable": len(UNANSWERABLE),
         "by_difficulty": dict(diff),
+        "by_category": dict(categories),
     }

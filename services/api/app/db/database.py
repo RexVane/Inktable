@@ -8,16 +8,23 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import os
+import shutil
 import sqlite3
+import tempfile
 import time
+from datetime import date
 from pathlib import Path
+from urllib.parse import quote
 
 from app.db.schema import DEFAULT_SETTINGS, SCHEMA, SCHEMA_VERSION
 
 APP_DIR = Path.home() / "Library" / "Application Support" / "Inktable"
 DB_PATH = APP_DIR / "library.db"
 LOCK_PATH = APP_DIR / "inktable.lock"
+BACKUP_DIR = APP_DIR / "backups"
+BACKUP_KEEP = 7
 
 _lock_fd: int | None = None
 
@@ -26,18 +33,57 @@ class AlreadyRunning(RuntimeError):
     """另一个实例已持有库锁。"""
 
 
+class BackupError(RuntimeError):
+    """数据库备份无法创建或无法通过恢复前校验。"""
+
+
+def _instance_lock_path() -> Path:
+    """Return the lock corresponding to the database selected for this process.
+
+    Production always uses ``LOCK_PATH``.  Tests and development may point the
+    sidecar at an isolated database through ``INKTABLE_DB``; those databases
+    must not contend for the production lock or for each other's locks.
+    """
+    override = os.environ.get("INKTABLE_DB")
+    if override and override != ":memory:":
+        db_path = Path(override)
+        return db_path.with_name(f"{db_path.name}.lock")
+    return LOCK_PATH
+
+
 def acquire_single_instance_lock() -> None:
     """单实例互斥（§9.2）。两个实例同时写 SQLite 必然损坏。"""
     global _lock_fd
-    APP_DIR.mkdir(parents=True, exist_ok=True)
-    fd = os.open(LOCK_PATH, os.O_CREAT | os.O_RDWR)
+    if _lock_fd is not None:
+        return
+
+    lock_path = _instance_lock_path()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
+    except BlockingIOError:
         os.close(fd)
         raise AlreadyRunning("Inktable 已在运行")
+    except OSError:
+        os.close(fd)
+        raise
+    os.ftruncate(fd, 0)
+    os.lseek(fd, 0, os.SEEK_SET)
     os.write(fd, str(os.getpid()).encode())
     _lock_fd = fd
+
+
+def release_single_instance_lock() -> None:
+    """Release the process-wide database lock, mainly for orderly shutdown."""
+    global _lock_fd
+    if _lock_fd is None:
+        return
+    try:
+        fcntl.flock(_lock_fd, fcntl.LOCK_UN)
+    finally:
+        os.close(_lock_fd)
+        _lock_fd = None
 
 
 def connect(path: Path | str | None = None) -> sqlite3.Connection:
@@ -76,11 +122,190 @@ def _load_vec_extension(conn: sqlite3.Connection) -> bool:
 
 
 def init_db(conn: sqlite3.Connection) -> None:
+    # Reject application downgrades before executing even additive schema SQL.
+    # A brand-new/legacy database has no settings table yet and is allowed.
+    check_schema_version(conn)
     conn.executescript(SCHEMA)
-    _init_vec_table(conn)
-    for k, v in DEFAULT_SETTINGS.items():
-        conn.execute("INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)", (k, v))
-    conn.commit()
+    conn.execute("BEGIN")
+    try:
+        _migrate_schema(conn)
+        _init_vec_table(conn)
+        for k, v in DEFAULT_SETTINGS.items():
+            conn.execute(
+                "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
+                (k, v),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def _column_names(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def _add_column(conn: sqlite3.Connection, table: str, definition: str) -> None:
+    name = definition.split()[0]
+    if name not in _column_names(conn, table):
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {definition}")
+
+
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    """Apply additive migrations and backfill a searchable v1 active version."""
+    _repair_legacy_chunk_fts(conn)
+    _add_column(
+        conn, "contents", "active_index_version INTEGER NOT NULL DEFAULT 1",
+    )
+    _add_column(
+        conn, "chunks", "section_id INTEGER REFERENCES sections(id) ON DELETE SET NULL",
+    )
+    _add_column(conn, "chunks", "start_offset INTEGER")
+    _add_column(conn, "chunks", "end_offset INTEGER")
+    _add_column(conn, "chunks", "index_version INTEGER NOT NULL DEFAULT 1")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chunks_version "
+        "ON chunks(content_id, index_version, ordinal)"
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_section ON chunks(section_id)")
+
+    # Existing v1 libraries had one implicit active generation. Backfill a
+    # coarse Document/Section representation without reparsing user files;
+    # the next normal reindex replaces it with the structured hierarchy.
+    legacy = conn.execute(
+        """SELECT c.id, c.active_index_version,
+                  COALESCE((SELECT name FROM files f WHERE f.content_id = c.id
+                            ORDER BY f.id LIMIT 1), '') AS name
+           FROM contents c
+           WHERE EXISTS (SELECT 1 FROM chunks ch WHERE ch.content_id = c.id)
+             AND NOT EXISTS (
+                 SELECT 1 FROM index_versions iv WHERE iv.content_id = c.id
+             )"""
+    ).fetchall()
+    from app.index.search import segment_for_index
+
+    for content in legacy:
+        version = int(content["active_index_version"] or 1)
+        rows = conn.execute(
+            "SELECT id, ordinal, text, section_path FROM chunks "
+            "WHERE content_id = ? ORDER BY ordinal, id",
+            (content["id"],),
+        ).fetchall()
+        full_text = "\n\n".join(row["text"] for row in rows)
+        title = content["name"]
+        summary = full_text[:1000]
+        digest = hashlib.sha256(full_text.encode("utf-8")).hexdigest()
+        rep_id = conn.execute(
+            """INSERT INTO document_representations
+               (content_id, index_version, title, summary_text, full_text,
+                text_hash, token_count, structure_confidence)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 0)""",
+            (content["id"], version, title, summary, full_text, digest,
+             len(full_text)),
+        ).lastrowid
+        conn.execute(
+            "INSERT INTO documents_fts(rowid, text) VALUES (?, ?)",
+            (rep_id, segment_for_index(f"{title}\n{summary}")),
+        )
+        heading = next(
+            (row["section_path"] for row in rows if row["section_path"]),
+            "正文",
+        )
+        section_id = conn.execute(
+            """INSERT INTO sections
+               (content_id, index_version, ordinal, heading_path, title,
+                summary_text, start_chunk_ordinal, end_chunk_ordinal,
+                start_offset, end_offset, text_hash, token_count,
+                structure_confidence)
+               VALUES (?, ?, 0, ?, ?, ?, ?, ?, 0, ?, ?, ?, 0)""",
+            (content["id"], version, heading, heading.split(" › ")[-1],
+             summary, rows[0]["ordinal"], rows[-1]["ordinal"], len(full_text),
+             digest, len(full_text)),
+        ).lastrowid
+        conn.execute(
+            "INSERT INTO sections_fts(rowid, text) VALUES (?, ?)",
+            (section_id, segment_for_index(f"{heading}\n{summary}")),
+        )
+        cursor = 0
+        for row in rows:
+            start = full_text.find(row["text"], cursor)
+            if start < 0:
+                start = cursor
+            end = start + len(row["text"])
+            conn.execute(
+                """UPDATE chunks SET section_id = ?, start_offset = ?,
+                   end_offset = ?, index_version = ? WHERE id = ?""",
+                (section_id, start, end, version, row["id"]),
+            )
+            cursor = end
+        conn.execute(
+            """INSERT INTO index_versions
+               (content_id, version, status, document_hash, section_count,
+                chunk_count, created_at, activated_at)
+               VALUES (?, ?, 'active', ?, 1, ?, ?, ?)""",
+            (content["id"], version, digest, len(rows), time.time(), time.time()),
+        )
+
+    conn.execute(
+        """INSERT INTO settings(key, value) VALUES ('db_schema_version', ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
+        (str(SCHEMA_VERSION),),
+    )
+
+
+def _repair_legacy_chunk_fts(conn: sqlite3.Connection) -> None:
+    """Rebuild v1 contentless FTS tables so indexed rows can be deleted."""
+    definitions = {
+        "chunks_fts": """CREATE VIRTUAL TABLE chunks_fts USING fts5(
+            text, content='', contentless_delete=1, tokenize='unicode61'
+        )""",
+        "chunks_fts_tri": """CREATE VIRTUAL TABLE chunks_fts_tri USING fts5(
+            text, content='', contentless_delete=1, tokenize='trigram'
+        )""",
+    }
+    legacy = []
+    for table in definitions:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table,),
+        ).fetchone()
+        compact_sql = "".join((row["sql"] or "").split()) if row else ""
+        if row and "contentless_delete=1" not in compact_sql:
+            legacy.append(table)
+    if not legacy:
+        return
+
+    from app.index.search import segment_for_index
+
+    chunks = conn.execute(
+        "SELECT id, text, section_path FROM chunks ORDER BY id"
+    ).fetchall()
+    for table in legacy:
+        conn.execute(f"DROP TABLE {table}")
+        conn.execute(definitions[table])
+        if table == "chunks_fts":
+            rows = (
+                (
+                    row["id"],
+                    segment_for_index(
+                        f'{row["section_path"]}\n{row["text"]}'
+                        if row["section_path"] else row["text"]
+                    ),
+                )
+                for row in chunks
+            )
+        else:
+            rows = (
+                (
+                    row["id"],
+                    f'{row["section_path"]}\n{row["text"]}'
+                    if row["section_path"] else row["text"],
+                )
+                for row in chunks
+            )
+        conn.executemany(
+            f"INSERT INTO {table}(rowid, text) VALUES (?, ?)", rows
+        )
 
 
 def _init_vec_table(conn: sqlite3.Connection) -> None:
@@ -107,6 +332,159 @@ def quick_check(conn: sqlite3.Connection) -> bool:
         return False
 
 
+def integrity_check(conn: sqlite3.Connection) -> list[str]:
+    """执行完整 ``PRAGMA integrity_check``，返回 SQLite 的逐条诊断。
+
+    与 ``quick_check`` 不同，这会遍历索引，适合每周或用户手动触发。
+    调用方以结果严格等于 ``["ok"]`` 判断通过，损坏细节可直接展示或记日志。
+    """
+    try:
+        return [str(row[0]) for row in conn.execute("PRAGMA integrity_check").fetchall()]
+    except sqlite3.DatabaseError as exc:
+        return [f"database error: {exc}"]
+
+
+def integrity_check_ok(conn: sqlite3.Connection) -> bool:
+    return integrity_check(conn) == ["ok"]
+
+
+def _main_database_path(conn: sqlite3.Connection) -> Path:
+    """取得连接当前主库文件；内存库没有可持久化备份。"""
+    for row in conn.execute("PRAGMA database_list"):
+        # sqlite3.Row 与 tuple 都支持数字下标；第 1/2 列为 name/path。
+        if row[1] == "main" and row[2]:
+            return Path(row[2]).resolve()
+    raise BackupError("内存数据库无法创建磁盘备份")
+
+
+def _open_backup_readonly(path: Path) -> sqlite3.Connection:
+    uri = f"file:{quote(str(path.resolve()), safe='/')}?mode=ro&immutable=1"
+    conn = sqlite3.connect(uri, uri=True)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    _load_vec_extension(conn)
+    return conn
+
+
+def backup_is_restorable(path: Path | str) -> bool:
+    """验证备份可打开、核心 schema 存在且完整性检查通过。
+
+    全程只读，不会把备份切到 WAL，也不会修改主库。该检查用于备份落盘前
+    的临时文件以及用户选择恢复前的最后一道门。
+    """
+    p = Path(path)
+    if not p.is_file() or p.stat().st_size == 0:
+        return False
+    try:
+        conn = _open_backup_readonly(p)
+        try:
+            required = {"settings", "sources", "files", "contents", "chunks"}
+            present = {
+                row[0] for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+            if not required.issubset(present):
+                return False
+            check_schema_version(conn)
+            return integrity_check_ok(conn)
+        finally:
+            conn.close()
+    except (OSError, sqlite3.DatabaseError, RuntimeError):
+        return False
+
+
+def _prune_backups(directory: Path, stem: str, keep: int) -> None:
+    if keep < 1:
+        raise ValueError("至少保留 1 份备份")
+    backups = sorted(directory.glob(f"{stem}-????-??-??.db"), reverse=True)
+    for stale in backups[keep:]:
+        stale.unlink(missing_ok=True)
+
+
+def create_daily_backup(
+    conn: sqlite3.Connection,
+    *,
+    backup_dir: Path | str | None = None,
+    today: date | None = None,
+    keep: int = BACKUP_KEEP,
+) -> Path:
+    """用 ``VACUUM INTO`` 创建当天首份一致性快照，并保留最近 ``keep`` 份。
+
+    已有且可恢复的当日备份直接复用，不会重复写盘。先写同目录临时文件，
+    完整性验证通过后再原子改名；失败不会留下一个冒充成功的 ``.db``。
+    """
+    if conn.in_transaction:
+        raise BackupError("存在未提交事务，不能创建一致性备份")
+    if keep < 1:
+        raise ValueError("至少保留 1 份备份")
+
+    source = _main_database_path(conn)
+    directory = Path(backup_dir) if backup_dir else source.parent / "backups"
+    directory.mkdir(parents=True, exist_ok=True)
+    try:
+        directory.chmod(0o700)
+    except OSError:
+        pass
+
+    stamp = (today or date.today()).isoformat()
+    destination = directory / f"{source.stem}-{stamp}.db"
+    if destination.exists():
+        if not backup_is_restorable(destination):
+            raise BackupError(f"当天备份已存在但不可恢复：{destination}")
+        _prune_backups(directory, source.stem, keep)
+        return destination
+
+    fd, temp_name = tempfile.mkstemp(
+        dir=directory, prefix=f".{destination.name}.", suffix=".partial"
+    )
+    os.close(fd)
+    temp_path = Path(temp_name)
+    # VACUUM INTO 要求目标不存在；mkstemp 只用于取得不冲突的安全文件名。
+    temp_path.unlink()
+    try:
+        conn.execute("VACUUM INTO ?", (str(temp_path),))
+        if not backup_is_restorable(temp_path):
+            raise BackupError("新备份未通过完整性/可恢复性检查")
+        temp_path.chmod(0o600)
+        os.replace(temp_path, destination)
+        _prune_backups(directory, source.stem, keep)
+        return destination
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+
+def restore_backup_to(backup: Path | str, destination: Path | str) -> Path:
+    """把已验证备份复制到一个**新的**数据库文件供人工恢复。
+
+    目标存在时一律拒绝，尤其不会自动覆盖正在使用的 ``library.db``。
+    上层确认后可自行停库并完成最终切换；本函数只负责生成可验证候选文件。
+    """
+    source, target = Path(backup), Path(destination)
+    if not backup_is_restorable(source):
+        raise BackupError(f"备份不可恢复：{source}")
+    if target.exists():
+        raise FileExistsError(f"恢复目标已存在，拒绝覆盖：{target}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    fd, temp_name = tempfile.mkstemp(
+        dir=target.parent, prefix=f".{target.name}.", suffix=".partial"
+    )
+    os.close(fd)
+    temp_path = Path(temp_name)
+    try:
+        shutil.copyfile(source, temp_path)
+        temp_path.chmod(0o600)
+        if not backup_is_restorable(temp_path):
+            raise BackupError("恢复候选文件复制后校验失败")
+        os.replace(temp_path, target)
+        return target
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+
 def get_setting(conn: sqlite3.Connection, key: str, default: str = "") -> str:
     row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
     return row["value"] if row else default
@@ -123,7 +501,17 @@ def set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
 
 def check_schema_version(conn: sqlite3.Connection) -> None:
     """版本高于当前程序（用户降级了应用）时拒绝启动，不尝试兼容（§9.2）。"""
-    v = int(get_setting(conn, "db_schema_version", "0") or 0)
+    has_settings = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='settings'"
+    ).fetchone()
+    if has_settings is None:
+        return
+
+    raw = get_setting(conn, "db_schema_version", "0") or "0"
+    try:
+        v = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"数据库版本号无效：{raw!r}") from exc
     if v > SCHEMA_VERSION:
         raise RuntimeError(
             f"数据库版本 {v} 高于当前程序支持的 {SCHEMA_VERSION}，请升级 Inktable"

@@ -1,17 +1,19 @@
 """文件稳定性检测 —— PLAN §11.1。
 
-三条判据**同时满足**才算稳定（M0 实测修正版）：
+稳定性以文件自身连续采样为准（M0 实测修正版）：
   1. 文件名不带临时后缀  → .crdownload / .part / .tmp / .download / ~$ / . 开头
-  2. 大小连续 N 次不变    → 证明没有进程还在写入
-  3. 能拿到独占锁         → 最强判据：直接证明没有其他进程开着写句柄
+  2. (大小, mtime) 连续 N 次不变，且 mtime 已静置
+
+``flock`` 是 advisory lock：普通写入者若没有主动加锁，另一个进程照样能取得
+独占锁。因此它不能作为立即通过的快路径，更不能替代采样。
 
 **必须监听 on_moved**（§11.1）：微信是"临时目录写完→move 到最终位置"，
 浏览器是".crdownload 写入→改名去后缀" —— 两种主流下载模式里，
 文件在最终位置出现的那一瞬，事件是 on_moved 而非 on_created。
 只监听 on_created 会漏掉这两种情况。
 
-大小轮询是**慢路径**，只用于"文件直接写入监听目录"的少数情况。
-快路径（on_moved 到达即稳定）是微信/QQ/浏览器的主路径。
+大小轮询是所有事件类型共同的稳定性判据；on_moved 只影响事件来源，
+不能跳过采样。微信/QQ/浏览器的主路径也必须经过这条判据。
 """
 
 from __future__ import annotations
@@ -82,11 +84,10 @@ def _size_stable(path: str, samples: int = REQUIRED_STABLE) -> bool:
 
 
 def _has_exclusive_lock(path: str) -> bool:
-    """判据 3：独占锁。
+    """探测 advisory flock（仅供诊断，不能作为稳定性通过条件）。
 
-    macOS 下大部分程序（含微信）不写锁 —— 所以这条是"能拿到锁就算稳定"，
-    拿不到锁**不**等于"正在被写"（假阴性可接受，交给大小判据兜底）。
-    它真正的价值是：能拿到锁 = 100% 确定没有写句柄。
+    macOS 下大部分程序（含微信）不会主动持有 flock。即使普通写入句柄仍开着，
+    此函数也很可能返回 True；调用方不得据此断言文件已经写完。
     """
     try:
         fd = os.open(path, os.O_RDONLY)
@@ -105,8 +106,8 @@ def _has_exclusive_lock(path: str) -> bool:
 def stabilize(path: str, moved_in: bool = False) -> StabilityResult:
     """判断文件是否已写完。
 
-    moved_in=True 表示文件是"从别处移进来的"（on_moved 事件）：
-    这类文件出现时通常已完整 —— 快路径直接尝试锁，拿不到才退到大小判据。
+    moved_in=True 只保留事件来源信息，不再绕过采样。树内 rename 也可能发生在
+    写入尚未结束时，而 advisory flock 无法证明普通写入句柄已经关闭。
 
     判据 1 恒为前置：文件名还带临时后缀，无论多大都直接判不稳定。
     """
@@ -131,14 +132,11 @@ def stabilize(path: str, moved_in: bool = False) -> StabilityResult:
     #    照样可能让路径「看起来静默」。mtime 直接读文件系统，比事件可信。
     #
     # 最终判据：(size, mtime_ns) 连续采样不变 **且** mtime 已静置。
-    # moved_in 降级为纯优化 —— 真触发时（树内 rename）省掉采样。
+    # moved_in 不再提供绕过采样的快路径。
     try:
         os.stat(path)
     except OSError:
         return StabilityResult(False, "vanished")
-
-    if moved_in and _has_exclusive_lock(path):
-        return StabilityResult(True, "moved+flock")
 
     if _size_stable(path):
         return StabilityResult(True, "quiet")
