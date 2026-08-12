@@ -253,7 +253,14 @@ def search(conn, query: str, limit: int = 100, *,
 
 
 def _vector_search(conn, query: str, limit: int) -> list[tuple[int, float]]:
-    """语义检索路。模型或扩展不可用时静默返回空 —— 不能让整次检索失败。"""
+    """语义检索路。模型或扩展不可用时静默返回空 —— 不能让整次检索失败。
+
+    活跃版本过滤采用「先检索、后过滤」：把全部 active chunk id 当 SQL
+    参数传进向量查询在 3.2 万分片后会超过 SQLite 的参数上限（32766），
+    向量路会静默消失；且每次查询全量取 id 本身就是全表扫描。
+    改为超取 3 倍候选，再用小 IN 列表核对活跃版本（影子构建期间的
+    非活跃分片只是过渡态，3 倍超取绰绰有余）。
+    """
     try:
         from app.index import embedding as emb
         from app.index import vector as vec
@@ -263,13 +270,20 @@ def _vector_search(conn, query: str, limit: int) -> list[tuple[int, float]]:
         if vec.count(conn) == 0:
             return []
         qv = emb.get_embedder().encode_one(query)
-        active_ids = [row["id"] for row in conn.execute(
-            """SELECT ch.id FROM chunks ch JOIN contents c ON c.id = ch.content_id
-               WHERE ch.index_version = c.active_index_version"""
-        )]
-        if not active_ids:
+        hits = vec.search(conn, qv, limit=limit * 3)
+        if not hits:
             return []
-        return vec.search(conn, qv, limit=limit, candidate_ids=active_ids)
+        ids = [chunk_id for chunk_id, _score in hits]
+        marks = ",".join("?" * len(ids))
+        active = {row["id"] for row in conn.execute(
+            f"""SELECT ch.id FROM chunks ch
+                JOIN contents c ON c.id = ch.content_id
+                WHERE ch.id IN ({marks})
+                  AND ch.index_version = c.active_index_version""",
+            ids,
+        )}
+        return [(chunk_id, score) for chunk_id, score in hits
+                if chunk_id in active][:limit]
     except Exception as e:  # noqa: BLE001 - 任何异常都只降级，不冒泡
         import logging
         logging.getLogger("inktable.search").debug("向量路跳过：%s", e)

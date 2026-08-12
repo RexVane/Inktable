@@ -67,6 +67,30 @@ def _serialize(v: np.ndarray) -> bytes:
     return struct.pack(f"{len(v)}f", *v.astype(np.float32))
 
 
+# ---- 内存矩阵缓存 ----
+# 30k 分片实测：每次查询重新反序列化全部向量要 ~240ms，矩阵乘本身 <5ms。
+# 单实例锁（H18）保证本进程是唯一写者，所以写路径主动失效即可保证一致；
+# 键上再叠加 (库路径, 行数, 最大 rowid)，防守同进程内多个测试库的串扰。
+_matrix_cache: dict = {"key": None, "ids": None, "matrix": None}
+_write_generation = 0
+
+
+def _invalidate_cache() -> None:
+    global _write_generation
+    _write_generation += 1
+    _matrix_cache["key"] = None
+
+
+def _main_db_path(conn: sqlite3.Connection) -> str:
+    try:
+        for row in conn.execute("PRAGMA database_list"):
+            if row[1] == "main":
+                return row[2] or ":memory:"
+    except sqlite3.Error:
+        pass
+    return "?"
+
+
 def upsert(conn: sqlite3.Connection, rows: list[tuple[int, np.ndarray]]) -> int:
     """写入向量。rowid 对齐 chunks.id。
 
@@ -81,6 +105,7 @@ def upsert(conn: sqlite3.Connection, rows: list[tuple[int, np.ndarray]]) -> int:
         "INSERT INTO chunks_vec(rowid, embedding) VALUES (?, ?)",
         [(cid, _serialize(v)) for cid, v in rows],
     )
+    _invalidate_cache()
     return len(rows)
 
 
@@ -89,6 +114,7 @@ def delete(conn: sqlite3.Connection, chunk_ids: list[int]) -> None:
         return
     marks = ",".join("?" * len(chunk_ids))
     conn.execute(f"DELETE FROM chunks_vec WHERE rowid IN ({marks})", chunk_ids)
+    _invalidate_cache()
 
 
 def count(conn: sqlite3.Connection) -> int:
@@ -124,29 +150,52 @@ def search(
 
 
 def _search_inmem(conn, q: np.ndarray, limit: int, candidate_ids) -> list[tuple[int, float]]:
-    """全量载入做矩阵乘。10 万分片约 98 MB，个人电脑可承受。"""
-    sql = "SELECT rowid, embedding FROM chunks_vec"
-    params: list = []
+    """全量载入做矩阵乘。10 万分片约 98 MB，个人电脑可承受。
+
+    无 candidate_ids 的主路径走进程内矩阵缓存；带 candidate_ids 的
+    元数据过滤场景（小集合）保持逐次查询，不值得为其建缓存键。
+    """
     if candidate_ids:
         marks = ",".join("?" * len(candidate_ids))
-        sql += f" WHERE rowid IN ({marks})"
-        params = list(candidate_ids)
+        ids: list[int] = []
+        vecs: list[np.ndarray] = []
+        for row in conn.execute(
+            f"SELECT rowid, embedding FROM chunks_vec WHERE rowid IN ({marks})",
+            list(candidate_ids),
+        ):
+            ids.append(row[0])
+            vecs.append(np.frombuffer(row[1], dtype=np.float32))
+        if not ids:
+            return []
+        matrix = np.vstack(vecs)
+        id_array = np.asarray(ids)
+    else:
+        stats = conn.execute(
+            "SELECT count(*) AS c, coalesce(max(rowid), 0) AS m FROM chunks_vec"
+        ).fetchone()
+        key = (_main_db_path(conn), stats["c"], stats["m"], _write_generation)
+        if _matrix_cache["key"] != key:
+            ids = []
+            vecs = []
+            for row in conn.execute("SELECT rowid, embedding FROM chunks_vec"):
+                ids.append(row[0])
+                vecs.append(np.frombuffer(row[1], dtype=np.float32))
+            if not ids:
+                return []
+            _matrix_cache["ids"] = np.asarray(ids)
+            _matrix_cache["matrix"] = np.vstack(vecs)
+            _matrix_cache["key"] = key
+        id_array = _matrix_cache["ids"]
+        matrix = _matrix_cache["matrix"]
+        if id_array is None or len(id_array) == 0:
+            return []
 
-    ids: list[int] = []
-    vecs: list[np.ndarray] = []
-    for row in conn.execute(sql, params):
-        ids.append(row[0])
-        vecs.append(np.frombuffer(row[1], dtype=np.float32))
-    if not ids:
-        return []
-
-    M = np.vstack(vecs)
     # 库里存的已是归一化向量，点积即余弦
-    scores = M @ q
-    k = min(limit, len(ids))
+    scores = matrix @ q
+    k = min(limit, len(id_array))
     top = np.argpartition(-scores, k - 1)[:k]
     top = top[np.argsort(-scores[top])]
-    return [(ids[i], float(scores[i])) for i in top]
+    return [(int(id_array[i]), float(scores[i])) for i in top]
 
 
 def _search_knn(conn, q: np.ndarray, limit: int, candidate_ids) -> list[tuple[int, float]]:
