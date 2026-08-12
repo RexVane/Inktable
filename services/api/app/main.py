@@ -14,6 +14,7 @@ import os
 import secrets
 import sys
 import threading
+from collections import OrderedDict
 from pathlib import Path
 import time
 
@@ -45,13 +46,31 @@ from app.retrieval.compress import EvidenceSource, best_span
 from app.watcher.scanner import preview_source, scan_source
 from app.watcher.service import WatchService
 
-app = FastAPI(title="Inktable API", version="0.1.0")
+app = FastAPI(title="Inktable API", version="0.2.0")
 log = logging.getLogger("inktable.main")
 
 _db = None
 _db_lock = threading.Lock()
 _db_init_lock = threading.Lock()
 _watch: WatchService | None = None
+
+# 最近检索 trace 的内存环（PLAN §8.1 /runs/{trace_id}）。
+# 只存内存不落盘：trace 含 id/score/timing，不含正文与查询原文，
+# 但仍按隐私风险登记的口径处理 —— 进程退出即消失。
+_TRACE_CACHE: "OrderedDict[str, dict]" = OrderedDict()
+_TRACE_CACHE_CAP = 50
+_trace_lock = threading.Lock()
+
+
+def _remember_trace(trace: dict) -> None:
+    trace_id = trace.get("trace_id")
+    if not trace_id:
+        return
+    with _trace_lock:
+        _TRACE_CACHE[trace_id] = trace
+        _TRACE_CACHE.move_to_end(trace_id)
+        while len(_TRACE_CACHE) > _TRACE_CACHE_CAP:
+            _TRACE_CACHE.popitem(last=False)
 
 
 def _empty_database_status() -> dict:
@@ -400,12 +419,27 @@ def post_ask(req: AskRequest) -> dict:
         except LLMError as e:
             raise HTTPException(status_code=502, detail=str(e)) from e
     trace = a.trace
+    _remember_trace(trace)
     return {
         "status": a.status, "answer": a.answer, "citations": a.citations,
         "retrieved": a.retrieved, "hedge": a.hedge, "validation": a.validation,
         "trace_id": trace.get("trace_id"), "timings": trace.get("stages", []),
         "degraded": trace.get("degraded", []), "trace": trace,
     }
+
+
+@app.get("/runs/{trace_id}", dependencies=[Depends(require_token)])
+def get_run(trace_id: str) -> dict:
+    """调试：读取最近一次检索/问答的非持久化 trace（PLAN §8.1）。
+
+    只保留最近 50 条且不落盘 —— sidecar 重启后即失效，这是有意的：
+    trace 服务于"刚才这次检索为什么这样排"，不是审计日志。
+    """
+    with _trace_lock:
+        trace = _TRACE_CACHE.get(trace_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="trace 不存在或已过期")
+    return trace
 
 
 @app.post("/classify/llm", dependencies=[Depends(require_token)])
@@ -954,6 +988,7 @@ def search_content(req: SearchRequest) -> dict:
 
     if not fused:
         trace = retrieval.trace.to_dict()
+        _remember_trace(trace)
         return {"query": req.q, "total": 0, "files": [],
                 "confidence": conf.level, "hedge": conf.hedge,
                 "trace_id": trace["trace_id"], "timings": trace["stages"],
@@ -1025,6 +1060,7 @@ def search_content(req: SearchRequest) -> dict:
         f["snippets"].sort(key=lambda s: s["score"], reverse=True)
 
     trace = retrieval.trace.to_dict()
+    _remember_trace(trace)
     return {
         "query": req.q,
         "total": len(files),

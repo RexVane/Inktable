@@ -88,6 +88,25 @@ M3 remains open; the remaining failures (F29/F31/P19 chunk-level ranking,
 X06 near-duplicate flood) are exactly the cases a real cross-encoder or
 fuzzy duplicate grouping would address.
 
+The M3c round (`v7-m3c-local-static-v3.json`) upgrades the local adapter
+with IDF-weighted term coverage (per-query normalized, FTS-backed document
+frequencies), a term-proximity feature, comparative-question lexical
+scoring restricted to entity sub-queries, and vector-based cross-content
+near-duplicate demotion (cosine >= 0.95, measured: edited file copies sit
+at 0.965-0.973 while related-but-distinct documents sit near 0.61). Result:
+MRR@10 80.5%, nDCG@10 84.0%, Recall@5 95.0%, strict 90.0%, p50 46ms.
+Relative to RRF the gains are +10.0% MRR / +8.7% nDCG — the local-static
+path has plateaued below the 15% gate; probe evidence shows the remaining
+failures need query-conditioned semantics (F29/F31/P19) or deeper recall
+(X06 gold chunk at RRF rank 154), both out of reach for a static embedding.
+
+The M4 compression gate is now measured by a repeatable harness
+(`tests/run_compress_eval.py`) that mirrors the /ask context path. As of
+M3c retrieval: keyword evidence recall 95.0% (gate 95%), median character
+compression 61.1% (gate >= 35%), zero offset round-trip errors, compress
+P95 3.7ms. Frozen output: `v7-m4-compress-eval.json`. This remains a
+keyword-anchored proxy; exact gold-span annotation is still open.
+
 The JSON output records query text, ranks, scores, latency, and document names.
 It does not persist chunk text or source file contents. Existing
 `baseline-fts5.json` and `with-vector.json` remain the immutable 30-question

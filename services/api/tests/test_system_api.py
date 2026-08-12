@@ -39,6 +39,28 @@ def api_client(tmp_path, monkeypatch):
         yield client, main_mod
 
 
+def test_runs_endpoint_replays_recent_trace(api_client):
+    """/runs/{trace_id}：检索后可回读同一 trace；未知 id 是 404；必须带鉴权。"""
+    client, _main = api_client
+
+    search = client.post("/search", headers=H, json={"q": "任意 问题"}).json()
+    trace_id = search["trace_id"]
+    assert trace_id
+
+    replay = client.get(f"/runs/{trace_id}", headers=H)
+    assert replay.status_code == 200
+    body = replay.json()
+    assert body["trace_id"] == trace_id
+    assert [stage["name"] for stage in body["stages"]] == [
+        stage["name"] for stage in search["timings"]
+    ]
+    # trace 不含查询原文（隐私口径：只有 id/score/timing）
+    assert "任意" not in str(body)
+
+    assert client.get("/runs/does-not-exist", headers=H).status_code == 404
+    assert client.get(f"/runs/{trace_id}").status_code in (401, 403)
+
+
 def _insert_pending_file(
     main_mod,
     *,

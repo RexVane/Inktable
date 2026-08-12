@@ -645,6 +645,8 @@ ExpandedEvidence
 
 **执行状态（2026-08-13）**：抽取式压缩链路已接入，发布门槛未完成。当前实现支持分句/表格行切分、相邻句窗口、跨文档覆盖、重复控制和字符/token 代理预算；搜索摘要使用最佳原文 EvidenceSpan，问答改为消费 ContextPack，引用可回溯 `span_id`、Child offset 和 Document offset。对 60 个可回答问题的关键词代理评测中，keyword evidence recall 为 90.0%，字符压缩比例中位数约 68%，压缩阶段 P95 约 59ms；漏例为 A10、F20、F30、F31、P19、P20，其中部分由上游候选未召回造成。由于 90.0% 未达 95% Evidence Recall 门槛，且精确 gold span 标注尚未完成，该结果不能替代正式 Evidence Recall，M4 不标完成。
 
+**M4 复评（2026-08-13 晚）**：达标（关键词代理口径）。M3b/M3c 的检索改进把上游漏例带了回来，新增可重复评测脚本 `tests/run_compress_eval.py` 完整镜像 /ask 链路（route_limit=60 → 多样性 → 邻居扩展 → 压缩 → 装配）。60 题实测：关键词证据保留率 95.0%（门槛 95%）、字符压缩率中位数 61.1%（门槛 ≥35%）、offset 往返错误 0、压缩阶段 P95 3.7ms（预算 500ms）。剩余漏例 A10/F30/F31 属片级排序边界，与 M3 的 Cross-Encoder 缺口同源。注意该指标仍是答案关键词锚定的代理口径，精确 gold span 标注未完成，不冒充正式 Evidence Recall。冻结结果见 `docs/eval/v7-m4-compress-eval.json`。
+
 - 实现分句/表格行切分、相关性评分、区间选择、去重和 token 装配。
 - 建立 EvidenceSpan 到原文 locator 的完整映射。
 - 接入搜索摘要和问答 ContextPack。
@@ -652,6 +654,8 @@ ExpandedEvidence
 **完成标志**：Evidence Recall 与 token 减少门槛同时达标，offset 往返零错误。
 
 ### M5：带引用问答升级
+
+**执行状态（2026-08-13）**：工程链路完成，两项模型指标待真实跑批。生成已消费 ContextPack；引用由 EvidenceSpan 驱动（`span_id` + Child/Document offset 双向可回溯）；四条后置校验全部留痕在 `Answer.validation`（attempts / fabricated_removed / truncated_refusal / fallback），可审计；新增 `GET /runs/{trace_id}` 调试端点回读最近 50 条非持久化检索 trace（Bearer 鉴权，不含正文与查询原文，重启即失效）。虚构引用剔除、零引用重生成、二次失败降级、拒答句截断均有单元测试覆盖（scripted LLM）。「引用支持率 ≥0.95」「正确拒答率 ≥0.85」需要真实模型跑批标定——本机未配置云端密钥，如实标记为待验证，不用 scripted 结果冒充。检索侧拒答门限于 2026-08-13 重新标定过一次：误拒 ≤5% 约束下正确拒答率仅 58.3%（U10 类"词都在但不回答问题"仍无法用检索信号区分），维持"不硬拒 + 置信度标注"策略。
 
 - 生成改为消费 ContextPack。
 - 引用由 EvidenceSpan 驱动，完善拒答和降级。
@@ -671,6 +675,8 @@ ExpandedEvidence
 **完成标志**：用户在同一屏幕完成文件浏览、检索、详情阅读、问答、引用回查和范围切换。
 
 ### M7：发布候选
+
+**执行状态（2026-08-13）**：0.2.0 发布候选已产出。全量回归后端 170 项、桌面 15 项全绿；72 题检索评测与压缩评测均已冻结（`docs/eval/`）；PyInstaller sidecar 重打包后经 headless 冒烟（health 全绿：sqlite-vec v0.1.9、FTS5、中文检索探针 7/7、嵌入模型 256 维加载）；`dist/Inktable-0.2.0-arm64.dmg`（300 MB）打包完成，asar 内确认为新界面、sidecar 与最新构建逐字节一致。README、HANDOFF 入口、发布说明（`docs/RELEASE-0.2.0.md`）已更新；根目录 HANDOFF.md 收口为入口链接。数据库为 M2 时已完成的 v2 schema（迁移前有可恢复备份），本轮无 schema 变更。待用户完成：真机安装冒烟（无签名需右键打开）。未关闭的阻塞项如实列于发布说明「已知限制」：Cross-Encoder 选型门槛、两项真实模型 QA 指标。
 
 - 全量回归、离线评测、性能测试、数据库升级/回滚演练。
 - 重跑 PyInstaller、Electron DMG 和真实安装冒烟。

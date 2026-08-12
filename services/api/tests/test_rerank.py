@@ -107,6 +107,28 @@ def test_redundant_coverage_demoted_within_document():
     assert len(adjusted) == 3
 
 
+def test_cross_content_near_duplicates_softly_demoted():
+    """不同 content 的同文分片：只有最高分那份保持原分，副本降权。"""
+    from app.index import embedding as emb
+    import pytest
+    if not emb.is_available():
+        pytest.skip("本地嵌入模型不可用")
+
+    text = "大湾区的AI应用已渗透到交通出行、政务服务、医疗服务等领域"
+    inputs = [
+        rerank.RerankInput(1, 1, text, "", 0.9),
+        rerank.RerankInput(2, 2, text, "", 0.8),
+        rerank.RerankInput(3, 3, "Inktable 的 AI 问答通过引用校验保证可信", "", 0.7),
+    ]
+    ranked = rerank.LocalStaticReranker().rerank("大湾区 AI 应用", inputs)
+    scores = {output.chunk_id: output.score for output in ranked}
+    assert ranked[0].chunk_id == 1
+    # 副本（chunk 2）被明显降权，而不是与原件平分秋色
+    assert scores[2] < scores[1] * 0.85
+    # 不同内容的 chunk 3 未触发近重复惩罚：与副本文本余弦远低于阈值
+    assert scores[3] > 0
+
+
 def test_redundancy_pass_keeps_degraded_inputs_untouched():
     """降级路径（空文本输入）不受去冗影响，保持 RRF 顺序。"""
     inputs = [

@@ -2,18 +2,29 @@
 
 from __future__ import annotations
 
+import math
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 import numpy as np
 
-from app.index.search import extract_query_terms
+from app.index.search import extract_query_terms, quote_fts_query
 from app.retrieval.query import wants_numeric_answer
 
 RERANK_LIMIT = 80
 SOFT_PER_CONTENT = 12
+
+# 词邻近度：两个查询词在原文中相距多少字符以内算"在讲同一件事"
+PROXIMITY_WINDOW = 40
+
+# 跨内容近重复：不同 content 的两个分片向量余弦超过该值视为同一段话
+# 的副本（文件被多次复制/另存导致），只保留最高分的那份不受影响。
+# 阈值来自实测：同段落的编辑副本余弦 0.965-0.973，相关但不同的
+# 文档只有 0.61 —— 0.95 在两者之间留有充分裕量。
+NEARDUP_COSINE = 0.95
+NEARDUP_PENALTY = 0.80
 
 # 同文档冗余惩罚：一个分片对查询词没有任何新增覆盖时的降权系数。
 # 探针实测（probe-1）F20 的金文档前三名全部在重复"如何启动"这一个
@@ -77,14 +88,39 @@ class LocalStaticReranker:
     open for a true cross-encoder candidate.
     """
 
-    model_id = "local-static-v2"
+    model_id = "local-static-v3"
 
     def __init__(self, subqueries: tuple[str, ...] = (),
-                 ext_hints: frozenset[str] = frozenset()):
+                 ext_hints: frozenset[str] = frozenset(),
+                 term_idf: dict[str, float] | None = None):
         # 比较类问题的子查询：分片只要答对其中一个实体就算相关，
         # 语义/覆盖特征取所有查询变体的最大值。
         self.subqueries = tuple(subqueries)
         self.ext_hints = frozenset(ext_hints)
+        # 词 → IDF。缺省为空 dict，覆盖特征退化为均匀权重。
+        self.term_idf = dict(term_idf or {})
+
+    def _weighted_coverage(self, terms: list[str], haystack: str) -> float:
+        """IDF 加权词覆盖：命中「TLS」应比命中「项目」重要得多。"""
+        if not terms:
+            return 0.0
+        weights = [max(self.term_idf.get(term, 1.0), 1e-6) for term in terms]
+        hit = sum(w for term, w in zip(terms, weights) if term in haystack)
+        return hit / sum(weights)
+
+    @staticmethod
+    def _proximity(terms: list[str], haystack: str) -> float:
+        """命中词的邻近度：答案句里的查询词彼此靠近，泛泛提及则分散。"""
+        positions = sorted(
+            pos for pos in (haystack.find(term) for term in terms) if pos >= 0
+        )
+        if len(positions) < 2:
+            return 0.0
+        near = sum(
+            1 for a, b in zip(positions, positions[1:])
+            if b - a <= PROXIMITY_WINDOW
+        )
+        return near / (len(positions) - 1)
 
     def rerank(
         self, query: str, candidates: list[RerankInput],
@@ -104,6 +140,9 @@ class LocalStaticReranker:
         # 每个候选对所有查询变体的最大余弦
         semantic = (vectors @ query_vectors.T).max(axis=1)
         variant_terms = [extract_query_terms(v) for v in variants]
+        # 比较类问题的词法特征只看实体子查询：全查询覆盖会奖励
+        # "两个实体都顺带提到"的综述文档，压过真正回答问题的实体文档
+        lexical_terms = variant_terms[1:] if len(variant_terms) > 1 else variant_terms
         numeric_intent = wants_numeric_answer(query)
         max_rrf = max((item.rrf_score for item in candidates), default=1.0)
 
@@ -111,9 +150,11 @@ class LocalStaticReranker:
         for index, item in enumerate(candidates):
             haystack = f"{item.section_path}\n{item.text}".lower()
             coverage = max(
-                (sum(1 for term in terms if term in haystack) / len(terms))
-                if terms else 0.0
-                for terms in variant_terms
+                self._weighted_coverage(terms, haystack)
+                for terms in lexical_terms
+            )
+            proximity = max(
+                self._proximity(terms, haystack) for terms in lexical_terms
             )
             exact = 1.0 if any(
                 v.strip().lower() in haystack for v in variants
@@ -132,20 +173,40 @@ class LocalStaticReranker:
             # 往往名字就含查询词，正文反而未必复述
             name_hay = item.file_name.lower()
             filename_cov = max(
-                (sum(1 for term in terms if term in name_hay) / len(terms))
-                if terms else 0.0
-                for terms in variant_terms
+                self._weighted_coverage(terms, name_hay)
+                for terms in lexical_terms
             ) if name_hay else 0.0
             score = (
-                0.45 * semantic_score
-                + 0.30 * coverage
-                + 0.20 * rrf_score
-                + 0.05 * exact
+                0.40 * semantic_score
+                + 0.32 * coverage
+                + 0.18 * rrf_score
+                + 0.05 * proximity
+                + 0.04 * exact
                 + 0.05 * numeric
                 + 0.06 * type_match
                 + 0.08 * filename_cov
             )
             outputs.append(RerankOutput(item.chunk_id, score))
+
+        # 跨内容近重复软降权：同一段话的多个文件副本只有最高分那份
+        # 保持原分，其余按比例降权（text_hash 只拦得住完全同文，编辑过
+        # 的副本要靠向量相似度识别）。软惩罚，不淘汰任何候选（K3）。
+        scores = {output.chunk_id: output.score for output in outputs}
+        order = sorted(range(len(candidates)),
+                       key=lambda i: -scores[candidates[i].chunk_id])
+        kept: list[int] = []
+        for i in order:
+            is_dup = any(
+                candidates[j].content_id != candidates[i].content_id
+                and float(vectors[i] @ vectors[j]) >= NEARDUP_COSINE
+                for j in kept
+            )
+            if is_dup:
+                scores[candidates[i].chunk_id] *= NEARDUP_PENALTY
+            else:
+                kept.append(i)
+        outputs = [RerankOutput(output.chunk_id, scores[output.chunk_id])
+                   for output in outputs]
         return sorted(outputs, key=lambda item: item.score, reverse=True)
 
 
@@ -182,6 +243,37 @@ def _demote_redundant_coverage(
         seen.update(hits)
         adjusted.append(item)
     return sorted(adjusted, key=lambda item: item.score, reverse=True)
+
+
+# 词 → 全库文档频次缓存。库内容变化（分片总数变了）时整体失效。
+_DF_CACHE: dict[str, int] = {}
+_DF_CACHE_TOTAL = -1
+
+
+def _term_idf(conn, terms: set[str]) -> dict[str, float]:
+    """查询词的全库 IDF，按本次查询内的最大值归一化到 (0, 1]。"""
+    global _DF_CACHE_TOTAL
+    if not terms:
+        return {}
+    total = conn.execute("SELECT count(*) c FROM chunks").fetchone()["c"] or 1
+    if total != _DF_CACHE_TOTAL:
+        _DF_CACHE.clear()
+        _DF_CACHE_TOTAL = total
+    idf: dict[str, float] = {}
+    for term in terms:
+        df = _DF_CACHE.get(term)
+        if df is None:
+            try:
+                df = conn.execute(
+                    "SELECT count(*) c FROM chunks_fts WHERE chunks_fts MATCH ?",
+                    (quote_fts_query(term),),
+                ).fetchone()["c"]
+            except Exception:
+                df = 0
+            _DF_CACHE[term] = df
+        idf[term] = math.log1p((total - df + 0.5) / (df + 0.5))
+    peak = max(idf.values(), default=1.0) or 1.0
+    return {term: value / peak for term, value in idf.items()}
 
 
 def _load_inputs(conn, candidates) -> tuple[list[RerankInput], list[int]]:
@@ -263,8 +355,12 @@ def run_rerank(conn, query: str, candidates, *,
         )
 
     selected, remainder = _load_inputs(conn, candidates)
+    all_terms = set(extract_query_terms(query))
+    for subquery in subqueries:
+        all_terms.update(extract_query_terms(subquery))
     reranker: Reranker = LocalStaticReranker(
         subqueries=subqueries, ext_hints=ext_hints,
+        term_idf=_term_idf(conn, all_terms),
     )
     degraded = False
     try:
