@@ -39,6 +39,8 @@ PACKAGE_EXTS = {
 # 只放**用户会用自然语言去搜内容**的格式。源码/配置不在此列 —— 见下方 CODE_EXTS。
 FULLTEXT_EXTS = {
     ".pdf", ".docx", ".md", ".markdown", ".txt", ".rtf",
+    # HTML：保存的网页、微信/QQ 导出的聊天记录；CSV：小型表格/导出数据
+    ".html", ".htm", ".csv",
 }
 
 # 源码与配置：**只登记元数据，不解析正文**
@@ -55,13 +57,13 @@ CODE_EXTS = {
     ".go", ".rs", ".rb", ".php", ".swift", ".kt", ".scala", ".m", ".mm",
     ".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat",
     ".sql", ".json", ".xml", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
-    ".html", ".htm", ".css", ".scss", ".less", ".vue", ".svelte",
+    ".css", ".scss", ".less", ".vue", ".svelte",
     ".lock", ".gradle", ".cmake", ".mk",
 }
 
 # 只登记元数据，不解析正文
 METADATA_EXTS = {
-    ".xlsx", ".xls", ".pptx", ".ppt", ".doc", ".csv",
+    ".xlsx", ".xls", ".pptx", ".ppt", ".doc",
     ".png", ".jpg", ".jpeg", ".heic", ".gif", ".webp", ".svg", ".bmp", ".tiff",
     ".mp4", ".mov", ".avi", ".mkv", ".mp3", ".m4a", ".wav", ".flac",
     ".zip", ".rar", ".7z", ".tar", ".gz", ".dmg", ".pkg", ".img", ".iso",

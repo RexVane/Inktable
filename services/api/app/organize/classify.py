@@ -17,6 +17,10 @@ import fnmatch
 import sqlite3
 import time
 
+AUTO_EXT_ROOT = "按扩展名"
+AUTO_EXT_CONFIDENCE = 0.66
+AUTO_EXT_RULE_PRIORITY = 900
+
 
 class CategoryError(RuntimeError):
     pass
@@ -69,11 +73,16 @@ def delete_category(conn: sqlite3.Connection, cat_id: int) -> None:
 
 
 def category_tree(conn: sqlite3.Connection) -> list[dict]:
-    """带文件数的树（扁平列表 + depth，前端好渲染）。"""
+    """带文件数的树（扁平列表 + depth，前端好渲染）。
+
+    计数只含可见文件：停用来源的文件不计入（与 /stats、/files 同口径）。
+    """
     rows = conn.execute(
         """SELECT c.id, c.parent_id, c.name, c.sort_order,
                   (SELECT count(*) FROM files f
-                   WHERE f.category_id = c.id AND f.state != 'missing') AS file_count
+                   LEFT JOIN sources s ON s.id = f.source_id
+                   WHERE f.category_id = c.id AND f.state != 'missing'
+                     AND (f.source_id IS NULL OR s.enabled = 1)) AS file_count
            FROM categories c ORDER BY c.sort_order, c.name"""
     ).fetchall()
     by_parent: dict[int | None, list] = {}
@@ -226,3 +235,102 @@ def backfill_rule(conn: sqlite3.Connection, rule_id: int) -> int:
             [r["category_id"], float(r["confidence"] or 0.8), *hit_ids],
         )
     return len(hit_ids)
+
+
+def _normalize_ext(ext: str | None) -> str:
+    value = (ext or "").strip().lower()
+    if value and not value.startswith("."):
+        value = "." + value
+    return value
+
+
+def _get_or_create_category(
+    conn: sqlite3.Connection, name: str, parent_id: int | None
+) -> tuple[int, bool]:
+    row = conn.execute(
+        "SELECT id FROM categories WHERE name = ? AND parent_id IS ?",
+        (name, parent_id),
+    ).fetchone()
+    if row is not None:
+        return int(row["id"]), False
+    return create_category(conn, name, parent_id), True
+
+
+def _ensure_global_ext_rule(
+    conn: sqlite3.Connection, ext: str, category_id: int
+) -> tuple[int, bool]:
+    row = conn.execute(
+        "SELECT id, category_id FROM rules "
+        "WHERE match_ext = ? AND match_source_id IS NULL AND match_name_pattern IS NULL "
+        "ORDER BY priority, id LIMIT 1",
+        (ext,),
+    ).fetchone()
+    if row is not None:
+        return int(row["category_id"]), False
+    rid = conn.execute(
+        "INSERT INTO rules (priority, match_ext, match_source_id, match_name_pattern, "
+        "category_id, confidence, learned_from_file_id) VALUES (?, ?, NULL, NULL, ?, ?, NULL)",
+        (AUTO_EXT_RULE_PRIORITY, ext, category_id, AUTO_EXT_CONFIDENCE),
+    ).lastrowid
+    return category_id, bool(rid)
+
+
+def auto_classify_by_ext(conn: sqlite3.Connection) -> dict:
+    """默认自动分类：把未分类文件按扩展名归入分类，不覆盖用户手工结果。"""
+    rows = conn.execute(
+        "SELECT id, ext FROM files "
+        "WHERE state != 'missing' AND category_id IS NULL AND confirmed_by_user = 0"
+    ).fetchall()
+    if not rows:
+        return {"classified": 0, "groups": 0, "categories_created": 0, "rules_created": 0}
+
+    grouped: dict[str, list[int]] = {}
+    for row in rows:
+        key = _normalize_ext(row["ext"])
+        grouped.setdefault(key, []).append(int(row["id"]))
+
+    root_id = None
+    categories_created = 0
+    rules_created = 0
+    classified = 0
+
+    for ext, file_ids in grouped.items():
+        target_category_id: int
+        if ext:
+            existing = conn.execute(
+                "SELECT category_id FROM rules "
+                "WHERE match_ext = ? AND match_source_id IS NULL AND match_name_pattern IS NULL "
+                "ORDER BY priority, id LIMIT 1",
+                (ext,),
+            ).fetchone()
+            if existing is not None:
+                target_category_id = int(existing["category_id"])
+            else:
+                if root_id is None:
+                    root_id, created = _get_or_create_category(conn, AUTO_EXT_ROOT, None)
+                    categories_created += int(created)
+                target_category_id, created = _get_or_create_category(conn, ext, root_id)
+                categories_created += int(created)
+                _, rule_created = _ensure_global_ext_rule(conn, ext, target_category_id)
+                rules_created += int(rule_created)
+        else:
+            if root_id is None:
+                root_id, created = _get_or_create_category(conn, AUTO_EXT_ROOT, None)
+                categories_created += int(created)
+            target_category_id, created = _get_or_create_category(conn, "无扩展名", root_id)
+            categories_created += int(created)
+
+        marks = ",".join("?" * len(file_ids))
+        conn.execute(
+            f"UPDATE files SET category_id = ?, confidence = ? "
+            f"WHERE id IN ({marks}) AND category_id IS NULL AND confirmed_by_user = 0",
+            [target_category_id, AUTO_EXT_CONFIDENCE, *file_ids],
+        )
+        classified += len(file_ids)
+
+    return {
+        "classified": classified,
+        "groups": len(grouped),
+        "categories_created": categories_created,
+        "rules_created": rules_created,
+    }

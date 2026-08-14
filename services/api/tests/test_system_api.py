@@ -15,7 +15,6 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-
 TOKEN = "system-api-test-token"
 H = {"Authorization": f"Bearer {TOKEN}"}
 

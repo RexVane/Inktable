@@ -25,8 +25,8 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
 
-from app.watcher.stability import STABILIZE_TIMEOUT, looks_like_temp, stabilize
 from app.watcher.scanner import should_skip_path
+from app.watcher.stability import STABILIZE_TIMEOUT, looks_like_temp, stabilize
 
 log = logging.getLogger("inktable.watcher")
 

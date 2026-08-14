@@ -8,8 +8,6 @@
 
 from __future__ import annotations
 
-import time
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -150,3 +148,26 @@ def test_unclassified_filter(client, tmp_path):
     rest = client.get("/files", headers=H,
                       params={"unclassified": True, "limit": 100}).json()["files"]
     assert sorted(f["name"] for f in rest) == ["b.pdf", "c.txt"]
+
+
+def test_auto_ext_classify_groups_unclassified(client, tmp_path):
+    # 无扩展名文件在扫描阶段就被忽略，不入库 —— 只测有扩展名的归组
+    _d, _ids = _seed(client, tmp_path, names=("a.pdf", "b.PDF", "c.txt"))
+    r = client.post("/classify/auto_ext", headers=H).json()
+    assert r["classified"] == 3
+    assert r["rules_created"] >= 2   # .pdf / .txt
+
+    cats = client.get("/categories", headers=H).json()["tree"]
+    names = {c["name"] for c in cats}
+    assert "按扩展名" in names
+    assert ".pdf" in names
+    assert ".txt" in names
+
+    tree = client.get("/categories", headers=H).json()
+    assert tree["unclassified"] == 0
+
+    # 大小写不同的扩展名归入同一分类
+    pdf_id = next(c["id"] for c in cats if c["name"] == ".pdf")
+    files = client.get("/files", headers=H,
+                       params={"category_id": pdf_id}).json()["files"]
+    assert sorted(f["name"] for f in files) == ["a.pdf", "b.PDF"]

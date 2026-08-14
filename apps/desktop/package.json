@@ -1,6 +1,6 @@
 {
   "name": "inktable-desktop",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Inktable — 本地文件索引与知识库",
   "main": "electron/main.js",
   "scripts": {

@@ -92,13 +92,17 @@ class LocalStaticReranker:
 
     def __init__(self, subqueries: tuple[str, ...] = (),
                  ext_hints: frozenset[str] = frozenset(),
-                 term_idf: dict[str, float] | None = None):
+                 term_idf: dict[str, float] | None = None,
+                 chunk_vectors: dict[int, np.ndarray] | None = None):
         # 比较类问题的子查询：分片只要答对其中一个实体就算相关，
         # 语义/覆盖特征取所有查询变体的最大值。
         self.subqueries = tuple(subqueries)
         self.ext_hints = frozenset(ext_hints)
         # 词 → IDF。缺省为空 dict，覆盖特征退化为均匀权重。
         self.term_idf = dict(term_idf or {})
+        # chunk_id → 已入库向量。嵌入阶段算过的不再现场编码 ——
+        # bge-m3 现场编码 80 条候选要 6-14 秒，是检索耗时的大头。
+        self.chunk_vectors = chunk_vectors or {}
 
     def _weighted_coverage(self, terms: list[str], haystack: str) -> float:
         """IDF 加权词覆盖：命中「TLS」应比命中「项目」重要得多。"""
@@ -131,12 +135,24 @@ class LocalStaticReranker:
             raise emb.EmbeddingUnavailable("本地精排模型不可用")
         model = emb.get_embedder()
         variants = [query, *self.subqueries]
-        query_vectors = np.stack([model.encode_one(v) for v in variants])
-        texts = [
-            emb.embed_text_for(item.text, item.section_path)
-            for item in candidates
-        ]
-        vectors = model.encode(texts)
+        # 变体合并成一次批量编码（逐条 encode_one 是 N 次 HTTP 往返）
+        query_vectors = model.encode(variants)
+        # 候选向量优先取索引时已入库的，只对缺失的（刚入库还没回填）现场编码
+        rows: list[np.ndarray | None] = []
+        missing: list[int] = []
+        for index, item in enumerate(candidates):
+            v = self.chunk_vectors.get(item.chunk_id)
+            rows.append(v)
+            if v is None:
+                missing.append(index)
+        if missing:
+            encoded = model.encode([
+                emb.embed_text_for(candidates[i].text, candidates[i].section_path)
+                for i in missing
+            ])
+            for pos, i in enumerate(missing):
+                rows[i] = encoded[pos]
+        vectors = np.stack(rows)
         # 每个候选对所有查询变体的最大余弦
         semantic = (vectors @ query_vectors.T).max(axis=1)
         variant_terms = [extract_query_terms(v) for v in variants]
@@ -333,6 +349,23 @@ def _load_inputs(conn, candidates) -> tuple[list[RerankInput], list[int]]:
     return selected, remainder
 
 
+def _load_vectors(conn, chunk_ids: list[int]) -> dict[int, np.ndarray]:
+    """批量取候选分片已入库的向量（chunks_vec），供重排复用。"""
+    if not chunk_ids:
+        return {}
+    marks = ",".join("?" * len(chunk_ids))
+    try:
+        return {
+            row[0]: np.frombuffer(row[1], dtype=np.float32)
+            for row in conn.execute(
+                f"SELECT rowid, embedding FROM chunks_vec WHERE rowid IN ({marks})",
+                list(chunk_ids),
+            )
+        }
+    except Exception:  # noqa: BLE001 - 向量表缺失时重排自行编码或降级
+        return {}
+
+
 def run_rerank(conn, query: str, candidates, *,
                subqueries: tuple[str, ...] = (),
                ext_hints: frozenset[str] = frozenset()) -> RerankResult:
@@ -361,6 +394,8 @@ def run_rerank(conn, query: str, candidates, *,
     reranker: Reranker = LocalStaticReranker(
         subqueries=subqueries, ext_hints=ext_hints,
         term_idf=_term_idf(conn, all_terms),
+        chunk_vectors=_load_vectors(
+            conn, [item.chunk_id for item in selected]),
     )
     degraded = False
     try:

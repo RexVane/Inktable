@@ -121,12 +121,12 @@ def _check_chinese_search() -> dict:
 
 
 def _check_embedding() -> dict:
-    """本地嵌入模型（V1.5）。
+    """嵌入服务（Ollama bge-m3）。
 
-    真实加载 + 编码 + 语义自检，不只 import —— 冻结环境下最易翻车的是
-    tokenizers 的原生库与模型数据文件的路径收集。
-    模型不可用不算失败（is_available=False 时纯关键词检索仍可用），
-    但**加载失败**（文件在却读不了）必须暴露。
+    真实编码 + 语义自检，不只探测端口 —— 模型拉了一半、量化损坏等
+    情况只有真跑一次编码才能暴露。
+    服务不可用不算失败（is_available=False 时纯关键词检索仍可用），
+    但**编码失败**（服务在却算不出）必须暴露。
     """
     try:
         from app.index import embedding as emb
@@ -134,7 +134,9 @@ def _check_embedding() -> dict:
         return {"ok": False, "error": f"import failed: {e}"}
 
     if not emb.is_available():
-        return {"ok": True, "available": False, "note": "模型未安装，语义检索关闭"}
+        return {"ok": True, "available": False,
+                "note": "未检测到 Ollama bge-m3，语义检索关闭"
+                        "（安装 Ollama 后执行 ollama pull bge-m3）"}
 
     try:
         m = emb.get_embedder()

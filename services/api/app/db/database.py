@@ -1,7 +1,9 @@
 """数据库连接与初始化 —— PLAN §9.2。
 
-库文件位置**固定不可配置**：`~/Library/Application Support/Inktable/library.db`。
-不放资料库根目录 —— 后者用户可配，可能落在 iCloud / 外置卷 / 网络卷上，
+数据目录默认在 `~/Library/Application Support/Inktable/`，
+可经 `INKTABLE_DATA_DIR` 环境变量整体迁移（由桌面端主进程在
+"设置 → 通用配置 → 数据位置" 完成搬迁后传入）。库文件位置不放
+资料库根目录 —— 后者可能落在 iCloud / 外置卷 / 网络卷上，
 多设备并发写会直接损坏（§9.2）。
 """
 
@@ -20,7 +22,15 @@ from urllib.parse import quote
 
 from app.db.schema import DEFAULT_SETTINGS, SCHEMA, SCHEMA_VERSION
 
-APP_DIR = Path.home() / "Library" / "Application Support" / "Inktable"
+
+def _resolve_app_dir() -> Path:
+    override = os.environ.get("INKTABLE_DATA_DIR", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / "Library" / "Application Support" / "Inktable"
+
+
+APP_DIR = _resolve_app_dir()
 DB_PATH = APP_DIR / "library.db"
 LOCK_PATH = APP_DIR / "inktable.lock"
 BACKUP_DIR = APP_DIR / "backups"
@@ -312,10 +322,30 @@ def _init_vec_table(conn: sqlite3.Connection) -> None:
     """建向量表。放在这里而不是 SCHEMA 里，因为它依赖扩展是否加载成功。
 
     扩展不可用时静默跳过 —— 纯关键词检索仍然可用（§16.1a 降级链）。
+
+    **维度迁移**：嵌入模型换代（如 256 维静态嵌入 → 1024 维 bge-m3）时
+    vec0 表维度对不上，旧向量整体作废：重建表并清空 embedding_model_id，
+    由回填路径（embed_backfill）分批重嵌。不迁移旧向量 —— 不同模型的
+    向量空间不可比，混用比没有更糟。
     """
+    import re as _re
+
     from app.index.embedding import DIM
 
     try:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'chunks_vec'"
+        ).fetchone()
+        if row and row[0]:
+            m = _re.search(r"float\[(\d+)\]", row[0])
+            if m and int(m.group(1)) != DIM:
+                conn.execute("DROP TABLE chunks_vec")
+                conn.execute("UPDATE chunks SET embedding_model_id = NULL")
+                conn.execute("UPDATE contents SET embedding_model_id = NULL")
+                import logging
+                logging.getLogger("inktable.db").warning(
+                    "向量表维度 %s → %d：已重建，全部分片待回填重嵌",
+                    m.group(1), DIM)
         conn.execute(
             f"CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec "
             f"USING vec0(embedding float[{DIM}])"

@@ -109,8 +109,9 @@ def test_redundant_coverage_demoted_within_document():
 
 def test_cross_content_near_duplicates_softly_demoted():
     """不同 content 的同文分片：只有最高分那份保持原分，副本降权。"""
-    from app.index import embedding as emb
     import pytest
+
+    from app.index import embedding as emb
     if not emb.is_available():
         pytest.skip("本地嵌入模型不可用")
 

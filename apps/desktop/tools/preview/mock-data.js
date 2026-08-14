@@ -26,6 +26,8 @@ const FILES = [
 const STATS = {
   files: 2587,
   deduped: 34,
+  recent7: 46,
+  recent30: 189,
   by_source: [
     { name: '微信文件', c: 1210 },
     { name: '下载', c: 863 },
@@ -102,12 +104,14 @@ const SEARCH_RESULT = {
 
 const ANSWER = {
   status: 'answered',
-  answer: '封阳台的合同单价为 680 元/㎡，采用断桥铝 70 系窗框和 5+27A+5 双层中空玻璃 [C1]。你家北向阳台面积 6.4㎡，含窗纱一体与排水孔加工后合计 4352 元 [C1]。施工范围上，封阳台属于乙方承包内容，随泥木阶段一并验收 [C2]，验收合格后才进入尾款支付节点 [C3]。',
+  answer: '封阳台的合同单价为 680 元/㎡，采用断桥铝 70 系窗框和 5+27A+5 双层中空玻璃 [C1] [C4]。你家北向阳台面积 6.4㎡，含窗纱一体与排水孔加工后合计 4352 元 [C1]。施工范围上，封阳台属于乙方承包内容，随泥木阶段一并验收 [C2] [C5]，验收合格后才进入尾款支付节点 [C3]。',
   hedge: null,
   citations: [
     { tag: 'C1', file_id: 2, file_name: '装修报价单-整包-0806.pdf', file_path: FILES[1].path, page: 4, section_path: '三、门窗工程 › 3.1 封阳台', snippet: '封阳台采用断桥铝 70 系窗框、5+27A+5 双层中空玻璃，单价 680 元/㎡。', text: '封阳台采用断桥铝 70 系窗框、5+27A+5 双层中空玻璃，单价 680 元/㎡。北向阳台 6.4㎡，含窗纱一体与排水孔加工，合计 4352 元。' },
     { tag: 'C2', file_id: 2, file_name: '装修合同-金螳螂-0801.pdf', file_path: '/Users/demo/xwechat_files/msg/file/2026-08/装修合同-金螳螂-0801.pdf', page: 3, section_path: '第二章 › 工程范围', snippet: '乙方负责封阳台、全屋地面找平及厨卫防水工程。', text: '乙方负责封阳台、全屋地面找平及厨卫防水工程，防水层高度不低于 1.8 米，并提供闭水试验记录。' },
     { tag: 'C3', file_id: 2, file_name: '装修报价单-整包-0806.pdf', file_path: FILES[1].path, page: 6, section_path: '四、付款方式', snippet: '竣工验收合格后 7 日内支付尾款 10%。', text: '合同签订后支付 30% 作为首期款；水电验收合格支付 30%；泥木完工支付 30%；竣工验收合格后 7 日内支付尾款 10%。' },
+    { tag: 'C4', file_id: 2, file_name: '装修报价单-整包-0806.pdf', file_path: FILES[1].path, page: 2, section_path: '二、主材说明', snippet: '门窗主材为断桥铝 70 系，玻璃配置 5+27A+5。', text: '门窗主材为断桥铝 70 系，玻璃配置 5+27A+5，气密性等级 7 级。' },
+    { tag: 'C5', file_id: 2, file_name: '装修合同-金螳螂-0801.pdf', file_path: '/Users/demo/xwechat_files/msg/file/2026-08/装修合同-金螳螂-0801.pdf', page: 5, section_path: '第三章 › 验收', snippet: '泥木阶段验收含封阳台、瓷砖铺贴与吊顶基层。', text: '泥木阶段验收含封阳台、瓷砖铺贴与吊顶基层，业主应在 3 日内组织验收。' },
   ],
 };
 
@@ -118,11 +122,68 @@ const SOURCES = { sources: [
   { id: 4, name: '文稿', path: '/Users/demo/Documents/notes', enabled: false, watching: false, exists: true, volatile: false, auto_preserve: false, file_count: 117 },
 ] };
 
+const TREE_ROOTS = { roots: [
+  { id: 1, name: '微信文件', path: '/Users/demo/xwechat_files', count: 1210 },
+  { id: 2, name: '下载', path: '/Users/demo/Downloads', count: 863 },
+  { id: 3, name: 'QQ 文件', path: '/Users/demo/Documents/Tencent Files', count: 397 },
+] };
+
+function treeLevel(dir) {
+  const prefix = dir.replace(/\/+$/, '') + '/';
+  const dirs = {};
+  const files = [];
+  FILES.forEach((f) => {
+    if (!f.path.startsWith(prefix)) return;
+    const rest = f.path.slice(prefix.length);
+    if (rest.includes('/')) {
+      const head = rest.split('/')[0];
+      dirs[head] = (dirs[head] || 0) + 1;
+    } else {
+      files.push({ id: f.id, name: f.name, path: f.path, ext: f.ext, state: f.state });
+    }
+  });
+  return {
+    dir,
+    dirs: Object.keys(dirs).sort().map((n) => ({ name: n, path: prefix + n, count: dirs[n] })),
+    files,
+    truncated: false,
+  };
+}
+
 module.exports = {
   route(pathname, method, params) {
     if (pathname === '/stats') return STATS;
     if (pathname === '/categories') return CATEGORIES;
     if (pathname === '/books') return BOOKS;
+    if (pathname === '/files/tree') {
+      const dir = params.get('dir');
+      return dir ? treeLevel(dir) : TREE_ROOTS;
+    }
+    if (pathname === '/classify/auto_ext') return { classified: 0 };
+    if (pathname === '/index/embed_backfill') return { embedded: 0, remaining: 0, available: true };
+    if (pathname === '/settings/ocr') return { enabled: true, available: true };
+    if (pathname === '/reports/weekly') {
+      return {
+        week: '2026-W33', generated: false, path: '/Users/demo/reports/2026-W33.md',
+        markdown: '# 知识库周报 · 2026-W33\n\n本周新收录 **46** 个文件 · 库内共 2587 个\n\n## 类型分布\n\n- .pdf：28 个\n- .docx：11 个',
+      };
+    }
+    if (pathname === '/integrations/ccswitch') {
+      return { available: true, providers: [
+        { app_type: 'codex', name: 'anyrouter', endpoint: 'https://anyrouter.example/v1', model: 'gpt-5.5', api_key: 'sk-demo-1', is_current: true, openai_native: true },
+        { app_type: 'claude', name: 'QWQ', endpoint: 'https://qwq.example/v1', model: 'claude-opus-5', api_key: 'sk-demo-2', is_current: false, openai_native: false },
+      ] };
+    }
+    if (pathname === '/health') {
+      return { ok: true, checks: { embedding: { ok: true, available: true, model: 'ollama-bge-m3-d1024' } } };
+    }
+    if (/^\/files\/\d+\/content$/.test(pathname)) {
+      return {
+        file_id: 2, total: DETAIL.sections.length,
+        sections: DETAIL.sections.map((s, i) => ({ id: i + 1, ordinal: i, ...s })),
+        offset: 0, has_more: false,
+      };
+    }
     if (pathname === '/settings/llm') return { configured: true, available: true, model: 'qwen3-max' };
     if (pathname === '/settings/llm/test') return { configured: true, available: true, model: 'qwen3-max', message: '模型连接正常' };
     if (pathname === '/watch/status') return { running: true, watched: ['a', 'b', 'c'], counters: { indexed: 132 }, activity: [] };
@@ -134,7 +195,19 @@ module.exports = {
     if (/^\/files\/\d+\/detail$/.test(pathname)) return DETAIL;
     if (pathname === '/files') {
       const offset = Number(params.get('offset') || 0);
-      return { total: STATS.files, files: offset === 0 ? FILES : [] };
+      let list = FILES;
+      if (params.get('group') === 'ext') {
+        const sizes = {};
+        FILES.forEach((f) => { const k = (f.ext || '').toLowerCase(); sizes[k] = (sizes[k] || 0) + 1; });
+        list = [...FILES].sort((a, b) => {
+          const ka = (a.ext || '').toLowerCase();
+          const kb = (b.ext || '').toLowerCase();
+          if (sizes[kb] !== sizes[ka]) return sizes[kb] - sizes[ka];
+          if (ka !== kb) return ka < kb ? -1 : 1;
+          return b.mtime - a.mtime;
+        });
+      }
+      return { total: STATS.files, files: offset === 0 ? list : [] };
     }
     return {};
   },

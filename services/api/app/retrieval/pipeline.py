@@ -16,14 +16,14 @@ from typing import Any
 
 from app.index.hierarchy import hierarchy_routes
 from app.index.search import search as child_search
-from app.retrieval.query import decompose_comparative, mentioned_exts
-from app.retrieval.rerank import run_rerank
 from app.retrieval.compress import (
     ContextPack,
     EvidenceSource,
     assemble_pack,
     extract_spans,
 )
+from app.retrieval.query import decompose_comparative, mentioned_exts
+from app.retrieval.rerank import run_rerank
 
 RRF_K = 60
 # 子查询是补充入口，权重略低于四条主路线，避免分解误判时喧宾夺主

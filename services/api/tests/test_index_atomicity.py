@@ -399,3 +399,56 @@ def test_vector_reuse_accepts_current_model_and_records_it(db, monkeypatch):
         "SELECT embedding_model_id FROM chunks WHERE id = ?", (target,)
     ).fetchone()[0] == "current-model"
     assert vec.count(db) == 2
+
+
+def test_embed_backfill_covers_legacy_chunks(db, tmp_path, monkeypatch):
+    """模型晚于内容入库：backfill 分批补齐存量向量，幂等、可中断。
+
+    这正是真实库的形态 —— 大量文档在纯 FTS 降级期索引完成，
+    嵌入模型后来才就位，没有补课路径这些分片就是语义检索盲区。
+    """
+    if not pipeline._vector_table_exists(db):
+        pytest.skip("sqlite-vec 不可用")
+
+    _seed_content(db)
+    path = tmp_path / "doc.txt"
+    _two_chunk_doc(path)
+
+    # 第一阶段：模型不可用，纯 FTS 索引 → 分片没有向量
+    monkeypatch.setattr(emb, "is_available", lambda: False)
+    pipeline.index_content(db, 1, path)
+    db.commit()
+    assert vec.count(db) == 0
+    assert db.execute(
+        "SELECT count(*) FROM chunks WHERE embedding_model_id IS NULL"
+    ).fetchone()[0] == 2
+
+    # 第二阶段：模型可用了，分批补课
+    class FakeEmbedder:
+        model_id = "fake-d256"
+
+        def encode(self, texts):
+            return np.ones((len(texts), DIM), dtype=np.float32)
+
+    monkeypatch.setattr(emb, "is_available", lambda: True)
+    monkeypatch.setattr(emb, "get_embedder", lambda: FakeEmbedder())
+
+    first = pipeline.embed_backfill(db, limit=1)
+    assert first["embedded"] == 1
+    assert first["remaining"] == 1
+    assert first["model"] == "fake-d256"
+
+    second = pipeline.embed_backfill(db, limit=10)
+    assert second["embedded"] == 1
+    assert second["remaining"] == 0
+    db.commit()
+
+    assert vec.count(db) == 2
+    assert db.execute(
+        "SELECT count(*) FROM chunks WHERE embedding_model_id IS NULL"
+    ).fetchone()[0] == 0
+
+    # 幂等：补完再跑一遍什么都不动
+    third = pipeline.embed_backfill(db)
+    assert third["embedded"] == 0
+    assert third["remaining"] == 0

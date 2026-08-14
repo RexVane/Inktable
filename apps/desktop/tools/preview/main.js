@@ -51,12 +51,30 @@ app.whenReady().then(async () => {
     },
   });
 
+  // 清掉上次预览留下的问答会话等本地存储，保证截图从干净状态开始
+  await win.webContents.session.clearStorageData({ storages: ['localstorage'] });
+
   await win.loadFile(path.join(__dirname, '..', '..', 'renderer', 'index.html'));
 
-  // 等待文件列表渲染完成
+  // 等待文件列表渲染完成 → 列表页（左栏导航 + 中栏列表）
   await waitFor(win, "document.querySelectorAll('.row').length > 3");
 
-  // 选中一个文件 → 中栏出现详情
+  // 展开文件树第一个根目录，露出子目录与文件
+  await waitFor(win, "document.querySelectorAll('.tree-dir').length >= 1");
+  await win.webContents.executeJavaScript(
+    "document.querySelector('.tree-dir .nav-chev').click(); true", true);
+  await waitFor(win, "document.querySelectorAll('.tree-dir').length >= 2 || document.querySelectorAll('.tree-file').length >= 1");
+  await shot(win, '0-light-list');
+
+  // 选中一个文件 → 中栏整页切换成详情
+  await win.webContents.executeJavaScript(
+    "document.querySelectorAll('.row')[1].click(); true", true);
+  await waitFor(win, "!!document.querySelector('.file-detail')");
+
+  // 返回键回列表，再进详情（验证两页切换往返）
+  await win.webContents.executeJavaScript(
+    "document.getElementById('backToList').click(); true", true);
+  await waitFor(win, "document.getElementById('rows').style.display !== 'none'");
   await win.webContents.executeJavaScript(
     "document.querySelectorAll('.row')[1].click(); true", true);
   await waitFor(win, "!!document.querySelector('.file-detail')");
@@ -83,10 +101,13 @@ app.whenReady().then(async () => {
     "document.querySelectorAll('.hit')[0].click(); true", true);
   await shot(win, '2-light-search');
 
-  // 设置面板
-  await win.webContents.executeJavaScript("sheetOpen(true); true", true);
-  await waitFor(win, "!!document.querySelector('.srow')");
+  // 设置面板：通用配置 → 文件来源
+  await win.webContents.executeJavaScript("sheetOpen(true, 'general'); true", true);
+  await waitFor(win, "!!document.querySelector('.set-nav-item.on')");
   await shot(win, '3-light-settings');
+  await win.webContents.executeJavaScript("sheetOpen(true, 'sources'); true", true);
+  await waitFor(win, "!!document.querySelector('.srow')");
+  await shot(win, '3b-light-settings-sources');
   await win.webContents.executeJavaScript("sheetOpen(false); true", true);
 
   // 深色模式

@@ -13,6 +13,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -98,48 +99,83 @@ def _chromium_download_dir(prefs: Path) -> str | None:
 
 
 def discover_browsers() -> list[Source]:
+    """浏览器下载目录。
+
+    所有浏览器的默认下载位置都是 ~/Downloads —— 那由"下载"系统来源
+    统一覆盖（带真实文件统计），这里只上报**用户自定义**的下载目录，
+    避免同一个 ~/Downloads 挂着"Chrome 下载"之类的误导名，还把
+    系统来源顶掉。
+    """
     out: list[Source] = []
     support = HOME / "Library" / "Application Support"
+    downloads = HOME / "Downloads"
+    seen: set[str] = set()
+
+    def add(label: str, target: Path) -> None:
+        if not target.is_dir() or str(target) in seen:
+            return
+        seen.add(str(target))
+        try:
+            if target.resolve() == downloads.resolve():
+                return  # 默认下载目录归"下载"系统来源管
+        except OSError:
+            return
+        total, docs, newest = _probe_dir(target)
+        out.append(
+            Source(
+                name=f"{label} 下载",
+                path=str(target),
+                kind="browser",
+                discovered_by="config",
+                file_count=total,
+                doc_count=docs,
+                recent_mtime=newest,
+            )
+        )
 
     chromium = [
         ("Chrome", support / "Google" / "Chrome"),
         ("Edge", support / "Microsoft Edge"),
         ("Brave", support / "BraveSoftware" / "Brave-Browser"),
+        ("Arc", support / "Arc" / "User Data"),
+        ("Vivaldi", support / "Vivaldi"),
     ]
-    seen: set[str] = set()
-
     for name, base in chromium:
         if not base.exists():
             continue
         for prefs in base.glob("*/Preferences"):
             profile = prefs.parent.name
             d = _chromium_download_dir(prefs)
-            target = Path(d) if d else HOME / "Downloads"
-            if not target.exists() or str(target) in seen:
-                continue
-            seen.add(str(target))
+            if not d:
+                continue  # 未自定义 → 默认 ~/Downloads，跳过
             label = name if profile == "Default" else f"{name}（{profile}）"
-            out.append(
-                Source(
-                    name=f"{label} 下载",
-                    path=str(target),
-                    kind="browser",
-                    discovered_by="config",
-                )
-            )
+            add(label, Path(d).expanduser())
 
-    # Safari：读 defaults，未设置则用默认下载目录
+    # Safari：读 defaults；未设置即默认下载目录，同样归"下载"管
     try:
         r = subprocess.run(
             ["defaults", "read", "com.apple.Safari", "DownloadsPath"],
             capture_output=True, text=True, timeout=5,
         )
-        p = Path(r.stdout.strip()).expanduser() if r.returncode == 0 and r.stdout.strip() else HOME / "Downloads"
+        if r.returncode == 0 and r.stdout.strip():
+            add("Safari", Path(r.stdout.strip()).expanduser())
     except Exception:
-        p = HOME / "Downloads"
-    if p.exists() and str(p) not in seen:
-        seen.add(str(p))
-        out.append(Source(name="Safari 下载", path=str(p), kind="browser", discovered_by="config"))
+        pass
+
+    # Firefox：prefs.js 的 browser.download.dir（folderList=2 时才生效）
+    firefox_profiles = support / "Firefox" / "Profiles"
+    if firefox_profiles.exists():
+        for prefs in firefox_profiles.glob("*/prefs.js"):
+            try:
+                text = prefs.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            if '"browser.download.folderList", 2' not in text:
+                continue
+            match = re.search(
+                r'user_pref\("browser\.download\.dir",\s*"([^"]+)"\)', text)
+            if match:
+                add("Firefox", Path(match.group(1)).expanduser())
 
     return out
 
@@ -201,18 +237,110 @@ def discover_wechat() -> list[Source]:
 # ---------------------------------------------------------------- QQ
 
 def discover_qq() -> list[Source]:
+    """QQ 接收文件目录，新旧版本都探。
+
+    本机实测（2026-08，QQ NT）：
+        ~/Library/Containers/com.tencent.qq/Data/Library/
+            Application Support/QQ/nt_qq_<hash>/nt_data/File/
+    旧版则在 Documents/Tencent Files/<QQ号>/FileRecv。
+    """
     out: list[Source] = []
-    bases = [
-        HOME / "Library" / "Containers" / "com.tencent.qq" / "Data" / "Documents",
-        HOME / "Library" / "Containers" / "com.tencent.qq" / "Data" / "Library"
-        / "Application Support" / "com.tencent.qq" / "Documents",
-        HOME / "Documents" / "Tencent Files",
+    container = HOME / "Library" / "Containers" / "com.tencent.qq" / "Data"
+
+    patterns: list[tuple[Path, str, str]] = [
+        # QQ NT（新版）：账号一个 nt_qq_<hash> 目录，File 下是接收的文件
+        (container / "Library" / "Application Support" / "QQ",
+         "nt_qq_*/nt_data/File", "QQ 接收"),
+        # 旧版容器内 Documents
+        (container / "Documents", "*/FileRecv", "QQ 接收"),
+        # 更旧的非容器路径
+        (HOME / "Documents" / "Tencent Files", "*/FileRecv", "QQ 接收"),
     ]
-    for base in bases:
+    direct_bases = [
+        (container / "Downloads", "QQ 下载"),
+        (HOME / "Documents" / "Tencent Files", "QQ 接收"),
+    ]
+
+    candidates: list[tuple[Path, str, bool]] = []
+    for i, (base, pattern, label) in enumerate(patterns):
         if not base.exists():
             continue
-        candidates = [base] + [Path(p) for p in glob.glob(str(base / "*" / "FileRecv"))]
-        for p in candidates:
+        # NT 接收目录（第一条模式）是明确的收件位置：存在就展示，
+        # 即使还没收到过文档 —— 用户可先启用，之后收到的文件自动收录。
+        keep_empty = i == 0
+        candidates += [(Path(p), label, keep_empty)
+                       for p in glob.glob(str(base / pattern))]
+    candidates += [(p, label, False) for p, label in direct_bases if p.is_dir()]
+
+    for p, label, keep_empty in candidates:
+        if not p.is_dir():
+            continue
+        total, docs, newest = _probe_dir(p)
+        if docs == 0 and not keep_empty:
+            continue
+        out.append(
+            Source(
+                name=label,
+                path=str(p),
+                kind="im",
+                discovered_by="heuristic",
+                volatile=True,
+                file_count=total,
+                doc_count=docs,
+                recent_mtime=newest,
+                note=("目前还没有收到文档；启用后新收到的文件会自动收录"
+                      if docs == 0
+                      else "QQ 可能自动清理缓存，建议开启保全副本"),
+            )
+        )
+    return out
+
+
+# ---------------------------------------------------------------- 办公协作应用
+
+# (显示名, 候选 (基目录, glob) 列表, 是否易失)。目录不存在时静默跳过（§7.2），
+# 装了应用但没收过文件也不会制造噪音（docs == 0 过滤）。
+_WORK_APPS: list[tuple[str, list[tuple[Path, str]], bool]] = [
+    ("飞书", [
+        # 容器安装（App Store / 新版）
+        (HOME / "Library" / "Containers" / "com.bytedance.macos.feishu" / "Data"
+         / "Library" / "Application Support" / "LarkShell", "sdk_storage/*/downloads"),
+        # 直装
+        (HOME / "Library" / "Application Support" / "LarkShell", "sdk_storage/*/downloads"),
+        (HOME / "Downloads" / "Lark", "*"),
+        (HOME / "Downloads" / "飞书下载", "*"),
+    ], True),
+    ("Lark", [
+        (HOME / "Library" / "Containers" / "com.larksuite.larkApp" / "Data"
+         / "Library" / "Application Support" / "LarkShell", "sdk_storage/*/downloads"),
+    ], True),
+    ("钉钉", [
+        (HOME / "Library" / "Application Support" / "DingTalkMac", "*/Data/Files"),
+        (HOME / "Library" / "Containers" / "com.alibaba.DingTalkMac" / "Data"
+         / "Library" / "Application Support" / "DingTalkMac", "*/Data/Files"),
+        (HOME / "Documents" / "DingTalk", "*"),
+    ], True),
+    ("企业微信", [
+        (HOME / "Library" / "Containers" / "com.tencent.WeWorkMac" / "Data"
+         / "Library" / "Application Support" / "WXWork", "Data/*/Cache/File"),
+        (HOME / "Library" / "Application Support" / "WXWork", "Data/*/Cache/File"),
+    ], True),
+]
+
+
+def discover_work_apps() -> list[Source]:
+    """飞书 / 钉钉 / 企业微信等办公应用的接收文件目录。"""
+    out: list[Source] = []
+    for name, candidates, volatile in _WORK_APPS:
+        hits: list[Path] = []
+        for base, pattern in candidates:
+            if not base.exists():
+                continue
+            if pattern == "*":
+                hits.append(base)
+            else:
+                hits += [Path(p) for p in glob.glob(str(base / pattern))]
+        for p in hits:
             if not p.is_dir():
                 continue
             total, docs, newest = _probe_dir(p)
@@ -220,14 +348,15 @@ def discover_qq() -> list[Source]:
                 continue
             out.append(
                 Source(
-                    name="QQ 接收",
+                    name=f"{name} 接收",
                     path=str(p),
                     kind="im",
                     discovered_by="heuristic",
-                    volatile=True,
+                    volatile=volatile,
                     file_count=total,
                     doc_count=docs,
                     recent_mtime=newest,
+                    note=f"{name} 可能自动清理缓存，建议开启保全副本" if volatile else "",
                 )
             )
     return out
@@ -259,7 +388,8 @@ def discover_system() -> list[Source]:
 
 def discover_all() -> list[Source]:
     sources: list[Source] = []
-    for fn in (discover_browsers, discover_wechat, discover_qq, discover_system):
+    for fn in (discover_browsers, discover_wechat, discover_qq,
+               discover_work_apps, discover_system):
         try:
             sources.extend(fn())
         except Exception:

@@ -7,9 +7,14 @@ from dataclasses import dataclass
 
 from app.index.search import extract_query_terms
 
-MAX_SPAN_CHARS = 520
+# 单段上限放宽到 ~900：保留成段的叙述而不是切成零碎句子，
+# 让"把某事讲全"类问题拿到连贯上下文（现代模型上下文管够）。
+MAX_SPAN_CHARS = 900
 DEFAULT_CONTEXT_CHARS = 3600
-DEFAULT_MAX_SPANS = 18
+DEFAULT_MAX_SPANS = 120
+# 每个来源文档最多贡献几段证据。早期为小预算定的 3 会让单个文档"讲不透"，
+# 放宽到 6 —— 配合更大的装配预算，回答更全面。
+MAX_SPANS_PER_SOURCE = 6
 
 
 @dataclass(frozen=True)
@@ -174,7 +179,7 @@ def extract_spans(query: str, sources: list[EvidenceSource]) -> list[EvidenceSpa
             ):
                 continue
             chosen.append(span)
-            if len(chosen) >= 3:
+            if len(chosen) >= MAX_SPANS_PER_SOURCE:
                 break
         spans.extend(chosen)
     return sorted(spans, key=lambda span: span.relevance_score, reverse=True)

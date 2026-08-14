@@ -17,8 +17,8 @@ from contextlib import contextmanager
 from itertools import count
 from pathlib import Path
 
-from app.index.search import index_chunk
 from app.index.hierarchy import build_hierarchy, insert_hierarchy
+from app.index.search import index_chunk
 from app.parsing.base import ParseError, UnsupportedFormat
 from app.parsing.chunker import chunk_document
 from app.parsing.parsers import PARSERS, parse
@@ -349,8 +349,9 @@ def _embed_chunks(conn, inserted: list[tuple[int, object]]) -> str | None:
     这是方案 §12.5 的明确取舍："仅位置变的片只更新 section_path"，
     标题重编号带来的轻微语义漂移是刻意接受的，换来免重嵌。
 
-    编码在这里内联做而不是丢队列：model2vec 约 9000 片/秒，
-    单文档几十片的开销是毫秒级，不值得为它引入异步复杂度。
+    编码在这里内联做而不是丢队列：text_hash 复用后单文档真正要编码的
+    通常只有几片到几十片，bge-m3（经 Ollama）下是秒级开销，
+    不值得为它引入异步复杂度；大批量欠账走 embed_backfill 分批补。
     """
     if not inserted:
         return None
@@ -424,6 +425,60 @@ def _embed_chunks(conn, inserted: list[tuple[int, object]]) -> str | None:
         logging.getLogger("inktable.pipeline").info(
             "向量复用 %d 片，仅编码 %d 片", reused, len(need))
     return model_id
+
+
+def embed_backfill(conn: sqlite3.Connection, limit: int = 500) -> dict:
+    """给存量分片补向量 —— 模型晚于内容入库时的补课路径。
+
+    正常路径在 _embed_chunks 内联编码；但如果内容是在嵌入模型可用
+    **之前**索引的（纯 FTS 降级期），这些分片永远没有向量，语义检索
+    覆盖不到它们，且除非重建索引否则不会自愈。
+
+    这里按批补齐活跃索引版本里 embedding_model_id 为空的分片：
+    幂等、可中断、可反复调用直到 remaining=0。前端在解析队列排空后驱动。
+    """
+    from app.index import embedding as emb
+
+    if not emb.is_available() or not _vector_table_exists(conn):
+        return {"embedded": 0, "remaining": 0, "available": False}
+
+    remaining_sql = (
+        "SELECT count(*) c FROM chunks ch "
+        "JOIN contents c ON c.id = ch.content_id "
+        "WHERE ch.embedding_model_id IS NULL "
+        "AND ch.index_version = c.active_index_version"
+    )
+    rows = conn.execute(
+        """SELECT ch.id, ch.text, ch.section_path
+           FROM chunks ch JOIN contents c ON c.id = ch.content_id
+           WHERE ch.embedding_model_id IS NULL
+             AND ch.index_version = c.active_index_version
+           ORDER BY ch.id LIMIT ?""",
+        (limit,),
+    ).fetchall()
+    if not rows:
+        return {"embedded": 0, "remaining": 0, "available": True}
+
+    m = emb.get_embedder()
+    texts = [emb.embed_text_for(r["text"], r["section_path"] or "") for r in rows]
+    vectors = m.encode(texts)
+    if len(vectors) != len(rows):
+        raise RuntimeError(
+            f"嵌入模型返回 {len(vectors)} 条向量，预期 {len(rows)} 条"
+        )
+    from app.index import vector as vec
+
+    vec.upsert(conn, [(r["id"], v) for r, v in zip(rows, vectors)])
+    marks = ",".join("?" * len(rows))
+    conn.execute(
+        f"UPDATE chunks SET embedding_model_id = ? WHERE id IN ({marks})",
+        [m.model_id, *(r["id"] for r in rows)],
+    )
+    remaining = conn.execute(remaining_sql).fetchone()["c"]
+    logging.getLogger("inktable.pipeline").info(
+        "向量补齐 %d 片，剩余 %d 片", len(rows), remaining)
+    return {"embedded": len(rows), "remaining": remaining,
+            "available": True, "model": m.model_id}
 
 
 def cleanup_orphan_contents(conn: sqlite3.Connection) -> int:
@@ -528,6 +583,12 @@ def index_pending(conn: sqlite3.Connection, limit: int = 500, progress=None) -> 
     只处理有对应文件、且扩展名可解析的 —— 源码类已在扫描阶段降级为
     仅元数据（§M2 决策），不会进到这里。
     """
+    # OCR 开关经模块级状态传给解析器（解析器拿不到 conn）
+    from app.db.database import get_setting
+    from app.parsing import ocr_mac
+
+    ocr_mac.set_runtime_enabled(get_setting(conn, "ocr_enabled", "1") == "1")
+
     exts = indexable_exts()
     marks = ",".join("?" * len(exts))
 

@@ -16,6 +16,7 @@ import json
 import logging
 import socket
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -84,23 +85,37 @@ def status() -> dict:
     }
 
 
-def probe(*, timeout: float = 10.0) -> dict:
-    """Run a minimal, user-triggered completion to verify the whole contract."""
+def probe(*, timeout: float = 20.0) -> dict:
+    """真实响应测试：发一条最小对话请求，必须拿回模型生成的文本才算通过。
+
+    这不是 TCP/HTTP 连通性检查 —— 鉴权失效、模型名不存在、中转站不兼容
+    OpenAI 协议、推理模型只产思考不产正文，这些只有真实补全才能暴露。
+    成功时把模型的实际回复和耗时一并返回给界面展示。
+
+    max_tokens 给足 512：推理型模型会先消耗思考预算，只给 4 个 token
+    会出现"接口通但回复为空"的假阴性。
+    """
     if not is_configured():
         return {
             **status(), "available": False, "code": "not_configured",
             "message": "模型尚未配置",
         }
+    started = time.monotonic()
     try:
         text = chat(
-            [{"role": "user", "content": "Reply with OK."}],
-            temperature=0, max_tokens=4, timeout=timeout,
+            [{"role": "user", "content": "这是一次连接测试。请只回复两个字：确认"}],
+            temperature=0, max_tokens=512, timeout=timeout,
         )
-        if not text.strip():
-            raise LLMError("模型服务返回空响应")
+        latency_ms = int((time.monotonic() - started) * 1000)
+        reply = " ".join(text.split())
+        if not reply:
+            raise LLMError("接口连通但模型没有返回文本")
+        if len(reply) > 60:
+            reply = reply[:60] + "…"
         return {
             **status(), "available": True, "code": "ready",
-            "message": "模型连接正常",
+            "reply": reply, "latency_ms": latency_ms,
+            "message": f"连接正常 · {latency_ms / 1000:.1f}s 实际回复「{reply}」",
         }
     except LLMNotConfigured:
         code, message = "not_configured", "模型尚未配置"
@@ -118,13 +133,17 @@ def probe(*, timeout: float = 10.0) -> dict:
     except LLMConnectionError as exc:
         code, message = exc.code, str(exc)
     except LLMError:
-        code, message = "invalid_response", "模型服务响应格式异常"
+        code, message = ("invalid_response",
+                         "接口连通但没有拿到有效回复（检查模型名，或该中转不兼容 OpenAI 协议）")
     return {**status(), "available": False, "code": code, "message": message}
 
 
 def chat(messages: list[dict], *, temperature: float = 0.1,
-         max_tokens: int = 1500, timeout: float = 60.0) -> str:
+         max_tokens: int | None = 1500, timeout: float = 60.0) -> str:
     """一次非流式对话。返回 assistant 文本。
+
+    max_tokens=None 表示**不传该字段**，由所选模型使用自己的默认输出
+    上限（现代模型普遍是几万到几十万，让模型自己决定最合理）。
 
     非流式是刻意的（§12.4）：后置校验会改写甚至废弃答案，流式推出去
     就收不回。方案明确允许"首个版本先做非流式"，禁止的是"流式+不校验"。
@@ -134,12 +153,14 @@ def chat(messages: list[dict], *, temperature: float = 0.1,
         raise LLMNotConfigured("未配置模型服务（设置 → AI 问答）")
 
     url = f"{endpoint}/chat/completions"
-    body = json.dumps({
+    payload: dict = {
         "model": model,
         "messages": messages,
         "temperature": temperature,
-        "max_tokens": max_tokens,
-    }).encode("utf-8")
+    }
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+    body = json.dumps(payload).encode("utf-8")
     try:
         req = urllib.request.Request(
             url, data=body, method="POST",
@@ -152,7 +173,7 @@ def chat(messages: list[dict], *, temperature: float = 0.1,
             raw = resp.read()
     except urllib.error.HTTPError as e:
         raise LLMHTTPError(e.code) from e
-    except (TimeoutError, socket.timeout) as e:
+    except TimeoutError as e:
         raise LLMConnectionError("timeout", "模型服务响应超时") from e
     except urllib.error.URLError as e:
         if isinstance(e.reason, (TimeoutError, socket.timeout)):

@@ -292,4 +292,6 @@ DEFAULT_SETTINGS = {
     "cloud_index_placeholders": "0",   # iCloud 占位文件默认不索引（§7.8）
     "privacy_cloud_ai_enabled": "0",   # 云端 AI 默认关闭（§1 约束 3）
     "confidence_threshold": "0.6",
+    "ocr_enabled": "1",                # 扫描件 OCR（macOS Vision，纯本地）默认开
+    "answer_max_tokens": "auto",       # 问答输出上限："auto"=跟随所选模型
 }

@@ -232,6 +232,7 @@ def test_vector_route_never_returns_superseded_chunks(db, monkeypatch):
     if not pipeline._vector_table_exists(db):
         pytest.skip("sqlite-vec 不可用")
     import numpy as np
+
     from app.index.embedding import DIM
 
     db.execute("UPDATE contents SET active_index_version = 2 WHERE id = 1")

@@ -12,12 +12,10 @@ files:
   - package.json
 
 # PyInstaller 产物作为额外资源打进 Contents/Resources/sidecar/
+# 嵌入模型不再随包分发：语义检索用本机 Ollama bge-m3（未装自动降级）
 extraResources:
   - from: ../../services/api/dist/inktable-sidecar
     to: sidecar/inktable-sidecar
-  # 嵌入模型（V1.5）：119 MB，sidecar 冻结后从 ../models/ 相对定位
-  - from: ../../models/potion-zh-trimmed
-    to: models/potion-zh-trimmed
 
 mac:
   category: public.app-category.productivity

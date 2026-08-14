@@ -10,7 +10,7 @@
 """
 
 import os
-from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+from PyInstaller.utils.hooks import collect_data_files
 
 import sqlite_vec
 
@@ -19,13 +19,10 @@ vec_dylib = os.path.join(os.path.dirname(sqlite_vec.__file__), "vec0.dylib")
 a = Analysis(
     ["app/main.py"],
     pathex=[],
-    # tokenizers 是 Rust 原生扩展（V1.5 嵌入模型的分词器），
-    # 与 vec0.dylib 一样需要显式收集
-    binaries=[(vec_dylib, "sqlite_vec")] + collect_dynamic_libs("tokenizers"),
-    datas=collect_data_files("jieba") + collect_data_files("model2vec"),
+    binaries=[(vec_dylib, "sqlite_vec")],
+    datas=collect_data_files("jieba"),
     hiddenimports=[
         "uvicorn.logging", "uvicorn.protocols", "uvicorn.lifespan",
-        "model2vec", "tokenizers", "safetensors", "safetensors.numpy",
     ],
     hookspath=[],
     runtime_hooks=[],

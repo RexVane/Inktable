@@ -20,21 +20,22 @@ import argparse
 import json
 import statistics
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.db.database import connect, init_db  # noqa: E402
-from app.qa.answer import MAX_PER_CONTENT, NEIGHBOR_SPAN, TOP_CONTEXT  # noqa: E402
-from app.retrieval.pipeline import (  # noqa: E402
+from app.db.database import connect, init_db
+from app.qa.answer import MAX_PER_CONTENT, NEIGHBOR_SPAN, TOP_CONTEXT
+from app.retrieval.pipeline import (
     assemble_context,
     compress_evidence,
     expand_neighbors,
     load_context_candidates,
+)
+from app.retrieval.pipeline import (
     run as run_retrieval,
 )
-from tests.evalset import ANSWERABLE  # noqa: E402
+from tests.evalset import ANSWERABLE
 
 RECALL_GATE = 0.95
 COMPRESSION_GATE = 0.35

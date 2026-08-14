@@ -1,117 +1,220 @@
-"""本地嵌入服务 —— PLAN §16.1a。
+"""本地嵌入服务 —— Ollama bge-m3（PLAN §16.1a，v0.3 起）。
 
-选型：`potion-multilingual-128M` 经词表裁剪（scripts/trim_embedding_model.py）。
-model2vec 是**静态嵌入**（查表 + 平均），无神经网络推理：
-依赖只有 numpy + tokenizers，PyInstaller 友好，编码约 9000 片/秒。
+嵌入交给本机 Ollama（默认 http://127.0.0.1:11434）：
 
-实测三方对比（30 题评测集，docs/eval/）：
+    模型      bge-m3（BAAI）：1024 维、多语言、8192 上下文
+    检测      GET /api/tags 看已拉取列表里有没有 bge-m3*，结果缓存 30 秒
+    编码      POST /api/embed 批量；返回向量统一做 L2 归一化
+    不可用    抛 EmbeddingUnavailable → 调用方降级纯 FTS5（降级链不变）
 
-    FTS5 三路（基线）      Recall@5 83.3%     0 MB
-    potion-base-8M                 55.6%    30 MB   ← 英文词表，中文不够
-    potion-multilingual-128M       88.9%   489 MB
-    ↑ 裁剪 + float16               94.4%   111 MB   ← 采用
+此前内置的 model2vec 静态嵌入（potion-multilingual-128M 裁剪版）已移除：
+静态嵌入是查表加权平均，对否定、语序、上下文不敏感；bge-m3 是真正的
+上下文编码器，检索质量上限高得多。代价是编码速度从 ~9000 片/秒降到
+百级/秒（Apple Silicon），由 text_hash 复用 + 分批回填吸收；
+Ollama 未安装或未拉模型时自动回到纯关键词检索，功能不塌。
 
-**内存纪律**（这一节是被实测教训写出来的）：
-
-开发时我一次性把 3098 个分片全部载入编码，同时还开着三个模型对比 ——
-峰值 2-3 GB，把开发机内存打爆。模型本身不重（单个约 420 MB 常驻），
-问题在于「同时多实例」+「一次性全量」。所以：
-
-  · **进程内单实例**，用 get_embedder() 取，不要各处 StaticModel.from_pretrained
-  · **流式分批**，encode_iter() 逐批 yield，调用方边算边写库，不攒在内存里
-  · **不缓存输入文本** —— 文本从数据库流式取，用完即弃
-  · **按需加载**：不调用 get_embedder() 就不占那 420 MB。
-    这是给个人电脑用的软件，轻度用户只用关键词搜索时不该付这个成本。
-
-个人电脑（16 GB）的内存账，实测推算：
-
-    库规模        向量(float32)   说明
-     3,000 片        3 MB        当前开发库
-    20,000 片       20 MB        一年日常使用
-   100,000 片       98 MB        重度使用，仍可全量载入内存
-   500,000 片      488 MB        改用 sqlite-vec 磁盘索引，按需读
-
-10 万分片以内全量内存扫描最快也最省事；超过再切 sqlite-vec
-（它已经打进包了，§4.3）。模型的 420 MB 是固定开销，与库规模无关。
+**维度变更**：256 → 1024。chunks_vec 表按维度建，database._init_vec_table
+检测到维度不符会重建表并清空 embedding_model_id，触发全量回填。
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
-import sys
 import threading
+import time
+import urllib.error
+import urllib.request
 from collections.abc import Iterable, Iterator
-from pathlib import Path
 
 import numpy as np
 
 log = logging.getLogger("inktable.embedding")
 
-DIM = 256
-# 每批条数。批太小则 tokenizer 调用开销占比高，太大则中间数组吃内存。
-# 256 条 × 平均 500 字符 ≈ 单批峰值几 MB，安全。
-BATCH = 256
+DIM = 1024
+MODEL_PREFIX = "bge-m3"     # 匹配 bge-m3 / bge-m3:latest / bge-m3:567m
+# 单次 HTTP 请求的文本条数。批太大单请求耗时过长（超时、阻塞索引事务），
+# 太小则请求开销占比高。64 条在 Apple Silicon 上约 1-2 秒。
+BATCH = 64
+# 探测结果缓存时长：查询路径每次问一遍 /api/tags 太浪费
+_PROBE_TTL = 30.0
 
-
-def _candidate_dirs() -> list[Path]:
-    dirs = [Path(os.environ.get("INKTABLE_EMBED_MODEL", ""))]
-    if getattr(sys, "frozen", False):
-        # 打包后：sidecar 在 Contents/Resources/sidecar/，模型在 Resources/models/
-        exe = Path(sys.executable).resolve()
-        dirs.append(exe.parent.parent / "models" / "potion-zh-trimmed")
-    dirs += [
-        Path(__file__).resolve().parents[4] / "models" / "potion-zh-trimmed",
-        Path.home() / "Documents/Agent/Inktable/models/potion-zh-trimmed",
-    ]
-    return dirs
+_OLLAMA_URL = os.environ.get("INKTABLE_OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
+# 查询路径上同一句话常被向量路与精排各编一次；短 LRU 避免重复 HTTP。
+# 只缓存短文本：索引回填的长分片会把查询向量挤掉。
+_ENCODE_CACHE_MAX = 64
+_ENCODE_CACHE_MAX_CHARS = 512
 
 
 class EmbeddingUnavailable(RuntimeError):
     """模型不可用。调用方应降级为纯 FTS5 检索，而不是让功能整体失败。"""
 
 
-def _resolve_model_dir() -> Path:
-    for p in _candidate_dirs():
-        if p and (p / "model.safetensors").is_file():
-            return p
-    raise EmbeddingUnavailable(
-        "找不到嵌入模型。运行 scripts/trim_embedding_model.py 生成，"
-        "或设置 INKTABLE_EMBED_MODEL 指向模型目录"
+# ---- Ollama 探测（带 TTL 缓存）----
+
+_probe_cache: dict = {"at": 0.0, "tag": None}
+_probe_lock = threading.Lock()
+_encode_cache: dict[str, np.ndarray] = {}
+_encode_cache_order: list[str] = []
+_encode_cache_lock = threading.Lock()
+
+
+def _text_cache_key(model_id: str, text: str) -> str:
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return f"{model_id}:{digest}"
+
+
+def _cache_get(keys: list[str]) -> tuple[list[np.ndarray | None], int, int]:
+    hits = 0
+    rows: list[np.ndarray | None] = []
+    with _encode_cache_lock:
+        for key in keys:
+            vec = _encode_cache.get(key)
+            if vec is None:
+                rows.append(None)
+                continue
+            hits += 1
+            # 刷新 LRU 顺序
+            try:
+                _encode_cache_order.remove(key)
+            except ValueError:
+                pass
+            _encode_cache_order.append(key)
+            rows.append(vec.copy())
+    return rows, hits, len(keys) - hits
+
+
+def _cache_put(key: str, vec: np.ndarray) -> None:
+    with _encode_cache_lock:
+        if key not in _encode_cache:
+            _encode_cache_order.append(key)
+        _encode_cache[key] = vec.astype(np.float32, copy=True)
+        while len(_encode_cache_order) > _ENCODE_CACHE_MAX:
+            old = _encode_cache_order.pop(0)
+            _encode_cache.pop(old, None)
+
+
+def _http_json(path: str, payload: dict | None = None, timeout: float = 3.0) -> dict:
+    req = urllib.request.Request(
+        f"{_OLLAMA_URL}{path}",
+        data=json.dumps(payload).encode() if payload is not None else None,
+        headers={"Content-Type": "application/json"},
+        method="POST" if payload is not None else "GET",
     )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode())
+
+
+def _probe(force: bool = False) -> str | None:
+    """返回本机 Ollama 里可用的 bge-m3 标签（如 'bge-m3:latest'），没有则 None。"""
+    with _probe_lock:
+        now = time.time()
+        if not force and now - _probe_cache["at"] < _PROBE_TTL:
+            return _probe_cache["tag"]
+        tag = None
+        try:
+            data = _http_json("/api/tags", timeout=2.0)
+            for m in data.get("models", []):
+                name = str(m.get("name", ""))
+                if name == MODEL_PREFIX or name.startswith(MODEL_PREFIX + ":"):
+                    tag = name
+                    break
+        except Exception as e:  # noqa: BLE001 - 连不上就是不可用
+            log.debug("Ollama 探测失败：%s", e)
+        _probe_cache.update(at=now, tag=tag)
+        return tag
 
 
 class Embedder:
-    """嵌入模型封装。**进程内应当只有一个实例**（见模块 docstring 的内存纪律）。"""
+    """Ollama 嵌入客户端。接口与旧静态嵌入完全一致（encode/encode_one/encode_iter）。"""
 
-    def __init__(self, model_dir: Path | None = None):
-        from model2vec import StaticModel
-
-        self.model_dir = model_dir or _resolve_model_dir()
-        self._model = StaticModel.from_pretrained(str(self.model_dir))
-        self.dim = int(self._model.dim)
-        if self.dim != DIM:
-            log.warning("模型维度 %d 与预期 %d 不一致", self.dim, DIM)
-        log.info("嵌入模型已加载：%s (dim=%d)", self.model_dir.name, self.dim)
+    def __init__(self):
+        tag = _probe()
+        if tag is None:
+            raise EmbeddingUnavailable(
+                "未检测到 Ollama 的 bge-m3 模型。安装 Ollama 后执行："
+                "ollama pull bge-m3"
+            )
+        self.tag = tag
+        self.dim = DIM
+        log.info("嵌入服务已连接：Ollama %s (dim=%d)", tag, DIM)
 
     @property
     def model_id(self) -> str:
-        """写入 chunks.embedding_model_id，模型变更时据此触发重建（§12.8）。"""
-        return f"{self.model_dir.name}-d{self.dim}"
+        """写入 chunks.embedding_model_id，模型变更时据此触发重建（§12.8）。
+
+        用基名而非完整 tag：bge-m3:latest 与 bge-m3 是同一权重，
+        不应因 tag 写法差异触发全库重嵌。
+        """
+        return f"ollama-{MODEL_PREFIX}-d{DIM}"
 
     def encode(self, texts: list[str]) -> np.ndarray:
         """编码一批文本，返回 L2 归一化后的 float32 矩阵。
 
         归一化后余弦相似度退化为点积，检索时省一次除法（§12.2 ③）。
+        内部按 BATCH 分批请求；任何一批失败都抛 EmbeddingUnavailable。
+        短文本（查询）结果会进进程内 LRU，避免向量路与精排重复编码。
         """
         if not texts:
             return np.zeros((0, self.dim), dtype=np.float32)
-        v = self._model.encode(texts, batch_size=BATCH)
-        v = np.asarray(v, dtype=np.float32)
-        norms = np.linalg.norm(v, axis=1, keepdims=True)
-        # 空文本或全未知 token 会得到零向量，除零会产生 nan
+        keys = [
+            _text_cache_key(self.model_id, text)
+            if len(text) <= _ENCODE_CACHE_MAX_CHARS else ""
+            for text in texts
+        ]
+        cached, _cache_hits, cache_misses = _cache_get(
+            [key for key in keys if key]
+        )
+        # 把「不可缓存的长文本」也当成 miss，占位与 texts 对齐
+        aligned: list[np.ndarray | None] = []
+        cache_iter = iter(cached)
+        for key in keys:
+            if key:
+                aligned.append(next(cache_iter))
+            else:
+                aligned.append(None)
+                cache_misses += 1
+        cached = aligned
+        if cache_misses == 0:
+            return np.stack([vec for vec in cached if vec is not None])
+
+        miss_indices = [i for i, vec in enumerate(cached) if vec is None]
+        miss_texts = [texts[i] for i in miss_indices]
+        parts: list[np.ndarray] = []
+        for i in range(0, len(miss_texts), BATCH):
+            batch = miss_texts[i:i + BATCH]
+            try:
+                # 首批可能触发 Ollama 冷加载模型（数秒到数十秒），超时给足
+                data = _http_json("/api/embed",
+                                  {"model": self.tag, "input": batch},
+                                  timeout=300.0)
+            except (urllib.error.URLError, OSError, ValueError) as e:
+                _probe_cache["at"] = 0.0   # 失效探测缓存，下次重新检测
+                raise EmbeddingUnavailable(f"Ollama 编码失败：{e}") from e
+            vecs = data.get("embeddings")
+            if not isinstance(vecs, list) or len(vecs) != len(batch):
+                raise EmbeddingUnavailable(
+                    f"Ollama 返回 {len(vecs) if isinstance(vecs, list) else '非法'} "
+                    f"条向量，预期 {len(batch)} 条"
+                )
+            part = np.asarray(vecs, dtype=np.float32)
+            if part.ndim != 2 or part.shape[1] != self.dim:
+                raise EmbeddingUnavailable(
+                    f"Ollama 返回维度 {part.shape} 与预期 {self.dim} 不符"
+                )
+            parts.append(part)
+        fresh = np.vstack(parts)
+        norms = np.linalg.norm(fresh, axis=1, keepdims=True)
+        # 空文本会得到零向量，除零会产生 nan
         np.maximum(norms, 1e-12, out=norms)
-        return v / norms
+        fresh = fresh / norms
+        for pos, index in enumerate(miss_indices):
+            cached[index] = fresh[pos]
+            if keys[index]:
+                _cache_put(keys[index], fresh[pos])
+        return np.stack([vec for vec in cached if vec is not None])
 
     def encode_one(self, text: str) -> np.ndarray:
         return self.encode([text])[0]
@@ -119,12 +222,7 @@ class Embedder:
     def encode_iter(
         self, items: Iterable[tuple[int, str]], batch: int = BATCH
     ) -> Iterator[list[tuple[int, np.ndarray]]]:
-        """流式编码，逐批产出 (id, 向量)。
-
-        调用方应当每批写完库就丢弃 —— 全量攒在内存里正是把开发机
-        打爆的原因。20 万分片全量编码的结果向量就有 195 MB，
-        加上文本驻留会更多。
-        """
+        """流式编码，逐批产出 (id, 向量)。调用方每批写完库就丢弃。"""
         buf_ids: list[int] = []
         buf_txt: list[str] = []
 
@@ -144,10 +242,7 @@ _lock = threading.Lock()
 
 
 def get_embedder() -> Embedder:
-    """取进程内唯一实例。首次调用约 1.6 秒（加载 111 MB 权重，常驻约 420 MB）。
-
-    **按需加载**：不调用就不占内存。语义检索关闭时整个进程里没有这块开销。
-    """
+    """取进程内唯一实例。模型内存驻留在 Ollama 进程里，本进程零权重开销。"""
     global _instance
     with _lock:
         if _instance is None:
@@ -156,19 +251,17 @@ def get_embedder() -> Embedder:
 
 
 def unload() -> bool:
-    """释放模型内存。
-
-    面向个人电脑：用户关闭语义检索、或长时间只用关键词搜索时，
-    没必要一直占着 420 MB。下次需要会自动重新加载（1.6 秒）。
-    """
+    """丢弃客户端实例并失效探测缓存（权重在 Ollama 侧，它自己会闲时卸载）。"""
     global _instance
     with _lock:
         if _instance is None:
             return False
         _instance = None
-    import gc
-    gc.collect()
-    log.info("嵌入模型已卸载")
+    _probe_cache["at"] = 0.0
+    with _encode_cache_lock:
+        _encode_cache.clear()
+        _encode_cache_order.clear()
+    log.info("嵌入客户端已重置")
     return True
 
 
@@ -177,20 +270,13 @@ def is_loaded() -> bool:
 
 
 def memory_estimate_mb() -> float:
-    """已加载模型的粗略内存占用，供状态展示。"""
-    if _instance is None:
-        return 0.0
-    # 权重 float32 + tokenizer 结构（实测约 200 MB）
-    return _instance._model.embedding.nbytes / 1048576 + 200
+    """本进程内的模型内存占用 —— Ollama 方案下恒为 0（权重在 Ollama 进程）。"""
+    return 0.0
 
 
 def is_available() -> bool:
-    """模型是否可用。不加载权重，只看文件在不在 —— 供健康检查用。"""
-    try:
-        _resolve_model_dir()
-        return True
-    except EmbeddingUnavailable:
-        return False
+    """Ollama 是否可用且已拉取 bge-m3。供健康检查与检索路径快速判断。"""
+    return _probe() is not None
 
 
 def embed_text_for(text: str, section_path: str = "") -> str:

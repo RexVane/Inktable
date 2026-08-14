@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import re
+from html.parser import HTMLParser
 from pathlib import Path
 
 from app.parsing.base import (
@@ -66,9 +67,28 @@ def parse_pdf(path: Path) -> ParsedDoc:
     finally:
         doc.close()
 
-    # 扫描件（纯图片 PDF）没有文本层 —— 这不是错误，但用户需要知道
+    # 扫描件（纯图片 PDF）没有文本层 → 走 macOS Vision OCR（零依赖，可在设置关闭）
     if not blocks:
-        warnings.append("未提取到文本，可能是扫描件（暂不支持 OCR）")
+        from app.parsing import ocr_mac
+
+        if ocr_mac.runtime_enabled() and ocr_mac.is_available():
+            pages, ocr_warnings = ocr_mac.ocr_pdf(path)
+            warnings.extend(ocr_warnings)
+            for page_no, text in pages:
+                for para in _split_paragraphs(text):
+                    blocks.append(
+                        Block(
+                            kind=BlockKind.PARAGRAPH,
+                            text=para,
+                            locator=Locator(page=page_no),
+                        )
+                    )
+            if blocks:
+                warnings.append(f"扫描件：已通过 OCR 提取 {len(pages)} 页文本")
+            else:
+                warnings.append("未提取到文本（OCR 也没有识别出内容）")
+        else:
+            warnings.append("未提取到文本，可能是扫描件（OCR 未启用或不可用）")
 
     return ParsedDoc(blocks=blocks, title=title, page_count=page_count, warnings=warnings)
 
@@ -216,6 +236,67 @@ def parse_text(path: Path) -> ParsedDoc:
     return ParsedDoc(blocks=blocks)
 
 
+class _TextExtractor(HTMLParser):
+    """从 HTML 抽纯文本 —— 标准库实现，零依赖，PyInstaller 友好。
+
+    面向两类：微信/QQ 导出的聊天记录 HTML，以及保存的网页。
+    丢弃 script/style，块级标签边界断行，<br> 换行，标题另存供文档标题。
+    """
+
+    _BLOCK = {"p", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6",
+              "section", "article", "blockquote", "td", "th"}
+    _SKIP = {"script", "style", "noscript", "svg"}
+
+    def __init__(self):
+        super().__init__()
+        self.parts: list[str] = []
+        self.title: str | None = None
+        self._skip_depth = 0
+        self._in_title = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self._SKIP:
+            self._skip_depth += 1
+        elif tag == "title":
+            self._in_title = True
+        elif tag == "br" or tag in self._BLOCK:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in self._SKIP and self._skip_depth:
+            self._skip_depth -= 1
+        elif tag == "title":
+            self._in_title = False
+        elif tag in self._BLOCK:
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if self._skip_depth:
+            return
+        if self._in_title:
+            self.title = (self.title or "") + data.strip()
+        elif data.strip():
+            self.parts.append(data)
+
+
+def parse_html(path: Path) -> ParsedDoc:
+    import html as _html
+
+    extractor = _TextExtractor()
+    try:
+        extractor.feed(_read_text(path))
+    except Exception:
+        pass  # 残缺 HTML 也尽量抽已解析的部分
+    text = _html.unescape("".join(extractor.parts))
+    blocks = [
+        Block(kind=BlockKind.PARAGRAPH, text=p, locator=Locator(para_index=i))
+        for i, p in enumerate(_split_paragraphs(text))
+    ]
+    title = (extractor.title or "").strip() or None
+    warnings = [] if blocks else ["未从 HTML 中提取到文本"]
+    return ParsedDoc(blocks=blocks, title=title, warnings=warnings)
+
+
 PARSERS = {
     ".pdf": parse_pdf,
     ".docx": parse_docx,
@@ -223,6 +304,9 @@ PARSERS = {
     ".markdown": parse_markdown,
     ".txt": parse_text,
     ".rtf": parse_text,
+    ".html": parse_html,
+    ".htm": parse_html,
+    ".csv": parse_text,
 }
 
 

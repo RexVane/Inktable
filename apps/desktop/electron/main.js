@@ -9,7 +9,10 @@
  * 退出路径必须收敛：主进程崩溃不能留下孤儿 Python 进程占着端口。
  */
 
-const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require('electron');
+const {
+  app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu,
+  nativeImage, nativeTheme, safeStorage, shell, Tray,
+} = require('electron');
 const { spawn } = require('child_process');
 const crypto = require('crypto');
 const path = require('path');
@@ -33,6 +36,22 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
   app.quit();
 }
+
+// ---- 数据目录：默认 ~/Library/Application Support/Inktable，可迁移 ----
+const dataDirConfigPath = () => path.join(app.getPath('userData'), 'data-dir.json');
+
+function loadCustomDataDir() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(dataDirConfigPath(), 'utf8'));
+    if (raw && typeof raw.dir === 'string' && raw.dir) return raw.dir;
+  } catch {}
+  return null;
+}
+
+let customDataDir = loadCustomDataDir();
+const defaultDataDir = () =>
+  path.join(app.getPath('home'), 'Library', 'Application Support', 'Inktable');
+const currentDataDir = () => customDataDir || defaultDataDir();
 
 // ---- LLM 配置：safeStorage 加密落盘（§6.3），密钥绝不进渲染进程 ----
 const llmConfigPath = () => path.join(app.getPath('userData'), 'llm.enc');
@@ -78,7 +97,9 @@ function startSidecar() {
     const bin = resolveSidecarPath();
     if (!bin) return reject(new Error('sidecar 二进制未找到，先运行 pyinstaller sidecar.spec'));
 
-    const proc = spawn(bin, [], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const env = { ...process.env };
+    if (customDataDir) env.INKTABLE_DATA_DIR = customDataDir;
+    const proc = spawn(bin, [], { stdio: ['pipe', 'pipe', 'pipe'], env });
     sidecar = proc;
 
     let settled = false;
@@ -237,6 +258,25 @@ function stopSidecar() {
   terminateSidecarProcess(proc);
 }
 
+function stopSidecarAndWait(timeoutMs = 6000) {
+  // 数据迁移前必须确认进程真的退了 —— 数据库文件被占用时移动会损坏
+  return new Promise((resolve) => {
+    const proc = sidecar;
+    if (!proc || proc.exitCode !== null || proc.signalCode !== null) {
+      sidecar = null;
+      sidecarInfo = null;
+      return resolve();
+    }
+    sidecar = null;
+    sidecarInfo = null;
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(); } };
+    proc.once('exit', finish);
+    terminateSidecarProcess(proc);
+    setTimeout(finish, timeoutMs).unref();
+  });
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -283,6 +323,100 @@ ipcMain.handle('sidecar:info', () => sidecarInfo);
 ipcMain.handle('sidecar:get-status', () => lastSidecarStatus);
 ipcMain.handle('shell:reveal', (_e, filePath) => {
   if (typeof filePath === 'string' && filePath) shell.showItemInFolder(filePath);
+});
+
+ipcMain.handle('shell:open', (_e, filePath) => {
+  // 用系统默认应用打开文件（文件查看器对不可解析格式的兜底）
+  if (typeof filePath !== 'string' || !filePath) return '';
+  return shell.openPath(filePath);
+});
+
+ipcMain.handle('shell:trash', async (_e, filePath) => {
+  // 删除 = 移到废纸篓（可恢复），绝不直接 unlink
+  if (typeof filePath !== 'string' || !filePath) {
+    return { ok: false, error: '路径无效' };
+  }
+  try {
+    await shell.trashItem(filePath);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('theme:set', (_e, mode) => {
+  nativeTheme.themeSource = ['light', 'dark', 'system'].includes(mode) ? mode : 'system';
+});
+
+ipcMain.handle('data:get', () => ({
+  dir: currentDataDir(),
+  isDefault: !customDataDir,
+}));
+
+ipcMain.handle('data:change', async () => {
+  const picked = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory', 'createDirectory'],
+    title: '选择新的数据目录（将在其下创建 Inktable 文件夹）',
+    buttonLabel: '迁移到这里',
+  });
+  if (picked.canceled || !picked.filePaths.length) return { ok: false, canceled: true };
+
+  const oldDir = currentDataDir();
+  const target = path.join(picked.filePaths[0], 'Inktable');
+  if (target === oldDir) return { ok: false, error: '与当前位置相同' };
+  if ((target + path.sep).startsWith(oldDir + path.sep)) {
+    return { ok: false, error: '不能选在当前数据目录内部' };
+  }
+  if (fs.existsSync(target) && fs.readdirSync(target).length > 0) {
+    return { ok: false, error: '目标已存在且非空：' + target };
+  }
+
+  // 停库 → 搬目录 → 记配置 → 用新目录重启。搬运期间界面显示"正在重启"。
+  publishSidecarStatus({ state: 'restarting', attempt: 0 });
+  await stopSidecarAndWait();
+  try {
+    if (fs.existsSync(oldDir)) {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      try {
+        fs.renameSync(oldDir, target);
+      } catch {
+        // 跨卷移动：复制后删除
+        fs.cpSync(oldDir, target, { recursive: true });
+        fs.rmSync(oldDir, { recursive: true, force: true });
+      }
+      // 单实例锁是进程级的陈旧状态，不随迁移带走
+      try { fs.rmSync(path.join(target, 'inktable.lock'), { force: true }); } catch {}
+    } else {
+      fs.mkdirSync(target, { recursive: true });
+    }
+    customDataDir = target;
+    fs.writeFileSync(dataDirConfigPath(), JSON.stringify({ dir: target }));
+  } catch (err) {
+    console.error('[main] 数据迁移失败:', err.message);
+    try { await startHealthySidecar(); } catch (e2) { scheduleSidecarRestart(e2); }
+    return { ok: false, error: '迁移失败：' + err.message };
+  }
+
+  try {
+    await startHealthySidecar();
+    restartAttempts = 0;
+    lastRestartError = '';
+    // 保全副本的绝对路径记录在库里，迁移后要把前缀改过来
+    try {
+      await fetch(`http://127.0.0.1:${sidecarInfo.port}/system/rebase_preserved`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sidecarInfo.token}`,
+        },
+        body: JSON.stringify({ old_prefix: oldDir, new_prefix: target }),
+      });
+    } catch (e) { console.error('[main] 保全路径重写失败:', e.message); }
+    return { ok: true, dir: target };
+  } catch (err) {
+    scheduleSidecarRestart(err);
+    return { ok: false, error: '数据已迁移，但服务重启失败：' + err.message, dir: target };
+  }
 });
 
 // 目录选择走原生对话框：这是 macOS 上让用户授予目录访问权的正规途径，
@@ -342,7 +476,62 @@ if (hasSingleInstanceLock) app.on('second-instance', () => {
   mainWindow.focus();
 });
 
+// ---- 全局快捷键 + 菜单栏常驻：⌥Space 随手呼出搜索（Spotlight 式）----
+let tray = null;
+
+function summonSearch() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    if (app.isReady() && startupComplete) createWindow();
+    return;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  app.focus({ steal: true });
+  mainWindow.focus();
+  mainWindow.webContents.send('focus-search');
+}
+
+function setupGlobalEntry() {
+  let accelerator = '';
+  try {
+    if (globalShortcut.register('Alt+Space', summonSearch)) {
+      accelerator = '⌥Space';
+    } else if (globalShortcut.register('CommandOrControl+Shift+K', summonSearch)) {
+      accelerator = '⌘⇧K';   // ⌥Space 被别的应用占了就退而求其次
+    }
+  } catch (err) {
+    console.error('[main] 全局快捷键注册失败:', err.message);
+  }
+
+  try {
+    // 菜单栏图标需 ~16pt 模板图；系统命名图标是 Touch Bar 尺寸，必须缩放，
+    // 否则会显示成一个特别大的放大镜。用 1x/2x 两档 PNG 作为模板图。
+    const icon = nativeImage.createFromNamedImage('NSTouchBarSearchTemplate')
+      .resize({ width: 16, height: 16 });
+    icon.setTemplateImage(true);
+    tray = new Tray(icon);
+    tray.setToolTip('Inktable — 个人知识库');
+    tray.setContextMenu(Menu.buildFromTemplate([
+      { label: accelerator ? `打开搜索（${accelerator}）` : '打开搜索', click: summonSearch },
+      { type: 'separator' },
+      { label: '退出 Inktable', click: () => app.quit() },
+    ]));
+    tray.on('click', summonSearch);
+  } catch (err) {
+    console.error('[main] 菜单栏图标创建失败:', err.message);
+  }
+  if (accelerator) console.log(`[main] 全局快捷键已注册：${accelerator}`);
+}
+
 if (hasSingleInstanceLock) app.whenReady().then(async () => {
+  // 开发态（electron .）Dock 显示的是 Electron 默认图标，这里换成品牌图标；
+  // 打包版由 electron-builder 从 build/icon.icns 注入，无需此步
+  if (process.platform === 'darwin' && !app.isPackaged) {
+    try {
+      app.dock.setIcon(nativeImage.createFromPath(
+        path.join(__dirname, '..', 'build', 'icon-1024.png')));
+    } catch { /* 图标缺失不影响启动 */ }
+  }
   publishSidecarStatus({ state: 'starting' });
   try {
     const info = await startHealthySidecar();
@@ -356,6 +545,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   }
   startupComplete = true;
   createWindow();
+  setupGlobalEntry();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -369,6 +559,7 @@ app.on('window-all-closed', () => {
 // 所有退出路径都必须停掉 sidecar
 app.on('before-quit', () => {
   quitting = true;
+  try { globalShortcut.unregisterAll(); } catch {}
   if (restartTimer) {
     clearTimeout(restartTimer);
     restartTimer = null;

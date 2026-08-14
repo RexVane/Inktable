@@ -14,9 +14,9 @@ import os
 import secrets
 import sys
 import threading
+import time
 from collections import OrderedDict
 from pathlib import Path
-import time
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -35,18 +35,18 @@ from app.db.database import (
 )
 from app.discovery.sources import discover_all
 from app.health import collect_health
+from app.index.confidence import assess as assess_confidence
 from app.index.pipeline import (
     activate_index_version,
     count_readable_pending,
     index_pending,
 )
-from app.index.confidence import assess as assess_confidence
-from app.retrieval.pipeline import run as run_retrieval
 from app.retrieval.compress import EvidenceSource, best_span
+from app.retrieval.pipeline import run as run_retrieval
 from app.watcher.scanner import preview_source, scan_source
 from app.watcher.service import WatchService
 
-app = FastAPI(title="Inktable API", version="0.2.0")
+app = FastAPI(title="Inktable API", version="0.3.0")
 log = logging.getLogger("inktable.main")
 
 _db = None
@@ -57,7 +57,7 @@ _watch: WatchService | None = None
 # 最近检索 trace 的内存环（PLAN §8.1 /runs/{trace_id}）。
 # 只存内存不落盘：trace 含 id/score/timing，不含正文与查询原文，
 # 但仍按隐私风险登记的口径处理 —— 进程退出即消失。
-_TRACE_CACHE: "OrderedDict[str, dict]" = OrderedDict()
+_TRACE_CACHE: OrderedDict[str, dict] = OrderedDict()
 _TRACE_CACHE_CAP = 50
 _trace_lock = threading.Lock()
 
@@ -350,6 +350,51 @@ def remove_source(req: SourceIdRequest) -> dict:
             "files_removed": n_files, "contents_removed": len(orphans)}
 
 
+class FilesRemoveRequest(BaseModel):
+    file_ids: list[int]
+
+
+@app.post("/files/remove", dependencies=[Depends(require_token)])
+def remove_files(req: FilesRemoveRequest) -> dict:
+    """从库中移除文件记录与索引。**绝不触碰磁盘上的原文件**（H2）。
+
+    "移到废纸篓"由桌面端主进程用系统 API 执行 —— sidecar 永远不做
+    磁盘删除，本接口只负责库内清理，并把涉及的磁盘路径返回给调用方。
+    孤儿 content（不再被任何 file 引用）连同 FTS / 向量一并清理；
+    file_tags / book_members / file_history 靠外键级联删除。
+    """
+    if not req.file_ids:
+        return {"removed": 0, "contents_removed": 0,
+                "paths": [], "preserved_paths": []}
+    with _db_lock:
+        conn = db()
+        marks = ",".join("?" * len(req.file_ids))
+        rows = conn.execute(
+            f"SELECT id, path, state, preserved_path FROM files WHERE id IN ({marks})",
+            req.file_ids,
+        ).fetchall()
+        if not rows:
+            return {"removed": 0, "contents_removed": 0,
+                    "paths": [], "preserved_paths": []}
+        ids = [r["id"] for r in rows]
+        id_marks = ",".join("?" * len(ids))
+        conn.execute(f"DELETE FROM files WHERE id IN ({id_marks})", ids)
+        orphans = conn.execute(
+            """SELECT id FROM contents
+               WHERE id NOT IN (SELECT content_id FROM files WHERE content_id IS NOT NULL)"""
+        ).fetchall()
+        for orphan in orphans:
+            _delete_content(conn, orphan["id"])
+        conn.commit()
+    return {
+        "removed": len(ids),
+        "contents_removed": len(orphans),
+        # 原件已消失的不再返回路径，避免调用方对着不存在的文件报错
+        "paths": [r["path"] for r in rows if r["path"] and r["state"] != "missing"],
+        "preserved_paths": [r["preserved_path"] for r in rows if r["preserved_path"]],
+    }
+
+
 def _delete_content(conn, content_id: int) -> None:
     """删除内容及其全部分片，FTS5 两索引与向量表一并清。
 
@@ -401,6 +446,8 @@ def test_llm() -> dict:
 class AskRequest(BaseModel):
     question: str
     book_id: int | None = None
+    # 最近几轮问答（[{q, a}]），用于把追问浓缩成可独立检索的问题
+    history: list[dict] = []
 
 
 @app.post("/ask", dependencies=[Depends(require_token)])
@@ -415,7 +462,7 @@ def post_ask(req: AskRequest) -> dict:
     with _db_lock:
         conn = db()
         try:
-            a = ask(conn, q, req.book_id)
+            a = ask(conn, q, req.book_id, history=req.history[-4:])
         except LLMError as e:
             raise HTTPException(status_code=502, detail=str(e)) from e
     trace = a.trace
@@ -423,6 +470,7 @@ def post_ask(req: AskRequest) -> dict:
     return {
         "status": a.status, "answer": a.answer, "citations": a.citations,
         "retrieved": a.retrieved, "hedge": a.hedge, "validation": a.validation,
+        "mode": a.mode,
         "trace_id": trace.get("trace_id"), "timings": trace.get("stages", []),
         "degraded": trace.get("degraded", []), "trace": trace,
     }
@@ -496,7 +544,7 @@ def post_book(req: BookCreate) -> dict:
             conn.commit()
         except Exception as e:
             conn.rollback()
-            raise HTTPException(status_code=400, detail=f"已有同名文件书") from e
+            raise HTTPException(status_code=400, detail="已有同名文件书") from e
     return {"id": cur.lastrowid}
 
 
@@ -575,8 +623,8 @@ def get_categories() -> dict:
 
     conn = db()
     unclassified = conn.execute(
-        "SELECT count(*) c FROM files WHERE category_id IS NULL "
-        "AND state != 'missing'"
+        "SELECT count(*) c FROM files f LEFT JOIN sources s ON f.source_id = s.id "
+        f"WHERE f.category_id IS NULL AND {VISIBLE_FILES_COND}"
     ).fetchone()["c"]
     return {"tree": category_tree(conn), "unclassified": unclassified}
 
@@ -634,7 +682,10 @@ def post_classify(req: AssignRequest) -> dict:
     指的就是"这一类"。
     """
     from app.organize.classify import (
-        CategoryError, assign_category, backfill_rule, create_rule,
+        CategoryError,
+        assign_category,
+        backfill_rule,
+        create_rule,
     )
 
     with _db_lock:
@@ -660,6 +711,22 @@ def post_classify(req: AssignRequest) -> dict:
             conn.rollback()
             raise HTTPException(status_code=400, detail=str(e)) from e
     return {"assigned": n, "rule_created": learned, "backfilled": backfilled}
+
+
+@app.post("/classify/auto_ext", dependencies=[Depends(require_token)])
+def post_auto_classify_by_ext() -> dict:
+    """默认自动分类：按扩展名归类未分类文件。"""
+    from app.organize.classify import CategoryError, auto_classify_by_ext
+
+    with _db_lock:
+        conn = db()
+        try:
+            result = auto_classify_by_ext(conn)
+            conn.commit()
+        except CategoryError as e:
+            conn.rollback()
+            raise HTTPException(status_code=400, detail=str(e)) from e
+    return result
 
 
 class FileIdRequest(BaseModel):
@@ -738,6 +805,16 @@ def add_source(req: AddSourceRequest) -> dict:
     ))
 
 
+# 可见性口径：停用来源的文件**保留在库里但不进入浏览视图**（重新启用即恢复）；
+# 来源被移除后残留的孤儿文件（source_id 为 NULL，如保全副本）始终可见。
+# 磁盘上已消失的文件同样隐藏 —— 除非有保全副本（内容仍可读，这正是
+# 保全功能的价值）。文件回到原位时 scanner 会把 state 恢复，自动重新可见。
+VISIBLE_FILES_COND = (
+    "(f.source_id IS NULL OR s.enabled = 1) "
+    "AND (f.state != 'missing' OR COALESCE(f.preserved_path, '') != '')"
+)
+
+
 @app.get("/files", dependencies=[Depends(require_token)])
 def list_files(
     limit: int = Query(100, ge=1, le=500),
@@ -749,9 +826,16 @@ def list_files(
     source: str | None = None,
     ext: str | None = None,
     duplicate: bool = False,
+    dir_path: str | None = Query(None, alias="dir"),
+    group: str | None = None,
+    since_days: int | None = Query(None, ge=1, le=365),
 ) -> dict:
     conn = db()
-    conds, params = [], []
+    conds, params = [VISIBLE_FILES_COND], []
+    if since_days is not None:
+        # 时间线视图："最近一周收到的文件"
+        conds.append("f.mtime >= ?")
+        params.append(time.time() - since_days * 86400)
     if q:
         conds.append("f.name LIKE ?")
         params.append(f"%{q}%")
@@ -783,26 +867,95 @@ def list_files(
     if duplicate:
         # duplicate 是共享同一 content 的视图状态；返回该重复组的全部文件，
         # 方便用户看到原件与各副本，而不是只返回任意一个“后来的”路径。
+        # 重复对端也必须可见，否则停用来源后会出现"孤儿重复项"。
         conds.append(
             """(f.content_id IS NOT NULL AND EXISTS (
                    SELECT 1 FROM files other
+                   LEFT JOIN sources os ON os.id = other.source_id
                    WHERE other.content_id = f.content_id AND other.id != f.id
+                     AND (other.source_id IS NULL OR os.enabled = 1)
                ))"""
         )
+    if dir_path:
+        # 目录过滤（文件树点击）：前缀匹配用 substr 而不是 LIKE，
+        # 路径里的 % 和 _ 不需要转义。
+        prefix = dir_path.rstrip("/") + "/"
+        conds.append("substr(f.path, 1, ?) = ?")
+        params.extend([len(prefix), prefix])
     where = ("WHERE " + " AND ".join(conds)) if conds else ""
     from_sql = "FROM files f LEFT JOIN sources s ON f.source_id = s.id"
 
     total = conn.execute(
         f"SELECT count(*) c {from_sql} {where}", params
     ).fetchone()["c"]
+    # group=ext：同扩展名聚在一起（文件多的类型靠前），组内最新在上。
+    # 排序在服务端做，分页跨页时分组才不会断。
+    select_extra = ""
+    order_by = "ORDER BY f.mtime DESC, f.id DESC"
+    if group == "ext":
+        select_extra = (
+            ", count(*) OVER (PARTITION BY lower(COALESCE(f.ext, ''))) AS ext_group_size"
+        )
+        order_by = ("ORDER BY ext_group_size DESC, lower(COALESCE(f.ext, '')), "
+                    "f.mtime DESC, f.id DESC")
     rows = conn.execute(
         f"SELECT f.id, f.name, f.path, f.ext, f.size, f.state, f.mtime, f.preserved_path, "
-        f"f.source_id, s.name AS source_name, s.volatile "
+        f"f.source_id, s.name AS source_name, s.volatile{select_extra} "
         f"{from_sql} {where} "
-        f"ORDER BY f.mtime DESC, f.id DESC LIMIT ? OFFSET ?",
+        f"{order_by} LIMIT ? OFFSET ?",
         [*params, limit, offset],
     ).fetchall()
     return {"total": total, "files": [dict(r) for r in rows]}
+
+
+@app.get("/files/tree", dependencies=[Depends(require_token)])
+def files_tree(
+    dir_path: str | None = Query(None, alias="dir"),
+    file_limit: int = Query(120, ge=1, le=500),
+) -> dict:
+    """左栏文件树。不传 dir 返回树根（已启用来源）；传 dir 返回下一层。
+
+    树完全从库内已登记的文件路径推导，**不扫磁盘** —— 所以只包含
+    已收录的文件，停用来源的子树自然消失。
+    """
+    conn = db()
+    if not dir_path:
+        roots = conn.execute(
+            """SELECT s.id, s.name, s.path,
+                      (SELECT count(*) FROM files f
+                       WHERE f.source_id = s.id) AS count
+               FROM sources s WHERE s.enabled = 1
+               ORDER BY count DESC, s.name"""
+        ).fetchall()
+        return {"roots": [dict(r) for r in roots]}
+
+    prefix = dir_path.rstrip("/") + "/"
+    rows = conn.execute(
+        f"""SELECT f.id, f.name, f.path, f.ext, f.state, f.preserved_path
+            FROM files f LEFT JOIN sources s ON s.id = f.source_id
+            WHERE {VISIBLE_FILES_COND} AND substr(f.path, 1, ?) = ?
+            ORDER BY f.name, f.id""",
+        (len(prefix), prefix),
+    ).fetchall()
+    dirs: dict[str, int] = {}
+    files_out: list[dict] = []
+    for r in rows:
+        rest = r["path"][len(prefix):]
+        if "/" in rest:
+            head = rest.split("/", 1)[0]
+            dirs[head] = dirs.get(head, 0) + 1
+        elif len(files_out) <= file_limit:
+            files_out.append(dict(r))
+    truncated = len(files_out) > file_limit
+    if truncated:
+        files_out = files_out[:file_limit]
+    return {
+        "dir": dir_path,
+        "dirs": [{"name": name, "path": prefix + name, "count": count}
+                 for name, count in sorted(dirs.items())],
+        "files": files_out,
+        "truncated": truncated,
+    }
 
 
 FILE_DETAIL_SECTION_LIMIT = 24
@@ -956,6 +1109,51 @@ def file_detail(file_id: int) -> dict:
     }
 
 
+@app.get("/files/{file_id}/content", dependencies=[Depends(require_token)])
+def file_content(
+    file_id: int,
+    offset: int = Query(0, ge=0, le=1_000_000),
+    limit: int = Query(40, ge=1, le=200),
+) -> dict:
+    """文件查看器：按顺序分页返回全部子层分片，不截断正文。
+
+    详情接口（/detail）只给前 24 段做速览；查看器走这里，
+    前端滚到底自动取下一页，直到读完整份文件。
+    """
+    conn = db()
+    row = conn.execute(
+        """SELECT f.id, f.content_id, c.active_index_version AS ver
+           FROM files f LEFT JOIN contents c ON c.id = f.content_id
+           WHERE f.id = ?""",
+        (file_id,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="文件不存在")
+    if row["content_id"] is None:
+        return {"file_id": file_id, "total": 0, "sections": [],
+                "offset": offset, "has_more": False}
+
+    total = conn.execute(
+        "SELECT count(*) c FROM chunks "
+        "WHERE content_id = ? AND index_version = ? AND layer = 'child'",
+        (row["content_id"], row["ver"]),
+    ).fetchone()["c"]
+    rows = conn.execute(
+        """SELECT ch.id, ch.section_path, ch.page, ch.page_end, ch.ordinal, ch.text
+           FROM chunks ch
+           WHERE ch.content_id = ? AND ch.index_version = ? AND ch.layer = 'child'
+           ORDER BY ch.ordinal, ch.id LIMIT ? OFFSET ?""",
+        (row["content_id"], row["ver"], limit, offset),
+    ).fetchall()
+    return {
+        "file_id": file_id,
+        "total": total,
+        "sections": [dict(r) for r in rows],
+        "offset": offset,
+        "has_more": offset + len(rows) < total,
+    }
+
+
 class SearchRequest(BaseModel):
     q: str
     limit: int = Field(default=40, ge=1, le=100)
@@ -1015,7 +1213,8 @@ def search_content(req: SearchRequest) -> dict:
             FROM chunks ch
             JOIN files f ON f.content_id = ch.content_id
             LEFT JOIN sources s ON f.source_id = s.id
-            WHERE ch.id IN ({marks}){book_file_filter}""",
+            WHERE ch.id IN ({marks}){book_file_filter}
+              AND {VISIBLE_FILES_COND}""",
         row_params,
     ).fetchall()
 
@@ -1111,6 +1310,155 @@ def run_index(req: IndexRequest) -> dict:
             if total["total"] >= req.limit:
                 break
         return total
+
+
+class QaSettingRequest(BaseModel):
+    answer_max_tokens: str  # "auto" 或数字字符串
+
+
+@app.get("/settings/qa", dependencies=[Depends(require_token)])
+def get_qa_setting() -> dict:
+    from app.db.database import get_setting
+
+    conn = db()
+    return {"answer_max_tokens": get_setting(conn, "answer_max_tokens", "auto")}
+
+
+@app.post("/settings/qa", dependencies=[Depends(require_token)])
+def set_qa_setting(req: QaSettingRequest) -> dict:
+    from app.db.database import set_setting
+
+    value = req.answer_max_tokens.strip()
+    if value != "auto":
+        try:
+            n = int(value)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail="回答长度必须是 auto 或数字") from e
+        if not (256 <= n <= 1_000_000):
+            raise HTTPException(status_code=400, detail="回答长度超出合理范围")
+        value = str(n)
+    with _db_lock:
+        conn = db()
+        set_setting(conn, "answer_max_tokens", value)
+    return {"answer_max_tokens": value}
+
+
+class OcrSettingRequest(BaseModel):
+    enabled: bool
+
+
+@app.get("/settings/ocr", dependencies=[Depends(require_token)])
+def get_ocr_setting() -> dict:
+    from app.db.database import get_setting
+    from app.parsing import ocr_mac
+
+    conn = db()
+    return {
+        "enabled": get_setting(conn, "ocr_enabled", "1") == "1",
+        "available": ocr_mac.is_available(),
+    }
+
+
+@app.post("/settings/ocr", dependencies=[Depends(require_token)])
+def set_ocr_setting(req: OcrSettingRequest) -> dict:
+    from app.db.database import set_setting
+    from app.parsing import ocr_mac
+
+    with _db_lock:
+        conn = db()
+        set_setting(conn, "ocr_enabled", "1" if req.enabled else "0")
+    return {"enabled": req.enabled, "available": ocr_mac.is_available()}
+
+
+@app.post("/index/retry_scanned", dependencies=[Depends(require_token)])
+def retry_scanned() -> dict:
+    """把无文本（疑似扫描件）的 PDF 重新排队解析 —— 开启 OCR 后补课用。"""
+    with _db_lock:
+        conn = db()
+        rows = conn.execute(
+            """SELECT DISTINCT c.id FROM contents c
+               JOIN files f ON f.content_id = c.id
+               WHERE c.parse_state = 'no_text'
+                 AND lower(COALESCE(f.ext, '')) = '.pdf'"""
+        ).fetchall()
+        if rows:
+            marks = ",".join("?" * len(rows))
+            conn.execute(
+                f"UPDATE contents SET parse_state = 'pending' WHERE id IN ({marks})",
+                [r["id"] for r in rows],
+            )
+            conn.commit()
+    return {"requeued": len(rows)}
+
+
+@app.get("/reports/weekly", dependencies=[Depends(require_token)])
+def get_weekly_report(force: bool = False) -> dict:
+    """本周知识库摘要报告（幂等：同周复用，force=true 重新生成）。"""
+    from app.qa.report import weekly_report
+
+    with _db_lock:
+        conn = db()
+        return weekly_report(conn, force=force)
+
+
+@app.get("/integrations/ccswitch", dependencies=[Depends(require_token)])
+def ccswitch_providers() -> dict:
+    """读取 cc-switch 的供应商配置（只读），供模型设置一键导入。"""
+    from app.integrations.ccswitch import read_providers
+
+    return read_providers()
+
+
+class RebasePreservedRequest(BaseModel):
+    old_prefix: str
+    new_prefix: str
+
+
+@app.post("/system/rebase_preserved", dependencies=[Depends(require_token)])
+def rebase_preserved(req: RebasePreservedRequest) -> dict:
+    """数据目录迁移后，把库里记录的保全副本绝对路径改到新前缀。"""
+    old = req.old_prefix.rstrip("/") + "/"
+    new = req.new_prefix.rstrip("/") + "/"
+    if not req.old_prefix or old == new:
+        return {"preserved_updated": 0, "paths_updated": 0}
+    with _db_lock:
+        conn = db()
+        preserved = conn.execute(
+            "UPDATE files SET preserved_path = ? || substr(preserved_path, ?) "
+            "WHERE substr(preserved_path, 1, ?) = ?",
+            (new, len(old) + 1, len(old), old),
+        ).rowcount
+        paths = conn.execute(
+            "UPDATE files SET path = ? || substr(path, ?) "
+            "WHERE substr(path, 1, ?) = ?",
+            (new, len(old) + 1, len(old), old),
+        ).rowcount
+        conn.commit()
+    return {"preserved_updated": preserved, "paths_updated": paths}
+
+
+class EmbedBackfillRequest(BaseModel):
+    limit: int = 500
+
+
+@app.post("/index/embed_backfill", dependencies=[Depends(require_token)])
+def post_embed_backfill(req: EmbedBackfillRequest) -> dict:
+    """给存量分片补语义向量（模型晚于内容入库时）。
+
+    幂等分批：反复调用直到 remaining=0。模型或向量表不可用时
+    返回 available=false，调用方静默跳过即可。
+    """
+    from app.index.pipeline import embed_backfill
+
+    with _db_lock:
+        conn = db()
+        try:
+            result = embed_backfill(conn, limit=max(1, min(req.limit, 2000)))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    return result
 
 
 @app.get("/index/versions", dependencies=[Depends(require_token)])
@@ -1246,20 +1594,39 @@ def index_status() -> dict:
 
 @app.get("/stats", dependencies=[Depends(require_token)])
 def stats() -> dict:
+    """浏览视图的统计口径 = 可见文件（见 VISIBLE_FILES_COND）：
+    停用来源的文件保留在库里，但不再计入左栏与列表。"""
     conn = db()
-    files = conn.execute("SELECT count(*) c FROM files").fetchone()["c"]
+    visible_from = (
+        "FROM files f LEFT JOIN sources s ON f.source_id = s.id "
+        f"WHERE {VISIBLE_FILES_COND}"
+    )
+    files = conn.execute(f"SELECT count(*) c {visible_from}").fetchone()["c"]
     contents = conn.execute("SELECT count(*) c FROM contents").fetchone()["c"]
+    dup = conn.execute(
+        f"SELECT count(*) c, count(DISTINCT f.content_id) d {visible_from} "
+        "AND f.content_id IS NOT NULL"
+    ).fetchone()
     by_ext = conn.execute(
-        "SELECT ext, count(*) c FROM files GROUP BY ext ORDER BY c DESC LIMIT 10"
+        f"SELECT f.ext, count(*) c {visible_from} "
+        "GROUP BY f.ext ORDER BY c DESC LIMIT 10"
     ).fetchall()
     by_source = conn.execute(
         "SELECT s.name, count(*) c FROM files f JOIN sources s ON f.source_id = s.id "
-        "GROUP BY s.id ORDER BY c DESC"
+        "WHERE s.enabled = 1 GROUP BY s.id ORDER BY c DESC"
     ).fetchall()
+    now = time.time()
+    recent = conn.execute(
+        f"SELECT sum(CASE WHEN f.mtime >= ? THEN 1 ELSE 0 END) week, "
+        f"sum(CASE WHEN f.mtime >= ? THEN 1 ELSE 0 END) month {visible_from}",
+        (now - 7 * 86400, now - 30 * 86400),
+    ).fetchone()
     return {
         "files": files,
         "contents": contents,
-        "deduped": files - contents,
+        "deduped": dup["c"] - dup["d"],
+        "recent7": recent["week"] or 0,
+        "recent30": recent["month"] or 0,
         "by_ext": [dict(r) for r in by_ext],
         "by_source": [dict(r) for r in by_source],
         "database": _status_snapshot(),

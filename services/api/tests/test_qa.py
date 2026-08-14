@@ -32,6 +32,7 @@ class _FakeLLM(BaseHTTPRequestHandler):
         _FakeLLM.seen.append({
             "auth": self.headers.get("Authorization", ""),
             "messages": body.get("messages", []),
+            "max_tokens": body.get("max_tokens", "ABSENT"),
         })
         text = _FakeLLM.scripts.pop(0) if _FakeLLM.scripts else "空脚本"
         resp = json.dumps({
@@ -121,6 +122,7 @@ def test_not_configured(db):
 
 
 def test_model_probe_succeeds_without_exposing_key(fake_server):
+    """检测连接必须是真实补全：成功时带回模型的实际回复与耗时。"""
     llm.configure(fake_server, "probe-secret", "fake-model")
     _FakeLLM.scripts = ["OK"]
     try:
@@ -128,15 +130,15 @@ def test_model_probe_succeeds_without_exposing_key(fake_server):
     finally:
         llm.configure("", "", "")
 
-    assert result == {
-        "configured": True,
-        "endpoint": fake_server,
-        "model": "fake-model",
-        "has_key": True,
-        "available": True,
-        "code": "ready",
-        "message": "模型连接正常",
-    }
+    assert result["configured"] is True
+    assert result["endpoint"] == fake_server
+    assert result["model"] == "fake-model"
+    assert result["has_key"] is True
+    assert result["available"] is True
+    assert result["code"] == "ready"
+    assert result["reply"] == "OK"
+    assert result["latency_ms"] >= 0
+    assert "实际回复「OK」" in result["message"]
     assert "probe-secret" not in str(result)
 
 
@@ -237,10 +239,31 @@ def test_fabricated_citation_stripped(db, scripted):
     assert a.validation["fabricated_removed"] == 1
 
 
+def test_grounded_zero_citation_auto_attributed(db, scripted):
+    """模型不写 [Cn] 但答案句句有据 → 句级自动归因接住，不降级。"""
+    scripted("烧成温度大约一千二百度。呈色由还原气氛决定。")
+    a = ask(db, "汝窑的烧成温度是多少")
+    assert a.status == "answered"
+    assert a.validation["attempts"] == 1
+    assert a.validation["auto_cited"] == 2
+    assert "[C" in a.answer, "自动归因必须把引用标记注回答案"
+    assert a.citations and a.citations[0]["file_name"] == "瓷器.txt"
+
+
+def test_auto_cite_rejects_wrong_numbers(db, scripted):
+    """数字对不上证据 → 自动归因拒绝接受，仍走降级（防幻觉底线）。"""
+    scripted("汝窑的烧成温度在一千五百度上下。",
+             "烧成温度大概是一千五百度。")
+    a = ask(db, "汝窑的烧成温度是多少")
+    assert a.status == "fallback"
+    assert a.answer is None
+    assert "auto_cited" not in a.validation
+
+
 def test_zero_citation_regenerates(db, scripted):
-    """非拒答却零引用 → 判幻觉，重新生成一次（§12.4 ②）。"""
-    scripted("烧成温度大约一千二百度。",                 # 第一次：无引用
-             "烧成温度在一千二百度上下 [C1]。")           # 重试：带引用
+    """无引用且归因不上 → 判幻觉，重新生成一次（§12.4 ②）。"""
+    scripted("这个问题需要结合窑址考古资料综合判断，难以给出结论。",  # 第一次：无引用且无依据
+             "烧成温度在一千二百度上下 [C1]。")                       # 重试：带引用
     a = ask(db, "汝窑的烧成温度是多少")
     assert a.status == "answered"
     assert a.validation["attempts"] == 2
@@ -251,13 +274,104 @@ def test_zero_citation_regenerates(db, scripted):
 
 
 def test_persistent_zero_citation_falls_back(db, scripted):
-    """二次仍零引用 → 降级为检索结果列表，**不输出自然语言答案**（§12.4 ③）。"""
-    scripted("大概一千二百度吧。", "应该是一千二百度左右。")
+    """二次仍无引用且归因不上 → 降级为检索结果列表，**不输出自然语言答案**（§12.4 ③）。"""
+    scripted("需要更多窑址考古资料才能判断，无法直接回答。",
+             "建议查阅专业文献获取权威结论。")
     a = ask(db, "汝窑的烧成温度是多少")
     assert a.status == "fallback"
     assert a.answer is None, "降级后不该有自然语言答案"
     assert a.retrieved, "降级必须给出检索到的原文"
     assert a.validation.get("fallback") is True
+
+
+def test_answer_length_follows_model_by_default(db, scripted):
+    """默认「自动」：不传 max_tokens，输出上限由所选模型自己决定。"""
+    scripted("烧成温度在一千二百度上下 [C1]。")
+    a = ask(db, "汝窑的烧成温度是多少")
+    assert a.status == "answered"
+    assert _FakeLLM.seen[-1]["max_tokens"] == "ABSENT", \
+        "auto 档位不该在请求里携带 max_tokens"
+
+
+def test_answer_length_setting_applies(db, scripted):
+    """设置具体档位后，生成请求必须携带对应 max_tokens。"""
+    from app.db.database import set_setting
+
+    set_setting(db, "answer_max_tokens", "1000")
+    scripted("烧成温度在一千二百度上下 [C1]。")
+    a = ask(db, "汝窑的烧成温度是多少")
+    assert a.status == "answered"
+    assert _FakeLLM.seen[-1]["max_tokens"] == 1000
+
+
+def test_general_question_routes_past_kb(db, scripted):
+    """通用问题（寒暄/常识/写作）→ 模型带内声明通用路由，自然回答不拒答。"""
+    scripted("【通用】你好！我可以帮你检索本地文件、总结资料，也能回答一般问题。")
+    a = ask(db, "你好，你能做什么？")
+    assert a.status == "answered"
+    assert a.mode == "general"
+    assert a.citations == []
+    assert "你好" in a.answer
+    assert "【通用】" not in a.answer, "路由标记不能泄漏到答案里"
+    assert a.validation["mode"] == "general"
+
+
+def test_general_answer_strips_stray_citations(db, scripted):
+    """通用回答里模型误加的 [Cn] 要清掉 —— 通用模式没有可指向的证据。"""
+    scripted("【通用】Python 里用 open() 读取文件即可 [C1]。")
+    a = ask(db, "python 怎么读文件")
+    assert a.mode == "general"
+    assert "[C1]" not in a.answer
+
+
+def test_followup_condensed_with_history(db, scripted):
+    """多轮追问：先浓缩成独立问题再检索，生成仍用用户原话。"""
+    scripted("汝窑天青釉的烧成温度是多少",                 # 第一次调用：浓缩
+             "烧成温度在一千二百度上下 [C1]。")             # 第二次调用：作答
+    a = ask(db, "那温度大概是多少？",
+            history=[{"q": "汝窑天青釉是什么", "a": "一种宋代青瓷釉色"}])
+    assert a.status == "answered"
+    assert a.validation["condensed_query"] == "汝窑天青釉的烧成温度是多少"
+    assert a.citations and a.citations[0]["file_name"] == "瓷器.txt"
+    # 浓缩调用要带上对话历史；主调用的问题保持用户原话
+    condense_msgs = _FakeLLM.seen[0]["messages"]
+    assert any("对话历史" in m["content"] for m in condense_msgs)
+    main_msgs = _FakeLLM.seen[1]["messages"]
+    assert any("那温度大概是多少" in m["content"] for m in main_msgs)
+
+
+def test_no_history_skips_condense(db, scripted):
+    """没有历史时不多打浓缩调用 —— 首问零额外开销。"""
+    scripted("烧成温度在一千二百度上下 [C1]。")
+    a = ask(db, "汝窑的烧成温度是多少", history=[])
+    assert a.status == "answered"
+    assert "condensed_query" not in a.validation
+    assert len(_FakeLLM.seen) == 1
+
+
+def test_refusal_triggers_retrieval_rewrite(db, scripted):
+    """模型拒答后：换检索关键词重试一次，命中即正常作答（有界一轮）。"""
+    scripted(REFUSAL,                                     # 第一轮生成：拒答
+             "汝窑 天青釉 烧成温度",                        # 检索改写
+             "烧成温度在一千二百度上下 [C1]。")             # 第二轮生成：作答
+    a = ask(db, "那种宋代名瓷要烧到多热")
+    assert a.status == "answered"
+    assert a.validation["retrieval_retry"] == "汝窑 天青釉 烧成温度"
+    assert a.citations
+
+
+def test_llm_error_degrades_to_snippets(db, scripted, monkeypatch):
+    """模型调用失败（限流/断网/中转不兼容）不炸接口 → 降级为片段并说明原因。"""
+    def boom(*_args, **_kwargs):
+        raise llm.LLMHTTPError(429)
+
+    monkeypatch.setattr(llm, "chat", boom)
+    a = ask(db, "汝窑的烧成温度是多少")
+    assert a.status == "fallback"
+    assert a.answer is None
+    assert a.retrieved, "降级必须带出检索到的原文片段"
+    assert "模型调用失败" in a.hedge
+    assert a.validation["error"]
 
 
 def test_refusal_passthrough(db, scripted):
@@ -375,3 +489,22 @@ def test_llm_classify_garbage_json(db, scripted):
     r = llm_classify_unclassified(db)
     assert r["classified"] == 0
     assert "error" in r
+
+
+def test_validate_handles_three_digit_citation_tags():
+    """证据超过 99 条时标签是三位数：[C106] 必须被识别与映射，
+    库外的三位数标签必须被剔除（此前两位正则会让两者都原样漏出）。"""
+    from app.qa.answer import ContextPiece, validate
+
+    def piece(tag):
+        return ContextPiece(tag=tag, chunk_id=1, content_id=1, file_id=1,
+                            file_name="f.txt", file_path="/f.txt", page=None,
+                            section_path="", text="正文", snippet="正文")
+
+    cleaned, record = validate(
+        "第一句 [C1]。第二句 [C106]。第三句 [C999]。",
+        [piece("C1"), piece("C106")],
+    )
+    assert "[C106]" in cleaned
+    assert "[C999]" not in cleaned
+    assert record["fabricated_removed"] == 1

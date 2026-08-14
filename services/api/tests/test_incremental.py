@@ -8,18 +8,14 @@ from __future__ import annotations
 
 import time
 
+import numpy as np
 import pytest
 
-pytest.importorskip("model2vec")
-
-from app.db.database import connect, init_db          # noqa: E402
-from app.index import embedding as emb                 # noqa: E402
-from app.index import vector as vec                    # noqa: E402
-from app.index.pipeline import index_pending           # noqa: E402
-from app.watcher.scanner import scan_source            # noqa: E402
-
-if not emb.is_available():
-    pytest.skip("嵌入模型未安装", allow_module_level=True)
+from app.db.database import connect, init_db
+from app.index import embedding as emb
+from app.index import vector as vec
+from app.index.pipeline import index_pending
+from app.watcher.scanner import scan_source
 
 
 @pytest.fixture
@@ -41,17 +37,28 @@ def source(db, tmp_path):
     return 1
 
 
+def _fake_encode(texts: list[str]) -> np.ndarray:
+    """按文本内容决定论生成归一化向量 —— 复用逻辑只关心「谁被编码」。"""
+    out = np.zeros((len(texts), emb.DIM), dtype=np.float32)
+    for i, t in enumerate(texts):
+        rng = np.random.default_rng(abs(hash(t)) % (2 ** 32))
+        v = rng.standard_normal(emb.DIM).astype(np.float32)
+        out[i] = v / np.linalg.norm(v)
+    return out
+
+
 @pytest.fixture
 def encode_log(monkeypatch):
-    """记录每次真实编码收到的文本数。"""
+    """伪造 Ollama 可用，并记录每次编码收到的文本数。"""
     calls: list[int] = []
-    original = emb.Embedder.encode
 
     def spy(self, texts):
         calls.append(len(texts))
-        return original(self, texts)
+        return _fake_encode(texts)
 
+    monkeypatch.setattr(emb, "_probe", lambda force=False: "bge-m3:latest")
     monkeypatch.setattr(emb.Embedder, "encode", spy)
+    monkeypatch.setattr(emb, "_instance", None)
     return calls
 
 
@@ -130,7 +137,7 @@ def test_same_paragraph_across_files_reused(db, source, tmp_path, encode_log):
     assert sum(encode_log) == 1, f"共享段落未复用（编码了 {sum(encode_log)} 条）"
 
 
-def test_search_still_correct_after_edit(db, source, tmp_path):
+def test_search_still_correct_after_edit(db, source, tmp_path, encode_log):
     """编辑后：旧分片彻底消失，新内容可搜。
 
     注意向量路**按设计**永远返回最近邻（哪怕不相关 —— 相关性把关在

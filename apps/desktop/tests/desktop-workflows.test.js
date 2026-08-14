@@ -49,11 +49,13 @@ test('book search, indexing drain, and source preview stay wired end to end', ()
 
 test('file list, evidence, and knowledge answer columns coexist without legacy modes', () => {
   const layout = sourceBetween('<div class="content-layout">', '</div>\n    </div>\n  </div>');
+  assert.match(layout, /<section class="nav-panel"[^>]*aria-label="文件库导航"/);
   assert.match(layout, /<section class="results-panel"[^>]*aria-label="文件管理"/);
-  assert.match(layout, /<section class="evidence-panel"[^>]*aria-label="文件详情"/);
   assert.match(layout, /<aside class="qa-panel"[^>]*aria-label="知识问答"/);
+  assert.match(layout, /id="nav"/);
   assert.match(layout, /id="rows"/);
   assert.match(layout, /id="evidence"/);
+  assert.match(layout, /id="backToList"/);
   assert.match(layout, /id="answerRows"/);
 
   assert.doesNotMatch(renderer, /\b(?:activeView|setActiveView|workbenchNav|libraryNav)\b/);
@@ -74,7 +76,8 @@ test('knowledge questions render only in the answer column', async () => {
   const context = {
     api: async (requestPath, options) => {
       assert.equal(requestPath, '/ask');
-      assert.deepEqual(JSON.parse(options.body), { question: '什么是银行家算法？', book_id: null });
+      assert.deepEqual(JSON.parse(options.body),
+        { question: '什么是银行家算法？', book_id: null, history: [] });
       return { status: 'answered', answer: '用于避免死锁 [C1]', citations: [] };
     },
     document: {
@@ -103,11 +106,22 @@ test('knowledge questions render only in the answer column', async () => {
   assert.equal(filesRows.innerHTML, 'file list stays visible');
 });
 
-test('clicking a file row selects it and updates the evidence column', async () => {
-  const evidenceSource = sourceBetween('function clearEvidence(', 'async function api(');
+test('clicking a file row switches the middle column to the detail page', async () => {
+  // 从"中栏两页切换"注释块开始截取，才能带上 showListPage/showDetailPage 与文件查看器
+  const evidenceSource = sourceBetween('let listTitle', 'async function api(');
   const rowsSource = sourceBetween('function renderRows(', '/* 右键归类');
   const escapingSource = sourceBetween('function esc(', 'function highlight(');
-  const evidence = { innerHTML: '' };
+  const evidence = { innerHTML: '', style: {}, onscroll: null };
+  const readerBody = {
+    html: '',
+    innerHTML: '',
+    insertAdjacentHTML(_position, chunk) { this.html += chunk; },
+  };
+  const readerFoot = { textContent: '' };
+  const fileSearch = { style: {} };
+  const backButton = { style: {} };
+  const countEl = { style: {}, textContent: '' };
+  const titleEl = { textContent: '' };
   const selectedClasses = new Set();
   const row = {
     dataset: {},
@@ -118,6 +132,7 @@ test('clicking a file row selects it and updates the evidence column', async () 
   };
   const rows = {
     innerHTML: '',
+    style: {},
     querySelectorAll(selector) {
       if (selector === '.row') return [row];
       if (selector === '.row.on') return [];
@@ -129,18 +144,32 @@ test('clicking a file row selects it and updates the evidence column', async () 
     fmtSize: () => '',
     fmtDate: () => '',
     api: async (requestPath) => {
-      assert.equal(requestPath, '/files/7/detail');
-      return {
-        file: { id: 7, name: '资源分配.md', path: '/docs/resource.md', ext: '.md' },
-        document: {},
-        sections: [{ section_path: '第一节', text: '正文片段' }],
-        truncated: false,
-      };
+      if (requestPath === '/files/7/detail') {
+        return {
+          file: { id: 7, name: '资源分配.md', path: '/docs/resource.md', ext: '.md' },
+          document: {},
+          sections: [{ section_path: '第一节', text: '详情兜底片段' }],
+          truncated: false,
+        };
+      }
+      if (requestPath.startsWith('/files/7/content')) {
+        return {
+          file_id: 7, total: 1, offset: 0, has_more: false,
+          sections: [{ id: 1, section_path: '第一节', text: '正文片段' }],
+        };
+      }
+      throw new Error(`unexpected API call: ${requestPath}`);
     },
     document: {
       getElementById(id) {
         if (id === 'rows') return rows;
         if (id === 'evidence') return evidence;
+        if (id === 'readerBody') return readerBody;
+        if (id === 'readerFoot') return readerFoot;
+        if (id === 'fileSearch') return fileSearch;
+        if (id === 'backToList') return backButton;
+        if (id === 'count') return countEl;
+        if (id === 'resultsTitle') return titleEl;
         return null;
       },
     },
@@ -151,6 +180,7 @@ test('clicking a file row selects it and updates the evidence column', async () 
   const result = await vm.runInNewContext(`
     let files = [{ id: 7, name: '资源分配.md', path: '/docs/resource.md', ext: '.md', state: 'ready' }];
     let filesTotal = 1, selectedEvidence = null, detailVersion = 0;
+    let currentQuery = '', activeDuplicate = false, activeRecent = null;
     ${escapingSource}
     ${evidenceSource}
     ${rowsSource}
@@ -159,14 +189,23 @@ test('clicking a file row selects it and updates the evidence column', async () 
     (async () => {
       rowClick();
       await new Promise(function (resolve) { setTimeout(resolve, 0); });
+      await new Promise(function (resolve) { setTimeout(resolve, 0); });
       return { evidenceHtml: document.getElementById('evidence').innerHTML };
     })()
   `, context);
 
   assert.match(result.evidenceHtml, /资源分配\.md/);
   assert.match(result.evidenceHtml, /\/docs\/resource\.md/);
-  assert.match(result.evidenceHtml, /正文片段/);
+  // 全文来自 /content 分页接口，渲染进查看器主体
+  assert.match(readerBody.html, /正文片段/);
+  assert.match(readerFoot.textContent, /全文完/);
   assert.equal(selectedClasses.has('on'), true);
+  // 页面切换：列表隐藏、详情显示、返回键出现、标题换成文件名
+  assert.equal(rows.style.display, 'none');
+  assert.equal(evidence.style.display, '');
+  assert.equal(backButton.style.display, '');
+  assert.equal(fileSearch.style.display, 'none');
+  assert.equal(titleEl.textContent, '资源分配.md');
 });
 
 test('boot loads the default file list when the library has files', async () => {
@@ -181,6 +220,7 @@ test('boot loads the default file list when the library has files', async () => 
       calls.push(`api:${requestPath}`);
       if (requestPath === '/stats') return { files: 3 };
       if (requestPath === '/settings/llm') return { configured: false };
+      if (requestPath === '/reports/weekly') return { generated: false };
       throw new Error(`unexpected API call: ${requestPath}`);
     },
     refreshCats: async () => calls.push('refreshCats'),
@@ -190,6 +230,8 @@ test('boot loads the default file list when the library has files', async () => 
     load: async (value) => calls.push(`load:${value}`),
     executeQuery: async () => calls.push('executeQuery'),
     renderKnowledgeEmpty: () => calls.push('renderKnowledgeEmpty'),
+    runAutoExtClassify: async () => calls.push('runAutoExtClassify'),
+    scheduleModelAutoCheck: () => calls.push('scheduleModelAutoCheck'),
     document: {
       getElementById(id) {
         if (id === 'setup') return setup;
@@ -208,6 +250,8 @@ test('boot loads the default file list when the library has files', async () => 
   assert.equal(result.hasFiles, true);
   assert.equal(setup.style.display, 'none');
   assert.equal(calls.includes('load:'), true);
+  assert.equal(calls.includes('runAutoExtClassify'), true);
+  assert.equal(calls.includes('scheduleModelAutoCheck'), true);
   assert.equal(calls.includes('executeQuery'), false);
   assert.equal(calls.includes('renderKnowledgeEmpty'), false);
 });
@@ -229,12 +273,14 @@ test('load sends the active scope and appends the next page', async () => {
     },
     document: { getElementById: () => count },
     renderRows: () => { renders += 1; },
+    setListTitle: () => {},
   };
 
   const result = await vm.runInNewContext(`
     let files = [], filesTotal = 0, currentQuery = '', loadVersion = 0, searchVersion = 0;
     let activeCategory = null, activeBook = 9, activeSource = '微信 & QQ';
-    let activeExt = '.pdf', activeDuplicate = true;
+    let activeExt = '.pdf', activeDir = '/Users/demo/Documents/报告', activeDuplicate = true;
+    let activeRecent = null;
     const PAGE_SIZE = 300;
     ${safeNumberSource}
     ${loadSource}
@@ -255,6 +301,7 @@ test('load sends the active scope and appends the next page', async () => {
   const second = new URL(`http://local${requests[1]}`).searchParams;
   assert.equal(first.get('source'), '微信 & QQ');
   assert.equal(first.get('ext'), '.pdf');
+  assert.equal(first.get('dir'), '/Users/demo/Documents/报告');
   assert.equal(first.get('duplicate'), 'true');
   assert.equal(first.get('book_id'), '9');
   assert.equal(first.get('q'), '合同');

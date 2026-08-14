@@ -24,6 +24,41 @@ def db():
     conn.close()
 
 
+def test_chat_export_exts_are_fulltext():
+    """聊天记录导出（HTML）与 CSV 走全文解析，不再降级为仅元数据。"""
+    assert scanner.classify_ext(".html") == "fulltext"
+    assert scanner.classify_ext(".htm") == "fulltext"
+    assert scanner.classify_ext(".csv") == "fulltext"
+    # 真代码类仍只登记元数据
+    assert scanner.classify_ext(".css") == "metadata"
+    assert scanner.classify_ext(".py") == "metadata"
+
+
+def test_parse_html_extracts_chat_text():
+    """HTML 解析：抽正文、丢 script/style、<br> 断行、保留标题。"""
+    import tempfile
+    from pathlib import Path
+
+    from app.parsing.parsers import parse_html
+
+    html = (
+        "<html><head><title>与张三的聊天记录</title>"
+        "<style>.x{color:red}</style></head><body>"
+        "<div class='msg'>张三：封阳台报价 680 元每平米</div>"
+        "<div class='msg'>我：好的<br>那验收呢</div>"
+        "<script>track()</script></body></html>"
+    )
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "chat.html"
+        p.write_text(html, encoding="utf-8")
+        doc = parse_html(p)
+    text = "\n".join(b.text for b in doc.blocks)
+    assert "封阳台报价 680 元每平米" in text
+    assert "那验收呢" in text
+    assert "track()" not in text and "color:red" not in text
+    assert doc.title == "与张三的聊天记录"
+
+
 @pytest.fixture
 def source(db, tmp_path):
     db.execute(

@@ -55,23 +55,234 @@ def test_list_sources_reports_live_state(client, tmp_path):
     assert s["file_count"] == 3
 
 
-def test_disable_keeps_files(client, tmp_path):
-    """停用只摘监听，已收录的文件必须留着。"""
+def test_disable_hides_files_but_keeps_records(client, tmp_path):
+    """停用 = 摘监听 + 从浏览视图隐藏；记录保留，重新启用即恢复。
+
+    用户在设置里停用"桌面/文稿"后，左栏与列表不应再出现它们的文件；
+    但库里的记录与索引都留着 —— 重新启用无需重扫。
+    """
     d = tmp_path / "src"
     _make_docs(d)
     sid = client.post("/sources/enable", headers=H,
                       json={"name": "S", "path": str(d)}).json()["source_id"]
 
-    before = client.get("/stats", headers=H).json()["files"]
+    before = client.get("/stats", headers=H).json()
+    assert before["files"] == 3
+    assert [s["name"] for s in before["by_source"]] == ["S"]
+
     r = client.post("/sources/disable", headers=H, json={"source_id": sid})
     assert r.status_code == 200
 
-    after = client.get("/stats", headers=H).json()["files"]
-    assert after == before, "停用不该删除已收录的文件"
+    st = client.get("/stats", headers=H).json()
+    assert st["files"] == 0, "停用来源的文件不该再计入统计"
+    assert st["by_source"] == []
+    assert client.get("/files", headers=H).json()["total"] == 0
 
     s = client.get("/sources", headers=H).json()["sources"][0]
     assert s["enabled"] is False
     assert s["watching"] is False
+    assert s["file_count"] == 3, "记录必须保留，停用不等于删除"
+
+    # 重新启用：全部回来，无需重扫
+    client.post("/sources/enable", headers=H, json={"name": "S", "path": str(d)})
+    assert client.get("/stats", headers=H).json()["files"] == 3
+    assert client.get("/files", headers=H).json()["total"] == 3
+
+
+def test_missing_files_hidden_unless_preserved(client, tmp_path):
+    """磁盘上消失的文件从视图隐藏；有保全副本的仍可见（内容还在）；
+    文件回到原位后重扫自动恢复可见。重新 enable = 立即重扫。"""
+    import sqlite3
+
+    d = tmp_path / "src"
+    paths = _make_docs(d)   # 文档0.md 文档1.md 文档2.md
+    enable = {"name": "S", "path": str(d)}
+    client.post("/sources/enable", headers=H, json=enable)
+    assert client.get("/files", headers=H).json()["total"] == 3
+
+    # 文档0 消失（无保全副本）→ 从列表与统计隐藏
+    kept = paths[0].read_bytes()
+    paths[0].unlink()
+    client.post("/sources/enable", headers=H, json=enable)
+    files = client.get("/files", headers=H).json()
+    assert files["total"] == 2, "无保全副本的消失文件应从列表隐藏"
+    assert all(f["name"] != "文档0.md" for f in files["files"])
+    assert client.get("/stats", headers=H).json()["files"] == 2
+
+    # 文档1 消失但有保全副本 → 继续显示
+    backup = tmp_path / "preserved" / "文档1.md"
+    backup.parent.mkdir(parents=True)
+    backup.write_bytes(paths[1].read_bytes())
+    raw = sqlite3.connect(tmp_path / "t.db", timeout=5)
+    raw.execute("UPDATE files SET preserved_path = ? WHERE name = '文档1.md'",
+                (str(backup),))
+    raw.commit()
+    raw.close()
+    paths[1].unlink()
+    client.post("/sources/enable", headers=H, json=enable)
+    names = [f["name"] for f in client.get("/files", headers=H).json()["files"]]
+    assert "文档1.md" in names, "有保全副本的消失文件必须继续可见"
+    assert "文档0.md" not in names
+
+    # 文档0 回到原位 → 重扫后自动恢复可见
+    paths[0].write_bytes(kept)
+    client.post("/sources/enable", headers=H, json=enable)
+    names = [f["name"] for f in client.get("/files", headers=H).json()["files"]]
+    assert "文档0.md" in names, "文件回归后应自动恢复可见"
+
+
+def test_files_tree_lists_dirs_and_files(client, tmp_path):
+    """文件树：根 = 已启用来源；子层给出下级目录（含计数）与文件。"""
+    d = tmp_path / "src"
+    _make_docs(d)                       # 根下 3 个 md
+    _make_docs(d / "报告" / "2026", 2)   # 嵌套目录 2 个
+    sid = client.post("/sources/enable", headers=H,
+                      json={"name": "S", "path": str(d)}).json()["source_id"]
+
+    roots = client.get("/files/tree", headers=H).json()["roots"]
+    assert [r["name"] for r in roots] == ["S"]
+    assert roots[0]["count"] == 5
+
+    level = client.get("/files/tree", headers=H,
+                       params={"dir": str(d)}).json()
+    assert [x["name"] for x in level["dirs"]] == ["报告"]
+    assert level["dirs"][0]["count"] == 2
+    assert len(level["files"]) == 3
+
+    sub = client.get("/files/tree", headers=H,
+                     params={"dir": str(d / "报告" / "2026")}).json()
+    assert sub["dirs"] == []
+    assert len(sub["files"]) == 2
+
+    # dir 过滤下的文件列表（点目录名 → 中栏递归列出）
+    listed = client.get("/files", headers=H,
+                        params={"dir": str(d / "报告")}).json()
+    assert listed["total"] == 2
+
+    # 停用后树根消失
+    client.post("/sources/disable", headers=H, json={"source_id": sid})
+    assert client.get("/files/tree", headers=H).json()["roots"] == []
+
+
+def test_file_content_pagination(client, tmp_path):
+    """文件查看器接口：全文分页、顺序稳定、不截断正文。"""
+    import os
+
+    d = tmp_path / "src"
+    d.mkdir()
+    body = "\n\n".join(f"# 第{i}节\n\n" + f"第{i}节的内容。" * 120 for i in range(6))
+    (d / "长文.md").write_text(body, encoding="utf-8")
+    client.post("/sources/enable", headers=H, json={"name": "S", "path": str(d)})
+    client.post("/index/run", headers=H, json={"limit": 50})
+
+    fid = client.get("/files", headers=H).json()["files"][0]["id"]
+    first = client.get(f"/files/{fid}/content", headers=H,
+                       params={"limit": 2}).json()
+    assert first["total"] >= 4
+    assert len(first["sections"]) == 2
+    assert first["has_more"] is True
+    assert all(s["text"] for s in first["sections"])
+
+    rest = client.get(f"/files/{fid}/content", headers=H,
+                      params={"offset": 2, "limit": 200}).json()
+    assert rest["has_more"] is False
+    assert 2 + len(rest["sections"]) == first["total"]
+
+    # 未知文件 404；无内容文件返回空但不报错
+    assert client.get("/files/99999/content", headers=H).status_code == 404
+    _ = os  # noqa: 保留 import 以便后续用例扩展
+
+
+def test_files_remove_clears_records_but_not_disk(client, tmp_path):
+    """按文件移除：删记录与索引、返回磁盘路径，**绝不动磁盘文件**（H2）。"""
+    d = tmp_path / "src"
+    paths = _make_docs(d)
+    client.post("/sources/enable", headers=H, json={"name": "S", "path": str(d)})
+    client.post("/index/run", headers=H, json={"limit": 50})
+    chunks_before = client.get("/index/status", headers=H).json()["chunks"]
+    assert chunks_before > 0
+
+    rows = client.get("/files", headers=H).json()["files"]
+    target = next(f for f in rows if f["name"] == "文档0.md")
+
+    r = client.post("/files/remove", headers=H,
+                    json={"file_ids": [target["id"]]}).json()
+    assert r["removed"] == 1
+    assert r["contents_removed"] == 1        # 内容无人共享 → 一并清理
+    assert r["paths"] == [target["path"]]
+
+    assert client.get("/files", headers=H).json()["total"] == 2
+    assert client.get("/index/status", headers=H).json()["chunks"] < chunks_before
+    for p in paths:
+        assert p.exists(), "磁盘文件被动了 —— 违反 H2"
+
+    # 幂等：再删同一批 id 不报错
+    again = client.post("/files/remove", headers=H,
+                        json={"file_ids": [target["id"]]}).json()
+    assert again["removed"] == 0
+
+
+def test_files_remove_keeps_shared_content(client, tmp_path):
+    """两个文件共享同一份内容时，删其一必须保留 chunks —— 另一个还要能搜。"""
+    d = tmp_path / "src"
+    d.mkdir()
+    (d / "正本.md").write_text("景德镇青花瓷钴料配比记录。" * 8, encoding="utf-8")
+    (d / "副本.md").write_text("景德镇青花瓷钴料配比记录。" * 8, encoding="utf-8")
+    client.post("/sources/enable", headers=H, json={"name": "S", "path": str(d)})
+    client.post("/index/run", headers=H, json={"limit": 50})
+
+    rows = client.get("/files", headers=H).json()["files"]
+    dup = next(f for f in rows if f["name"] == "副本.md")
+    r = client.post("/files/remove", headers=H,
+                    json={"file_ids": [dup["id"]]}).json()
+    assert r["removed"] == 1
+    assert r["contents_removed"] == 0, "内容仍被正本引用，不能清"
+    assert client.get("/index/status", headers=H).json()["chunks"] > 0
+
+
+def test_rebase_preserved_rewrites_prefixes(client, tmp_path):
+    """数据目录迁移后，库里的保全副本绝对路径要整体换前缀。"""
+    d = tmp_path / "src"
+    _make_docs(d, 1)
+    client.post("/sources/enable", headers=H, json={"name": "S", "path": str(d)})
+
+    import os as _os
+    import sqlite3 as _sq
+    conn = _sq.connect(_os.environ["INKTABLE_DB"])
+    conn.execute(
+        "UPDATE files SET preserved_path = '/old/Inktable/preserved/S/文档0.md'"
+    )
+    conn.commit()
+    conn.close()
+
+    r = client.post("/system/rebase_preserved", headers=H, json={
+        "old_prefix": "/old/Inktable", "new_prefix": "/new/place/Inktable",
+    }).json()
+    assert r["preserved_updated"] == 1
+
+    f = client.get("/files", headers=H).json()["files"][0]
+    assert f["preserved_path"] == "/new/place/Inktable/preserved/S/文档0.md"
+
+
+def test_files_group_by_ext_puts_same_type_together(client, tmp_path):
+    """group=ext：同扩展名连续排列，大组在前，组内新文件在上。"""
+    import os
+    import time as _t
+
+    d = tmp_path / "src"
+    d.mkdir()
+    now = _t.time()
+    for name, age in (("旧.pdf", 300), ("新.pdf", 10), ("单独.txt", 100)):
+        p = d / name
+        p.write_text("内容", encoding="utf-8")
+        os.utime(p, (now - age, now - age))
+    client.post("/sources/enable", headers=H, json={"name": "S", "path": str(d)})
+
+    rows = client.get("/files", headers=H,
+                      params={"group": "ext", "limit": 100}).json()["files"]
+    names = [f["name"] for f in rows]
+    # pdf 组（2 个）在 txt 组（1 个）之前；组内按 mtime 新→旧
+    assert names == ["新.pdf", "旧.pdf", "单独.txt"]
 
 
 def test_remove_clears_index_but_not_disk(client, tmp_path):

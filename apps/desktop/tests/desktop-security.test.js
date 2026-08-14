@@ -35,8 +35,11 @@ test('renderer content security policy forbids eval and limits API connections',
 test('API-controlled renderer fields are escaped before HTML insertion', () => {
   assert.match(renderer, /'<span class="fname">' \+ esc\(f\.name\)/);
   assert.match(renderer, /esc\(f\.source_name \|\| ''\)/);
-  assert.match(renderer, /data-src="' \+ esc\(s\.name\)/);
-  assert.match(renderer, /'<span class="label">' \+ esc\(s\.name\)/);
+  // 文件树节点：目录路径与文件名都来自库内登记数据，必须编码后进 DOM
+  assert.match(renderer, /data-dir="' \+ encodedData\(dirPath\)/);
+  assert.match(renderer, /data-fname="' \+ encodedData\(f\.name\)/);
+  assert.match(renderer, /'<span class="label">' \+ esc\(name\)/);
+  assert.match(renderer, /'<span class="label">' \+ esc\(f\.name\)/);
   assert.match(renderer, /data-path="' \+ encodedData\(openPath\)/);
   assert.doesNotMatch(renderer, /'<span class="fname">' \+ f\.name/);
   assert.doesNotMatch(renderer, /\+ \(f\.source_name \|\| ''\) \+/);

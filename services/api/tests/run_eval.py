@@ -24,9 +24,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.db.database import connect, init_db  # noqa: E402
-from app.retrieval.pipeline import run as run_retrieval  # noqa: E402
-from tests.evalset import ALL_CASES, ANSWERABLE, UNANSWERABLE, summary  # noqa: E402
+from app.db.database import connect, init_db
+from app.retrieval.pipeline import run as run_retrieval
+from tests.evalset import ALL_CASES, summary
 
 TOP_K = 5
 DEEP_K = 50
