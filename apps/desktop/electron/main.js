@@ -510,11 +510,11 @@ function setupGlobalEntry() {
       .resize({ width: 16, height: 16 });
     icon.setTemplateImage(true);
     tray = new Tray(icon);
-    tray.setToolTip('Inktable — 个人知识库');
+    tray.setToolTip('墨桌 — 个人知识库');
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: accelerator ? `打开搜索（${accelerator}）` : '打开搜索', click: summonSearch },
       { type: 'separator' },
-      { label: '退出 Inktable', click: () => app.quit() },
+      { label: '退出 墨桌', click: () => app.quit() },
     ]));
     tray.on('click', summonSearch);
   } catch (err) {
@@ -529,7 +529,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   if (process.platform === 'darwin' && !app.isPackaged) {
     try {
       app.dock.setIcon(nativeImage.createFromPath(
-        path.join(__dirname, '..', 'build', 'icon-1024.png')));
+        path.join(__dirname, '..', 'assets', 'icon-1024.png')));
     } catch { /* 图标缺失不影响启动 */ }
   }
   publishSidecarStatus({ state: 'starting' });

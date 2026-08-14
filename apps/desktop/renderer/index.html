@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src http://127.0.0.1:*; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'" />
-<title>Inktable</title>
+<title>墨桌</title>
 <style>
   /* 结构性 reset —— 全部视觉规则集中在 workbench.css，避免两处定义漂移 */
   * { box-sizing: border-box; }
@@ -15,12 +15,9 @@
 <body>
   <div class="main">
     <div class="topbar">
-      <div class="topbar-brand" aria-label="Inktable 个人知识库">
-        <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24">
-          <path d="M12 2.6 C12 2.6 5.6 10.3 5.6 14.9 a6.4 6.4 0 0 0 12.8 0 C18.4 10.3 12 2.6 12 2.6 Z" fill="currentColor"/>
-          <path d="M9.1 15.2 a3.1 3.1 0 0 0 2.5 3" stroke="rgba(255,255,255,.75)" stroke-width="1.4" fill="none" stroke-linecap="round"/>
-        </svg></span>
-        <div class="brand-copy"><div class="brand-name">Inktable</div><div class="brand-subtitle">个人知识库</div></div>
+      <div class="topbar-brand" aria-label="墨桌 本地知识库">
+        <span class="brand-mark" aria-hidden="true"><img src="brand-icon.svg" alt="" /></span>
+        <div class="brand-copy"><div class="brand-name">墨桌</div><div class="brand-subtitle">本地知识库</div></div>
       </div>
       <div class="view-title"><span class="scope-name" id="topbarScope">全部内容</span></div>
       <div class="topbar-spacer"></div>
@@ -133,8 +130,8 @@ function initSplitters() {
   var qaWidth = 330;
   try {
     var saved = JSON.parse(localStorage.getItem('layoutCols') || '{}') || {};
-    if (saved.nav) navWidth = Math.max(160, Math.min(360, saved.nav));
-    if (saved.qa) qaWidth = Math.max(260, Math.min(520, saved.qa));
+    if (saved.nav) navWidth = Math.max(160, Math.min(320, saved.nav));
+    if (saved.qa) qaWidth = Math.max(280, Math.min(480, saved.qa));
   } catch (e) {}
 
   function updateCols() {
@@ -151,9 +148,9 @@ function initSplitters() {
 
     function onMove(ev) {
       if (isNav) {
-        navWidth = Math.max(160, Math.min(360, startNav + (ev.clientX - startX)));
+        navWidth = Math.max(160, Math.min(320, startNav + (ev.clientX - startX)));
       } else {
-        qaWidth = Math.max(260, Math.min(520, startQa - (ev.clientX - startX)));
+        qaWidth = Math.max(280, Math.min(480, startQa - (ev.clientX - startX)));
       }
       updateCols();
     }
@@ -559,10 +556,37 @@ function folderSvg(open) {
     '</svg>';
 }
 
-function fileSvg() {
-  return '<svg class="ico-svg" viewBox="0 0 16 16" aria-hidden="true">' +
+function fileSvg(ext) {
+  var kind = String(ext || '').replace(/^\./, '').toLowerCase();
+  var tone = 'file';
+  if (kind === 'pdf') tone = 'pdf';
+  else if (kind === 'doc' || kind === 'docx') tone = 'doc';
+  else if (kind === 'md' || kind === 'markdown') tone = 'md';
+  else if (kind === 'xls' || kind === 'xlsx' || kind === 'csv') tone = 'xls';
+  else if (kind === 'ppt' || kind === 'pptx') tone = 'ppt';
+  return '<svg class="ico-svg ico-' + tone + '" viewBox="0 0 16 16" aria-hidden="true">' +
     '<path d="M4 1.6h5.2L13 5.4v8.4c0 .7-.5 1.2-1.2 1.2H4c-.7 0-1.2-.5-1.2-1.2V2.8c0-.7.5-1.2 1.2-1.2z" fill="currentColor" opacity=".28"/>' +
     '<path d="M9.2 1.6 13 5.4H9.9c-.4 0-.7-.3-.7-.7z" fill="currentColor" opacity=".6"/></svg>';
+}
+
+function warnSvg() {
+  return '<svg class="inline-ico" viewBox="0 0 16 16" aria-hidden="true">' +
+    '<path d="M8 1.6 14.4 13H1.6L8 1.6z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>' +
+    '<path d="M8 6.2v3.2M8 11.4h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+}
+
+function searchEmptySvg() {
+  return '<svg viewBox="0 0 24 24"><path d="M10 18a8 8 0 100-16 8 8 0 000 16zm11 3l-6-6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>';
+}
+
+function arrowSvg() {
+  return '<svg class="inline-ico" viewBox="0 0 16 16" aria-hidden="true">' +
+    '<path d="M3 8h10M9 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+}
+
+function plusSvg() {
+  return '<svg class="inline-ico" viewBox="0 0 16 16" aria-hidden="true">' +
+    '<path d="M8 3.2v9.6M3.2 8h9.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
 }
 
 /* 文件树：树根 = 已启用来源，子层按需取（GET /files/tree），
@@ -632,11 +656,13 @@ function treeLevelHtml(dirPath, depth) {
     return treeDirRow(d.name, d.path, d.count, depth);
   }).join('');
   h += kids.files.map(function (f) {
+    var kind = String(f.ext || '').replace(/^\./, '');
+    if (!kind && f.name && f.name.indexOf('.') > 0) kind = String(f.name).split('.').pop();
     return '<div class="nav-item tree-file" data-fid="' + esc(f.id) +
       '" data-fname="' + encodedData(f.name) + '" title="' + esc(f.name) +
       '" style="padding-left:' + (6 + depth * 13) + 'px">' +
       '<span class="nav-chev tree-leaf"></span>' +
-      '<span class="tree-ico ico-file">' + fileSvg() + '</span>' +
+      '<span class="tree-ico ico-file t-' + esc(kind.toLowerCase()) + '">' + fileSvg(kind) + '</span>' +
       '<span class="label">' + esc(f.name) + '</span></div>';
   }).join('');
   if (kids.truncated) {
@@ -866,7 +892,7 @@ function openCtxMenu(x, y, file) {
     h += '<div class="ci" data-cid="' + esc(c.id) + '" style="padding-left:' + (10 + safeNumber(c.depth) * 12) + 'px">' +
          esc(c.name) + '</div>';
   });
-  if (!categories.tree.length) h += '<div class="ci dim">（先在侧边栏 ＋ 新建分类）</div>';
+  if (!categories.tree.length) h += '<div class="ci dim">（先在侧边栏 ' + plusSvg() + ' 新建分类）</div>';
   h += '<div class="sep"></div>' +
        '<div class="ci" data-cid="__learn">归类并记住规则（同来源同类型）</div>' +
        '<div class="ci" data-cid="__clear">移出分类</div>';
@@ -923,7 +949,7 @@ function openCtxMenu(x, y, file) {
 
 function openCtxLearn(x, y, file) {
   var el = document.getElementById('ctx');
-  var h = '<div class="ci dim">归类并记住规则 → 选分类</div>';
+  var h = '<div class="ci dim">归类并记住规则 ' + arrowSvg() + ' 选分类</div>';
   categories.tree.forEach(function (c) {
     h += '<div class="ci" data-cid="' + esc(c.id) + '" style="padding-left:' + (10 + safeNumber(c.depth) * 12) + 'px">' +
          esc(c.name) + '</div>';
@@ -1047,7 +1073,7 @@ function renderHits(result, q) {
   const el = document.getElementById('rows');
   setListTitle('检索结果');
   if (!result.files.length) {
-    el.innerHTML = '<div class="workbench-empty"><div><div class="empty-mark">⌕</div><div class="empty-title">没有找到匹配内容</div>' +
+    el.innerHTML = '<div class="workbench-empty"><div><div class="empty-mark">' + searchEmptySvg() + '</div><div class="empty-title">没有找到匹配内容</div>' +
       '<div class="empty-meta">试试其他关键词，或检查文档是否已完成索引</div></div></div>';
     clearEvidence();
     return;
@@ -1055,7 +1081,7 @@ function renderHits(result, q) {
   let h = '<div class="mode">全文搜索 · 命中 ' + esc(result.total) + ' 个文件' +
           (result.routes && result.routes.vector ? ' · 含语义匹配' : '') + '</div>';
   if (result.hedge) {
-    h += '<div class="mode" style="color:var(--warn)">⚠ ' + esc(result.hedge) + '</div>';
+    h += '<div class="mode mode-warn">' + warnSvg() + ' ' + esc(result.hedge) + '</div>';
   }
   h += result.files.map(function (f, index) {
     const snips = f.snippets.map(function (s) {
@@ -1149,11 +1175,13 @@ function persistQaThread() {
   } catch (e) { /* 存不下就算了，不影响会话 */ }
 }
 
-/* 旧存档里的引用标签是 [C8]/C8 文本样式，洗成现在的纯数字圆号 */
+/* 旧存档里的纯数字引用洗成 [C1] 芯片样式 */
 function migrateOldQaHtml(h) {
   return String(h)
-    .replace(/class="rtag">\[C(\d+)\]</g, 'class="rtag">$1<')
-    .replace(/(class="cite-chip"[^>]*>)C(\d+)</g, '$1$2<');
+    .replace(/class="rtag">(\d+)</g, 'class="rtag">[C$1]<')
+    .replace(/class="rtag">\[C(\d+)\]</g, 'class="rtag">[C$1]<')
+    .replace(/(class="cite-chip"[^>]*>)(\d+)</g, '$1[C$2]<')
+    .replace(/(class="cite-chip"[^>]*>)C(\d+)</g, '$1[C$2]<');
 }
 
 function restoreQaThread() {
@@ -1265,7 +1293,7 @@ function renderAnswer(a, q) {
     el.innerHTML = qaHistoryHtml() +
       '<div class="ans"><div class="atext" style="color:var(--text-secondary)">还没有配置模型服务。' +
       '</div><div class="askbar" id="openSet" style="border:none;padding:8px 0 0">' +
-      '打开设置 → AI 问答</div></div>';
+      '打开设置 ' + arrowSvg() + ' AI 问答</div></div>';
     bindQaThread(el);
     document.getElementById('openSet').onclick = function () { sheetOpen(true, 'model'); };
     return;
@@ -1273,18 +1301,18 @@ function renderAnswer(a, q) {
 
   var index = qaAnswers.length;
   let h = '<div class="ans">';
-  if (a.hedge) h += '<div class="ahedge">⚠ ' + esc(a.hedge) + '</div>';
+  if (a.hedge) h += '<div class="ahedge">' + warnSvg() + ' ' + esc(a.hedge) + '</div>';
   if (a.mode === 'general') {
     h += '<div class="amode">通用回答 · 未引用文件库</div>';
   }
 
   if (a.status === 'answered') {
-    // 连续的 [C8][C9] 合并成一组小圆号，避免正文里出现一长串灰块
+    // 连续的 [C8][C9] 合并成一组引用芯片
     var body = esc(a.answer).replace(/\[C\d{1,3}\](?:\s*\[C\d{1,3}\])*/g, function (run) {
       var tags = run.match(/C\d{1,3}/g) || [];
       return '<span class="cite-run">' + tags.map(function (t) {
-        return '<span class="cite-chip" data-ans="' + index + '" data-tag="' + t + '">' +
-               t.slice(1) + '</span>';
+        return '<span class="cite-chip" data-ans="' + index + '" data-tag="' + t + '">[' +
+               t + ']</span>';
       }).join('') + '</span>';
     });
     h += '<div class="atext">' + body + '</div>';
@@ -1328,7 +1356,7 @@ function refHtml(c, ansIndex) {
           : (c.section_path ? c.section_path.split(' › ').slice(-1)[0] : '');
   return '<div class="ref" data-ans="' + esc(ansIndex == null ? '' : ansIndex) +
     '" data-tag="' + esc(c.tag) + '" data-path="' + encodedData(c.file_path) + '">' +
-    '<span class="rtag">' + esc(String(c.tag || '').replace(/^C/, '')) + '</span>' +
+    '<span class="rtag">' + esc('[' + String(c.tag || '').replace(/^\[|\]$/g, '') + ']') + '</span>' +
     '<span class="rname">' + esc(c.file_name) + (loc ? ' · ' + esc(loc) : '') + '</span>' +
     '<span class="rsnip">' + esc(c.snippet || '') + '</span></div>';
 }
@@ -1717,6 +1745,24 @@ function segHtml(id, options, current) {
   }).join('') + '</div>';
 }
 
+function switchHtml(id, on) {
+  return '<button type="button" class="mac-switch' + (on ? ' on' : '') + '" id="' + esc(id) +
+    '" role="switch" aria-checked="' + (on ? 'true' : 'false') +
+    '" data-on="' + (on ? '1' : '0') + '"><span class="mac-switch-thumb"></span></button>';
+}
+
+function bindSwitch(id, onPick) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.onclick = function () {
+    var next = el.dataset.on !== '1';
+    el.dataset.on = next ? '1' : '0';
+    el.classList.toggle('on', next);
+    el.setAttribute('aria-checked', next ? 'true' : 'false');
+    onPick(next ? '1' : '0');
+  };
+}
+
 function bindSeg(id, onPick) {
   var seg = document.getElementById(id);
   if (!seg) return;
@@ -1749,14 +1795,14 @@ async function renderGeneralPane(pane) {
     '<div class="set-section"><div class="set-title">整理</div>' +
       '<div class="set-row"><div class="set-info"><div class="set-label">自动归类</div>' +
         '<div class="set-desc">新收录的文件按扩展名自动归入分类</div></div>' +
-        segHtml('autoSeg', [['1', '开'], ['0', '关']], autoOn ? '1' : '0') + '</div>' +
+        switchHtml('autoSeg', autoOn) + '</div>' +
       '<div class="set-row"><div class="set-info"><div class="set-label">扫描件 OCR</div>' +
         '<div class="set-desc">用 macOS 自带 Vision 识别无文本层的 PDF，纯本地' +
         (ocr.available ? '' : '（当前系统不可用）') + '</div></div>' +
         '<div style="display:flex;gap:8px;align-items:center">' +
         (ocr.available && ocr.enabled
           ? '<button class="mini" id="ocrRetry" title="把之前标记为无文本的 PDF 重新解析">重试扫描件</button>' : '') +
-        segHtml('ocrSeg', [['1', '开'], ['0', '关']], ocr.enabled ? '1' : '0') +
+        switchHtml('ocrSeg', !!ocr.enabled) +
         '</div></div></div>' +
     '<div class="set-section"><div class="set-title">问答</div>' +
       '<div class="set-row"><div class="set-info"><div class="set-label">回答长度</div>' +
@@ -1776,11 +1822,11 @@ async function renderGeneralPane(pane) {
     localStorage.setItem('uiTheme', v);
     if (window.inktable.setTheme) window.inktable.setTheme(v);
   });
-  bindSeg('autoSeg', function (v) {
+  bindSwitch('autoSeg', function (v) {
     localStorage.setItem('autoClassify', v);
     if (v === '1') runAutoExtClassify(true);
   });
-  bindSeg('ocrSeg', async function (v) {
+  bindSwitch('ocrSeg', async function (v) {
     try {
       await api('/settings/ocr', { method: 'POST',
         body: JSON.stringify({ enabled: v === '1' }) });

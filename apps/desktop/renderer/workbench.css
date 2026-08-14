@@ -23,10 +23,10 @@
   --line-soft: rgba(0, 0, 0, 0.045);
 
   /* Apple System Blue 主强调色 */
-  --accent: #0071e3;
-  --accent-strong: #005bb5;
-  --accent-soft: rgba(0, 113, 227, 0.085);
-  --accent-tint: rgba(0, 113, 227, 0.16);
+  --accent: #0a84ff;
+  --accent-strong: #0071e3;
+  --accent-soft: rgba(10, 132, 255, 0.08);
+  --accent-tint: rgba(10, 132, 255, 0.16);
   --on-accent: #ffffff;
 
   /* 品牌印记色（朱砂印） */
@@ -224,23 +224,22 @@ textarea:focus-visible,
 .topbar-brand {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   min-width: 0;
 }
 
 .brand-mark {
   display: grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
-  flex: 0 0 22px;
-  color: var(--seal);
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
 }
 
-.brand-mark svg {
-  width: 20px;
-  height: 20px;
-  filter: drop-shadow(0 1px 2px color-mix(in srgb, var(--seal) 30%, transparent));
+.brand-mark img {
+  display: block;
+  width: 28px;
+  height: 28px;
 }
 
 .brand-copy {
@@ -248,18 +247,17 @@ textarea:focus-visible,
 }
 
 .brand-name {
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  line-height: 1.15;
+  font-size: 13.5px;
+  font-weight: 680;
+  letter-spacing: 0.02em;
+  line-height: 1.05;
 }
 
 .brand-subtitle {
-  margin-top: 1px;
+  margin-top: 2px;
   color: var(--text-3);
   font-size: 9px;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .view-title {
@@ -390,7 +388,7 @@ textarea:focus-visible,
   width: 28px;
   height: 28px;
   padding: 0;
-  border-radius: 7px;
+  border-radius: 50%;
   background: transparent;
   color: var(--text-2);
   transition: background .12s ease, color .12s ease, transform .2s ease;
@@ -664,6 +662,12 @@ body.resizing * {
   color: var(--text-3);
 }
 
+.ico-file.t-pdf, .ico-svg.ico-pdf { color: var(--seal); }
+.ico-file.t-doc, .ico-file.t-docx, .ico-svg.ico-doc { color: var(--accent); }
+.ico-file.t-md, .ico-file.t-markdown, .ico-svg.ico-md { color: #8b5cf6; }
+.ico-file.t-xls, .ico-file.t-xlsx, .ico-file.t-csv, .ico-svg.ico-xls { color: var(--ok); }
+.ico-file.t-ppt, .ico-file.t-pptx, .ico-svg.ico-ppt { color: var(--amber); }
+
 .nav-item.on .ico-file {
   color: var(--accent);
 }
@@ -679,7 +683,7 @@ body.resizing * {
 .tree-note {
   padding: 4px 8px 4px 22px;
   color: var(--text-3);
-  font-size: 10.5px;
+  font-size: 10px;
   line-height: 1.5;
 }
 
@@ -772,13 +776,14 @@ body.resizing * {
   top: 0;
   z-index: 2;
   padding: 10px 8px 4px;
-  background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
   color: var(--text-3);
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
 .row {
@@ -822,7 +827,7 @@ body.resizing * {
   border-radius: 5px;
   background: var(--hover);
   color: var(--text-2);
-  font-size: 8.5px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: .04em;
 }
@@ -837,7 +842,7 @@ body.resizing * {
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -851,7 +856,7 @@ body.resizing * {
 .fdate {
   flex-shrink: 0;
   color: var(--text-3);
-  font-size: 10.5px;
+  font-size: 10px;
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
@@ -868,7 +873,7 @@ body.resizing * {
   border-radius: 4px;
   background: var(--hover);
   color: var(--text-2);
-  font-size: 9.5px;
+  font-size: 10px;
   font-weight: 560;
 }
 
@@ -887,7 +892,7 @@ body.resizing * {
   border-radius: 4px;
   background: var(--amber-soft);
   color: var(--amber);
-  font-size: 9.5px;
+  font-size: 10px;
   font-weight: 560;
 }
 
@@ -947,7 +952,7 @@ body.resizing * {
 .mode {
   padding: 8px 10px 2px;
   color: var(--text-3);
-  font-size: 10.5px;
+  font-size: 10px;
 }
 
 .hit {
@@ -981,7 +986,7 @@ body.resizing * {
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1003,7 +1008,7 @@ body.resizing * {
   padding: 0;
   overflow: hidden;
   color: var(--text-2);
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.6;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -1016,7 +1021,7 @@ body.resizing * {
   border-radius: 4px;
   background: var(--accent-soft);
   color: var(--accent);
-  font-size: 9.5px;
+  font-size: 10px;
   font-weight: 600;
 }
 
@@ -1057,7 +1062,7 @@ body.resizing * {
 
 .evidence-name {
   overflow-wrap: anywhere;
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 700;
   letter-spacing: -0.01em;
   line-height: 1.35;
@@ -1078,7 +1083,7 @@ body.resizing * {
   background: var(--hover);
   color: var(--text-2);
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  font-size: 10.5px;
+  font-size: 10px;
   overflow-wrap: anywhere;
   user-select: text;
   -webkit-user-select: text;
@@ -1158,7 +1163,7 @@ body.resizing * {
 .detail-more {
   padding: 28px 18px;
   color: var(--text-3);
-  font-size: 11.5px;
+  font-size: 12px;
   text-align: center;
 }
 
@@ -1215,7 +1220,7 @@ body.resizing * {
   border-radius: 6px;
   background: var(--surface);
   color: var(--text-3);
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 500;
   transition: all .12s ease;
 }
@@ -1235,7 +1240,7 @@ body.resizing * {
   border-radius: 999px;
   background: var(--surface);
   color: var(--text-2);
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 550;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1292,7 +1297,7 @@ body.resizing * {
   border-radius: 16px 16px 4px 16px;
   background: var(--accent);
   color: var(--on-accent);
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.55;
   overflow-wrap: anywhere;
   box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 25%, transparent);
@@ -1317,7 +1322,7 @@ body.resizing * {
 
 .ans .atext {
   color: var(--text);
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.8;
   overflow-wrap: anywhere;
   user-select: text;
@@ -1363,6 +1368,9 @@ body.resizing * {
 }
 
 .ans .ahedge {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
   margin-bottom: 10px;
   padding: 8px 10px;
   border-left: 3px solid var(--amber);
@@ -1385,14 +1393,14 @@ body.resizing * {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 16px;
-  height: 15px;
-  padding: 0 4px;
+  min-width: 28px;
+  height: 16px;
+  padding: 0 5px;
   border-radius: 999px;
   background: var(--accent-soft);
   color: var(--accent);
   cursor: pointer;
-  font-size: 9.5px;
+  font-size: 10px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   line-height: 1;
@@ -1427,7 +1435,7 @@ body.resizing * {
   border-radius: 8px;
   background: var(--surface-2);
   cursor: pointer;
-  font-size: 11.5px;
+  font-size: 12px;
   transition: all .12s ease;
 }
 
@@ -1440,14 +1448,14 @@ body.resizing * {
   place-items: center;
   grid-row: 1 / 3;
   align-self: start;
-  min-width: 16px;
-  height: 15px;
+  min-width: 28px;
+  height: 16px;
   margin-top: 1px;
-  padding: 0 4px;
+  padding: 0 5px;
   border-radius: 999px;
   background: var(--accent-soft);
   color: var(--accent);
-  font-size: 9.5px;
+  font-size: 10px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   line-height: 1;
@@ -1484,7 +1492,7 @@ body.resizing * {
   margin-top: 6px;
   padding: 2px 0;
   color: var(--accent);
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 600;
   transition: color .12s ease;
 }
@@ -1517,7 +1525,7 @@ body.resizing * {
 .askbar {
   padding: 8px 14px;
   color: var(--accent);
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
 }
@@ -1526,23 +1534,28 @@ body.resizing * {
   background: var(--hover);
 }
 
-/* 一体式输入框 */
+/* 一体式悬浮输入框 */
 .qa-composer {
   flex: 0 0 auto;
-  padding: 10px 14px 10px;
-  border-top: 1px solid var(--line);
-  background: var(--surface-2);
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  padding: 8px 12px 12px;
+  border-top: 0;
+  background: linear-gradient(to top, var(--surface-2) 65%, transparent);
 }
 
 .composer-box {
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  padding: 7px 8px 7px 12px;
+  padding: 8px 8px 8px 12px;
   border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--surface);
-  box-shadow: var(--shadow-sm);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: var(--shadow-md);
   transition: border-color .15s ease, box-shadow .15s ease;
 }
 
@@ -1562,7 +1575,7 @@ body.resizing * {
   outline: 0;
   background: transparent;
   color: var(--text);
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.5;
 }
 
@@ -1686,7 +1699,7 @@ body.resizing * {
 
 .sheet-head h2 {
   margin: 0;
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 700;
 }
 
@@ -1718,7 +1731,7 @@ body.resizing * {
   border-radius: 6px;
   background: var(--surface);
   color: var(--text-2);
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 500;
   transition: all .12s ease;
 }
@@ -1789,7 +1802,7 @@ body.resizing * {
 .set-title {
   margin-bottom: 6px;
   color: var(--text-3);
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: .06em;
   text-transform: uppercase;
@@ -1808,7 +1821,7 @@ body.resizing * {
 }
 
 .set-label {
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 550;
 }
 
@@ -1854,6 +1867,38 @@ body.resizing * {
   color: var(--text);
   font-weight: 600;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+/* macOS 风格开关 */
+.mac-switch {
+  position: relative;
+  width: 40px;
+  height: 24px;
+  flex-shrink: 0;
+  padding: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-3) 42%, transparent);
+  transition: background .18s ease;
+}
+
+.mac-switch.on {
+  background: var(--accent);
+}
+
+.mac-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
+  transition: transform .18s ease;
+}
+
+.mac-switch.on .mac-switch-thumb {
+  transform: translateX(16px);
 }
 
 /* 表单与 CC-Switch */
@@ -1943,7 +1988,7 @@ body.resizing * {
   margin-top: 1px;
   overflow: hidden;
   color: var(--text-3);
-  font-size: 10.5px;
+  font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1986,7 +2031,9 @@ body.resizing * {
   border-top: 1px solid var(--line-soft);
 }
 
-.src-row {
+.src-row,
+.srow,
+.src {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1998,22 +2045,58 @@ body.resizing * {
   background: var(--surface-2);
 }
 
-.src-name {
-  font-size: 12.5px;
+.src input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
+
+.src .meta {
+  flex-shrink: 0;
+  color: var(--text-3);
+  font-size: 11px;
+  text-align: right;
+}
+
+.src .meta .cnt {
+  color: var(--text);
   font-weight: 600;
 }
 
-.src-path {
+.src-name,
+.srow .nm,
+.src .nm {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.src-path,
+.srow .pth,
+.src .pth {
   margin-top: 2px;
   color: var(--text-3);
-  font-size: 10.5px;
+  font-size: 10px;
   overflow-wrap: anywhere;
 }
 
-.src-acts {
+.src-acts,
+.srow .acts {
   display: flex;
   gap: 6px;
   flex-shrink: 0;
+}
+
+.srow .info,
+.src .info {
+  min-width: 0;
+  flex: 1;
+}
+
+.srow .nm .tag,
+.srow .nm .badge,
+.src .nm .badge {
+  margin-left: 6px;
 }
 
 /* 弹层提示 (Toast) */
@@ -2060,23 +2143,60 @@ body.resizing * {
   display: block;
 }
 
-.ctx-item {
+.ctx-item,
+.ci {
   padding: 5px 10px;
   border-radius: 5px;
   color: var(--text);
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   transition: background .1s;
 }
 
-.ctx-item:hover {
+.ctx-item:hover,
+.ci:hover {
   background: var(--accent);
   color: var(--on-accent);
 }
 
-.ctx-sep {
+.ci.dim {
+  color: var(--text-3);
+  font-weight: 400;
+  cursor: default;
+}
+
+.ci.dim:hover {
+  background: transparent;
+  color: var(--text-3);
+}
+
+.ci.danger {
+  color: var(--danger);
+}
+
+.ci.danger:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.ctx-sep,
+.sep {
   height: 1px;
   margin: 4px 2px;
   background: var(--line-soft);
+}
+
+.inline-ico {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  vertical-align: -1px;
+}
+
+.mode-warn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--warn);
 }

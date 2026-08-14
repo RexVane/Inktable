@@ -1,10 +1,10 @@
 appId: com.inktable.app
-productName: Inktable
-copyright: Inktable
+productName: 墨桌
+copyright: 墨桌
 
 directories:
   output: ../../dist
-  buildResources: build
+  buildResources: assets
 
 files:
   - electron/**/*
@@ -28,7 +28,7 @@ mac:
   gatekeeperAssess: false
 
 dmg:
-  title: Inktable
+  title: 墨桌
   contents:
     - x: 130
       y: 220
