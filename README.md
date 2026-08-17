@@ -58,7 +58,7 @@ MRR/nDCG 仅提升约 8%，未达到 +15% 门槛，因此未切换生产默认�
 | ONNX Cross-Encoder 重排 | 🧪 已实装并评测，未过 +15% 选型门槛 |
 | 级联重排（本地打分器 + CE 精排融合前 26 位） | 🧪 可选 `INKTABLE_RERANKER=cascade`：Recall@5 96.2% / Recall@20 100%，Rerank P95 超门槛约 10% |
 | 检索延迟门槛（搜索 P95 ≤2.5s、Rerank P95 ≤1.5s） | ✅ 0.98s / 0.03s，见 `docs/RETRIEVAL-PERF.md` |
-| 真实模型 65 题 QA 门槛 | ✅ `kocode / gpt-5.6-sol`，65/65，引用支持 95.16%，拒答 12/12 |
+| 真实模型 65 题 QA 门槛 | ✅ `myself / gpt-5.6-luna`，65/65，引用支持 96.99%，精确引用 100%，拒答 12/12 |
 | 代码签名（macOS / Windows） | ⬜ |
 
 ## 开发
