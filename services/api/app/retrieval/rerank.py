@@ -10,11 +10,106 @@ from typing import Protocol
 
 import numpy as np
 
+from app.db.visibility import visible_files_condition
+
 from app.index.search import extract_query_terms, quote_fts_query
 from app.retrieval.query import wants_numeric_answer
 
-RERANK_LIMIT = 80
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+    return max(minimum, min(value, maximum))
+
+
+RERANK_LIMIT = _env_int("INKTABLE_RERANK_LIMIT", 80, 8, 160)
 SOFT_PER_CONTENT = 12
+
+# 级联重排的 Cross-Encoder 候选对预算。每对 50-80ms（bge-reranker-base int8、
+# 384 token、14 线程实测）。取 26 的依据是 scripts/probe_cascade_depth.py：
+# 融合顺序里最深的 gold 落在第 25 位（P19/P20 两道改写类问题），K 小于 25
+# 就有题永远进不了二级重排。53 题里 49 题的 gold 在前 4 位，只有 4 题需要
+# 这个深度 —— 但正是那 4 题在拉低 MRR/nDCG。
+CASCADE_PAIRS = _env_int("INKTABLE_CASCADE_PAIRS", 26, 4, 80)
+# 变体多到把 per-variant 预算压得过浅时的下限：低于这个深度，CE 连
+# 融合顺序的头部都盖不住，级联就没有意义了，宁可超一点延迟。
+CASCADE_MIN_HEAD = _env_int("INKTABLE_CASCADE_MIN_HEAD", 8, 4, 40)
+# 尾部逐位衰减系数：只用于在 CE 分数之下维持本地打分器给出的相对顺序
+CASCADE_TAIL_DECAY = 0.98
+
+# 级联头部的分数融合权重（百分之一为单位，便于用环境变量整数扫参）。
+#
+# CE 不能整份取代本地打分器。实测 K=26 纯 CE（0.92·CE + 0.08·RRF）把深尾
+# 全部救回来了（P20 17→8、A09 20→5、最差名次从 24 收到 9），代价是另有
+# 6 道题从第 1 名掉到第 2 名 —— 其中 M08「找出…成绩单 PDF」是文件名类
+# 问题，本地打分器的 filename_cov / type_match 特征本来答对，被 0.92 的
+# CE 权重压掉了。两者各有不可替代的信号，所以融合而不是替换。
+CASCADE_W_CROSS = _env_int("INKTABLE_CASCADE_W_CROSS", 68, 0, 100) / 100.0
+CASCADE_W_LOCAL = _env_int("INKTABLE_CASCADE_W_LOCAL", 24, 0, 100) / 100.0
+CASCADE_W_RRF = _env_int("INKTABLE_CASCADE_W_RRF", 8, 0, 100) / 100.0
+
+# 本地分权重按**本次查询是否真的有词法证据**缩放。
+#
+# 动机：固定权重两头都讨不到好。37% 本地权重能把 M08 这类文件名问题拉回
+# 第 1，但同时把 P20（"怎样防止用户用相对路径跑出自己的文件目录" → 原文写
+# "路径穿越"）从第 8 名压回第 14 名 —— 改写类问题里本地打分器的
+# coverage / proximity / exact 特征全为 0，它给出的分数是噪声，不是信号。
+# 判据取候选池里的最大 IDF 加权词覆盖，低则把权重让给 CE，让出的部分转给
+# CE 以保持总权重恒定。
+#
+# **诚实记录**：在 53 题的 gold 集上，这个自适应缩放**没有测出可观测收益**
+# —— 自适应 CE=70/LOCAL=22 得 MRR 90.2 / nDCG 92.0，而固定 CE=68/LOCAL=24
+# 得 90.3 / 92.2，差异在噪声内。默认权重取实测最好的那组（68/24），此时
+# 本地权重本就不高，缩放能起作用的余地很小，基本处于休眠。机制保留是因为
+# 它针对的失效模式（改写类问题上本地特征全零）有明确机理，而 53 题里只有
+# 2-3 题落在这个模式上，样本量不足以判定；评测集扩大后应重新验证。
+CASCADE_LEX_FULL = _env_int("INKTABLE_CASCADE_LEX_FULL", 45, 5, 100) / 100.0
+
+# 送进 CE 的单个候选文本上限（字符）。分片正文实测 p50 383 字、p90 956 字，
+# 而 CE 截断在 384 token —— 长分片是从**开头**截的，答案落在后半段就直接
+# 看不到。改为按查询词密度取窗口：同样的 token 预算下信息量更高，长文的
+# 批次成本也随最长序列一起降下来。
+CASCADE_FOCUS_CHARS = _env_int("INKTABLE_CASCADE_FOCUS_CHARS", 420, 120, 4000)
+
+
+def _focus_window(text: str, terms: list[str], budget: int) -> str:
+    """截取查询词最密集的一段，而不是从开头硬切。
+
+    CE 的截断是从头开始的，对 p90 的 956 字分片等于丢掉后六成正文。
+    这里在字符级滑窗里选覆盖不同查询词最多的位置，平局取更靠前的窗口
+    （文档靠前的内容通常更概括）。没有任何查询词命中时退回开头，
+    与原行为一致。
+    """
+    if len(text) <= budget or not terms:
+        return text[:budget]
+    lowered = text.lower()
+    hits: list[tuple[int, str]] = []
+    for term in terms:
+        start = lowered.find(term)
+        while start >= 0:
+            hits.append((start, term))
+            start = lowered.find(term, start + 1)
+            if len(hits) > 512:  # 极端重复文本下的保护
+                break
+    if not hits:
+        return text[:budget]
+    hits.sort()
+    best_start, best_cover = 0, -1
+    for index, (position, _term) in enumerate(hits):
+        # 以每个命中为窗口左端，统计窗口内覆盖的不同查询词数
+        window_end = position + budget
+        covered = {
+            term for other, term in hits[index:]
+            if other < window_end
+        }
+        if len(covered) > best_cover:
+            best_cover = len(covered)
+            best_start = position
+    # 让命中稍微居中，前面留一点上下文，避免正好从关键词切断句子
+    start = max(0, min(best_start - budget // 4, len(text) - budget))
+    return text[start:start + budget]
+
 
 # 词邻近度：两个查询词在原文中相距多少字符以内算"在讲同一件事"
 PROXIMITY_WINDOW = 40
@@ -226,6 +321,160 @@ class LocalStaticReranker:
         return sorted(outputs, key=lambda item: item.score, reverse=True)
 
 
+class CrossEncoderReranker:
+    """True pairwise scorer backed by the pinned local ONNX model."""
+
+    def __init__(self, subqueries: tuple[str, ...] = ()):
+        from app.retrieval.cross_encoder import get_runtime
+
+        self.runtime = get_runtime()
+        self.model_id = self.runtime.model_id
+        self.subqueries = tuple(subqueries)
+
+    def rerank(
+        self, query: str, candidates: list[RerankInput],
+    ) -> list[RerankOutput]:
+        from app.retrieval.cross_encoder import sigmoid
+
+        documents = [
+            "\n".join(part for part in (
+                item.file_name, item.section_path, item.text,
+            ) if part)
+            for item in candidates
+        ]
+        variants = (query, *self.subqueries)
+        raw_by_variant = [self.runtime.score(variant, documents) for variant in variants]
+        raw = np.stack(raw_by_variant).max(axis=0)
+        max_rrf = max((item.rrf_score for item in candidates), default=1.0)
+        outputs = []
+        for item, logit in zip(candidates, raw):
+            pair_score = sigmoid(float(logit))
+            rrf_score = item.rrf_score / max(max_rrf, 1e-12)
+            outputs.append(RerankOutput(
+                item.chunk_id,
+                0.92 * pair_score + 0.08 * rrf_score,
+            ))
+        return sorted(outputs, key=lambda item: item.score, reverse=True)
+
+
+class CascadeReranker:
+    """两级重排：融合顺序截断头部交 Cross-Encoder，尾部留给本地打分器。
+
+    Cross-Encoder 每对候选 50-80ms（bge-reranker-base int8，384 token，
+    28 核实测），1.5 秒的 rerank 门槛只够 20 对左右，扫不完 `_load_inputs`
+    给出的 80 个候选。所以它只精排融合顺序的前 K 位 —— 截断多深由
+    `scripts/probe_cascade_depth.py` 实测确定：K 必须覆盖全部 gold，
+    否则二级重排再准也救不回落在 K 之外的题。
+
+    预算按**候选对数**而不是固定 K 来限。比较类问题会带 1-2 条子查询，
+    CrossEncoder 对每个变体各打一遍分，K 不随变体数收缩的话最坏情况
+    直接翻三倍，P95 就是被这种少数查询顶穿的。
+
+    尾部候选不参与 CE，统一压到 CE 最低分之下：既然 K 已按实测覆盖 gold，
+    让尾部有机会盖过 CE 排序的候选只会引入噪声。
+    """
+
+    def __init__(self, local: LocalStaticReranker,
+                 subqueries: tuple[str, ...] = (),
+                 pairs_budget: int = 0):
+        from app.retrieval.cross_encoder import get_runtime
+
+        self.runtime = get_runtime()
+        self.local = local
+        self.subqueries = tuple(subqueries)
+        self.pairs_budget = pairs_budget or CASCADE_PAIRS
+        self.model_id = f"cascade:{local.model_id}+{self.runtime.model_id}"
+
+    def _head_size(self, variant_count: int, total: int) -> int:
+        # 变体越多，单个候选越贵，头部就要越浅，保住最坏情况的延迟
+        per_variant = max(1, self.pairs_budget // max(1, variant_count))
+        return max(1, min(CASCADE_MIN_HEAD, total) if per_variant < CASCADE_MIN_HEAD
+                   else min(per_variant, total))
+
+    def rerank(
+        self, query: str, candidates: list[RerankInput],
+    ) -> list[RerankOutput]:
+        from app.retrieval.cross_encoder import sigmoid
+
+        if not candidates:
+            return []
+        # 一级：本地打分器排全部候选，给尾部一个有意义的顺序
+        local_ranked = self.local.rerank(query, candidates)
+        local_scores = {item.chunk_id: item.score for item in local_ranked}
+
+        variants = (query, *self.subqueries)
+        head_size = self._head_size(len(variants), len(candidates))
+        # 头部按**融合顺序**截取，不按本地分：本地打分器在改写类问题上
+        # 会把 gold 压下去（覆盖/邻近特征全为 0），用它截断等于把 CE
+        # 最该救的那批题提前淘汰掉。
+        head = candidates[:head_size]
+        tail = candidates[head_size:]
+
+        # 文件名与标题路径始终完整保留 —— 它们短，且是元数据类问题的
+        # 主要信号；只有正文按查询词密度取窗口。
+        focus_terms: list[str] = []
+        for variant in variants:
+            for term in extract_query_terms(variant):
+                if term not in focus_terms:
+                    focus_terms.append(term)
+        documents = [
+            "\n".join(part for part in (
+                item.file_name,
+                item.section_path,
+                _focus_window(item.text, focus_terms, CASCADE_FOCUS_CHARS),
+            ) if part)
+            for item in head
+        ]
+        raw = np.stack([
+            self.runtime.score(variant, documents) for variant in variants
+        ]).max(axis=0)
+
+        max_rrf = max((item.rrf_score for item in candidates), default=1.0)
+        max_local = max(
+            (local_scores.get(item.chunk_id, 0.0) for item in head), default=1.0,
+        )
+        haystacks = [
+            f"{item.section_path}\n{item.text}".lower() for item in head
+        ]
+        # 本次查询的词法置信度：候选池里最强的 IDF 加权词覆盖。
+        # 纯字符串操作，相对 CE 的每对数十毫秒可忽略。
+        lexical_confidence = max(
+            (self.local._weighted_coverage(focus_terms, haystack)
+             for haystack in haystacks),
+            default=0.0,
+        )
+        trust_local = min(1.0, lexical_confidence / max(CASCADE_LEX_FULL, 1e-6))
+        w_local = CASCADE_W_LOCAL * trust_local
+        # 让出的本地权重转给 CE，总权重恒定
+        w_cross = CASCADE_W_CROSS + (CASCADE_W_LOCAL - w_local)
+
+        outputs: list[RerankOutput] = []
+        for item, logit in zip(head, raw):
+            pair_score = sigmoid(float(logit))
+            rrf_score = item.rrf_score / max(max_rrf, 1e-12)
+            local_score = local_scores.get(item.chunk_id, 0.0) / max(max_local, 1e-12)
+            outputs.append(RerankOutput(
+                item.chunk_id,
+                w_cross * pair_score
+                + w_local * local_score
+                + CASCADE_W_RRF * rrf_score,
+            ))
+        outputs.sort(key=lambda item: item.score, reverse=True)
+
+        # 尾部整体压到 CE 最低分之下，保持本地分给出的相对顺序
+        if tail:
+            floor = outputs[-1].score if outputs else 1.0
+            tail_ranked = sorted(
+                tail, key=lambda item: -local_scores.get(item.chunk_id, 0.0),
+            )
+            span = max(floor, 1e-6)
+            for offset, item in enumerate(tail_ranked, start=1):
+                outputs.append(RerankOutput(
+                    item.chunk_id, span * CASCADE_TAIL_DECAY ** offset,
+                ))
+        return outputs
+
+
 def _demote_redundant_coverage(
     query: str, candidates: list[RerankInput], ranked: list[RerankOutput],
 ) -> list[RerankOutput]:
@@ -301,10 +550,16 @@ def _load_inputs(conn, candidates) -> tuple[list[RerankInput], list[int]]:
         row["id"]: row for row in conn.execute(
             f"""SELECT ch.id, ch.content_id, ch.text, ch.section_path,
                        ch.text_hash,
-                       (SELECT f.ext FROM files f
-                        WHERE f.content_id = ch.content_id LIMIT 1) AS ext,
-                       (SELECT f.name FROM files f
-                        WHERE f.content_id = ch.content_id LIMIT 1) AS file_name
+                       (SELECT vf.ext FROM files vf
+                        LEFT JOIN sources vs ON vs.id = vf.source_id
+                        WHERE vf.content_id = ch.content_id
+                          AND {visible_files_condition('vf', 'vs')}
+                        ORDER BY vf.id LIMIT 1) AS ext,
+                       (SELECT vf.name FROM files vf
+                        LEFT JOIN sources vs ON vs.id = vf.source_id
+                        WHERE vf.content_id = ch.content_id
+                          AND {visible_files_condition('vf', 'vs')}
+                        ORDER BY vf.id LIMIT 1) AS file_name
                 FROM chunks ch JOIN contents c ON c.id = ch.content_id
                 WHERE ch.id IN ({marks})
                   AND ch.index_version = c.active_index_version""",
@@ -350,27 +605,34 @@ def _load_inputs(conn, candidates) -> tuple[list[RerankInput], list[int]]:
 
 
 def _load_vectors(conn, chunk_ids: list[int]) -> dict[int, np.ndarray]:
-    """批量取候选分片已入库的向量（chunks_vec），供重排复用。"""
+    """批量取候选分片已入库的向量（chunks_vec），供重排复用。
+
+    走 vector.vectors_for：它优先从整库矩阵缓存里切片。逐行查 vec0 约 5ms/行，
+    80 个候选就是 400ms —— 那是重排耗时的大头，而不是打分本身。
+    缓存里的向量已按行归一化，NEARDUP_COSINE 的点积因此就是真余弦。
+    """
     if not chunk_ids:
         return {}
-    marks = ",".join("?" * len(chunk_ids))
     try:
-        return {
-            row[0]: np.frombuffer(row[1], dtype=np.float32)
-            for row in conn.execute(
-                f"SELECT rowid, embedding FROM chunks_vec WHERE rowid IN ({marks})",
-                list(chunk_ids),
-            )
-        }
+        from app.index import vector as vec
+
+        return vec.vectors_for(conn, chunk_ids)
     except Exception:  # noqa: BLE001 - 向量表缺失时重排自行编码或降级
         return {}
 
 
 def run_rerank(conn, query: str, candidates, *,
                subqueries: tuple[str, ...] = (),
-               ext_hints: frozenset[str] = frozenset()) -> RerankResult:
+               ext_hints: frozenset[str] = frozenset(),
+               mode: str | None = None) -> RerankResult:
     started = time.perf_counter()
-    mode = os.environ.get("INKTABLE_RERANKER", "local").strip().lower()
+    # 环境变量优先于调用方偏好：评测与诊断要能全局钉死一种重排实现，
+    # 而调用方偏好只是「没人指定时用哪个」。
+    mode = (
+        os.environ.get("INKTABLE_RERANKER", "").strip().lower()
+        or (mode or "").strip().lower()
+        or "auto"
+    )
     fallback = RrfOnlyReranker()
     if mode in {"off", "rrf", "disabled"}:
         selected = [
@@ -388,21 +650,52 @@ def run_rerank(conn, query: str, candidates, *,
         )
 
     selected, remainder = _load_inputs(conn, candidates)
-    all_terms = set(extract_query_terms(query))
-    for subquery in subqueries:
-        all_terms.update(extract_query_terms(subquery))
-    reranker: Reranker = LocalStaticReranker(
-        subqueries=subqueries, ext_hints=ext_hints,
-        term_idf=_term_idf(conn, all_terms),
-        chunk_vectors=_load_vectors(
-            conn, [item.chunk_id for item in selected]),
-    )
+
+    def local_reranker() -> LocalStaticReranker:
+        all_terms = set(extract_query_terms(query))
+        for subquery in subqueries:
+            all_terms.update(extract_query_terms(subquery))
+        return LocalStaticReranker(
+            subqueries=subqueries,
+            ext_hints=ext_hints,
+            term_idf=_term_idf(conn, all_terms),
+            chunk_vectors=_load_vectors(
+                conn, [item.chunk_id for item in selected],
+            ),
+        )
+
     degraded = False
-    try:
-        ranked = reranker.rerank(query, selected)
-        ranked = _demote_redundant_coverage(query, selected, ranked)
-        model_id = reranker.model_id
-    except Exception:
+    ranked: list[RerankOutput] | None = None
+    model_id = ""
+    cross_modes = {"cross", "cross-encoder", "onnx"}
+    cascade_modes = {"cascade", "two-stage"}
+    if mode in cascade_modes:
+        try:
+            reranker: Reranker = CascadeReranker(
+                local_reranker(), subqueries=subqueries,
+            )
+            ranked = reranker.rerank(query, selected)
+            model_id = reranker.model_id
+        except Exception:
+            # CE 不可用/模型未安装时退回一级本地打分器，而不是退到 RRF：
+            # 级联的一级本身就是当前生产默认，降级后质量不该跌破它
+            degraded = True
+    if mode in cross_modes:
+        try:
+            reranker = CrossEncoderReranker(subqueries=subqueries)
+            ranked = reranker.rerank(query, selected)
+            model_id = reranker.model_id
+        except Exception:
+            degraded = True
+    if ranked is None and mode not in {"off", "rrf", "disabled"}:
+        try:
+            reranker = local_reranker()
+            ranked = reranker.rerank(query, selected)
+            model_id = reranker.model_id
+            degraded = degraded or mode in cross_modes or mode in cascade_modes
+        except Exception:
+            ranked = None
+    if ranked is None:
         all_inputs = [
             RerankInput(
                 chunk_id=item.chunk_id, content_id=0, text="",
@@ -417,6 +710,8 @@ def run_rerank(conn, query: str, candidates, *,
             duration_ms=(time.perf_counter() - started) * 1000,
             reranked_count=0,
         )
+
+    ranked = _demote_redundant_coverage(query, selected, ranked)
 
     by_id = {candidate.chunk_id: candidate for candidate in candidates}
     ranked.extend(

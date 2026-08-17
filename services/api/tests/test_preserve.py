@@ -99,7 +99,7 @@ class TestMissing:
 
         row = db.execute("SELECT state, path FROM files").fetchone()
         assert row["state"] != "missing"
-        assert row["path"].endswith("sub/c.txt")
+        assert Path(row["path"]).parts[-2:] == ("sub", "c.txt")
         assert stats.marked_missing == 0
 
 

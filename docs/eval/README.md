@@ -1,31 +1,80 @@
 # Inktable Retrieval Evaluation
 
-The authoritative v7 question set lives in `services/api/tests/evalset.py`.
-It contains 72 frozen questions:
+The authoritative question set lives in `services/api/tests/evalset.py`, with
+stable evidence annotations in `gold-evidence-spans.json`. The v8 contract has
+77 frozen questions:
 
-- 20 single-document fact questions
-- 10 paraphrase questions
-- 10 same-document cross-chunk synthesis questions
-- 10 cross-document synthesis questions
-- 10 metadata, file type, and scope questions
-- 12 questions with no support in the library
+- 46 answerable questions (96 evidence requirements, 691 exact gold spans)
+- 7 metadata, file type, and scope questions
+- 12 questions whose evidence is missing from the corpus
+- 12 deliberately unanswerable questions
 
-Each answerable case has one or more gold document-name hints. Fact and
-same-document cases also use answer keywords as a lightweight evidence anchor.
-The cross-document and metadata groups are kept separate because they require
-the v7 QueryPlan and multi-document metrics; they must not be folded into the
-legacy single-document Recall@5 number.
+Retrieval and compression metrics evaluate the 53 runnable, non-corpus-missing
+cases; the real-model QA run evaluates 65 cases (answerable, metadata, and
+unanswerable). Corpus-missing cases are retained in the contract but are not
+sent to a model. Do not fold metadata or cross-document groups into a legacy
+single-document metric without stating the denominator.
 
-Run the current baseline against the local library:
+## Current v8 snapshot (2026-08-16)
+
+The honest production reranker remains `local-static-v3`: Recall@5 94.34%,
+MRR@10 88.11%, nDCG@10 91.04%, and P95 2,669 ms. The RRF control reaches
+Recall@5 96.23% but lower MRR/nDCG (86.45%/88.69%). The pinned ONNX
+Cross-Encoder reaches MRR/nDCG 90.97%/92.63% on its 48-case comparison, only
+about +7.95%/+7.85% relative to its RRF control and with 16.5 s P95 latency;
+the required +15% gate is therefore still not met.
+
+The formal compression result (`v8-final-compress.json`) is 98.96% Gold
+Evidence Recall, 97.83% complete-case recall, 61.98% median compression,
+247.5 ms P95, and zero offset round-trip errors. X10 is the sole upstream
+miss.
+
+The final real-model QA artifact is `v8-final-qa.json`, produced with
+`kocode / gpt-5.6-sol`. All 65 cases completed without provider failures or
+degraded execution. Citation support is 95.16% (118/124 claims), exact citation
+integrity and statement coverage are both 100%, and correct refusal is 100%
+(12/12). A13 and S17 use the explicit fallback path. Gold-evidence citation
+recall is 68.93% and remains a diagnostic metric, not this QA gate. Results
+contain hashes, counts, and timings only; they never persist answer text,
+snippets, keys, or source paths.
+
+Run the current local-static retrieval baseline against the local library:
 
 ```bash
 cd services/api
 uv run python tests/run_eval.py \
-  --label v7-m1-shared-pipeline \
-  --json ../../docs/eval/v7-m1-shared-pipeline.json
+  --label v8-final-local \
+  --json ../../docs/eval/v8-final-local.json
 ```
 
-Frozen milestone outputs:
+Run the compression gate:
+
+```bash
+uv run python tests/run_compress_eval.py \
+  --json ../../docs/eval/v8-final-compress.json
+```
+
+Run real-model QA only with an explicitly selected, read-only cc-switch
+database. The provider key is held in memory and is never written to the
+artifact:
+
+```bash
+uv run python scripts/run_qa_eval.py \
+  --ccswitch-db <backup.db> --provider kocode \
+  --case-delay 90 --judge-retries 2 --judge-retry-delay 30 \
+  --json ../../output/qa-kocode-sol-full-v3.json
+```
+
+Frozen v8 outputs:
+
+- `v8-final-local.json`: production `local-static-v3` retrieval result.
+- `v8-final-rrf.json`: explicit RRF-only control.
+- `v8-post-clean-cross-default.json`: pinned ONNX Cross-Encoder comparison.
+- `v8-final-compress.json`: exact Gold Evidence compression gate.
+- `v8-final-qa.json`: final 65-case `kocode / gpt-5.6-sol` QA gate.
+- `gold-evidence-spans.json`: content-addressed Gold contract.
+
+Historical v7 outputs:
 
 - `v7-m0-shared-pipeline.json`: shared-pipeline baseline before the final QA
   stage migration.

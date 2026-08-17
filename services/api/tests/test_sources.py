@@ -40,6 +40,37 @@ def _make_docs(d, n=3):
     return paths
 
 
+def test_windows_discovery_returns_fixed_drive_roots(monkeypatch):
+    from app.discovery import sources
+
+    monkeypatch.setattr(sources.sys, "platform", "win32")
+    monkeypatch.setattr(sources, "fixed_drive_roots", lambda: [
+        sources.Path("B:/"), sources.Path("C:/"), sources.Path("D:/")
+    ])
+    monkeypatch.setattr(sources.Path, "is_dir", lambda _self: True)
+    found = sources.discover_all()
+    assert [item.name for item in found] == ["B 盘", "C 盘", "D 盘"]
+    assert all(item.is_drive_root for item in found)
+    assert all(item.doc_count == 0 for item in found)
+
+
+def test_windows_wechat_custom_root_reports_direct_documents(tmp_path, monkeypatch):
+    from app.discovery import sources
+
+    root = tmp_path / "WeChat profiles"
+    cache = root / "xwechat_files" / "account" / "msg" / "file"
+    cache.mkdir(parents=True)
+    (root / "received.pdf").write_bytes(b"pdf")
+    (cache / "cached.pdf").write_bytes(b"pdf")
+    monkeypatch.setattr(sources, "_windows_wechat_roots", lambda: [root])
+
+    found = sources._discover_wechat_windows()
+    root_source = next(item for item in found if item.path == str(root))
+    assert root_source.name == "微信接收（根目录）"
+    assert root_source.file_count == 1
+    assert root_source.doc_count == 1
+
+
 def test_list_sources_reports_live_state(client, tmp_path):
     """列表要带实时状态：目录还在不在、是否正在监听。"""
     d = tmp_path / "src"
@@ -346,8 +377,8 @@ def test_remove_orphan_content_only(client, tmp_path):
     assert d["trace_id"] == d["trace"]["trace_id"]
     assert d["timings"] == d["trace"]["stages"]
     assert [stage["name"] for stage in d["trace"]["stages"]] == [
-        "hierarchy_routing", "deep_retrieval", "decompose", "scope", "rrf",
-        "rerank",
+        "hierarchy_routing", "lexical_retrieval", "embed_query",
+        "deep_retrieval", "decompose", "scope", "rrf", "rerank",
     ]
     assert "汝窑 天青釉" not in str(d["trace"])
 

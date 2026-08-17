@@ -9,18 +9,25 @@
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import os
 import shutil
 import sqlite3
+import sys
 import tempfile
+import threading
 import time
 from datetime import date
 from pathlib import Path
 from urllib.parse import quote
 
 from app.db.schema import DEFAULT_SETTINGS, SCHEMA, SCHEMA_VERSION
+
+# 单实例锁的平台原语：Unix 用 flock，Windows 用 msvcrt 字节区锁
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import fcntl
 
 
 def _resolve_app_dir() -> Path:
@@ -37,6 +44,7 @@ BACKUP_DIR = APP_DIR / "backups"
 BACKUP_KEEP = 7
 
 _lock_fd: int | None = None
+_backup_lock = threading.Lock()
 
 
 class AlreadyRunning(RuntimeError):
@@ -71,8 +79,14 @@ def acquire_single_instance_lock() -> None:
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
+        if sys.platform == "win32":
+            # Windows 没有 flock：对首字节做非阻塞独占锁，语义等价 ——
+            # 锁随进程退出自动释放，第二个实例立即失败（PermissionError）。
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (BlockingIOError, PermissionError):
         os.close(fd)
         raise AlreadyRunning("Inktable 已在运行")
     except OSError:
@@ -90,7 +104,11 @@ def release_single_instance_lock() -> None:
     if _lock_fd is None:
         return
     try:
-        fcntl.flock(_lock_fd, fcntl.LOCK_UN)
+        if sys.platform == "win32":
+            os.lseek(_lock_fd, 0, os.SEEK_SET)
+            msvcrt.locking(_lock_fd, msvcrt.LK_UNLCK, 1)
+        else:
+            fcntl.flock(_lock_fd, fcntl.LOCK_UN)
     finally:
         os.close(_lock_fd)
         _lock_fd = None
@@ -444,6 +462,22 @@ def create_daily_backup(
     已有且可恢复的当日备份直接复用，不会重复写盘。先写同目录临时文件，
     完整性验证通过后再原子改名；失败不会留下一个冒充成功的 ``.db``。
     """
+    # The startup worker and a manual API request use independent SQLite
+    # connections. Serialize the check/create/replace sequence so they cannot
+    # both race to replace the same daily destination on Windows.
+    with _backup_lock:
+        return _create_daily_backup_locked(
+            conn, backup_dir=backup_dir, today=today, keep=keep,
+        )
+
+
+def _create_daily_backup_locked(
+    conn: sqlite3.Connection,
+    *,
+    backup_dir: Path | str | None = None,
+    today: date | None = None,
+    keep: int = BACKUP_KEEP,
+) -> Path:
     if conn.in_transaction:
         raise BackupError("存在未提交事务，不能创建一致性备份")
     if keep < 1:

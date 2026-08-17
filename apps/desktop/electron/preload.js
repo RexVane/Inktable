@@ -2,6 +2,8 @@
 const { contextBridge, ipcRenderer, webFrame } = require('electron');
 
 contextBridge.exposeInMainWorld('inktable', {
+  // 渲染层按平台微调布局（macOS 红绿灯留白等）
+  platform: process.platform,
   getSidecarInfo: () => ipcRenderer.invoke('sidecar:info'),
   getSidecarStatus: () => ipcRenderer.invoke('sidecar:get-status'),
   revealInFinder: (filePath) => ipcRenderer.invoke('shell:reveal', filePath),

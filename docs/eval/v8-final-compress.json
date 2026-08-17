@@ -1,0 +1,5165 @@
+{
+  "schema_version": 2,
+  "gold": "docs/eval/gold-evidence-spans.json",
+  "summary": {
+    "evaluated_cases": 46,
+    "evidence_requirements": 96,
+    "gold_evidence_recall": 0.9895833333333334,
+    "complete_case_recall": 0.9782608695652174,
+    "pre_compression_evidence_recall": 0.9945652173913043,
+    "median_compression": 0.61975,
+    "roundtrip_errors": 0,
+    "compress_p95_ms": 247.528,
+    "misses": [
+      "X10"
+    ],
+    "upstream_misses": [
+      "X10"
+    ]
+  },
+  "results": [
+    {
+      "qid": "A01",
+      "query": "银行家算法用到哪些数据结构",
+      "evidence_requirements_hit": 3,
+      "evidence_requirements_total": 3,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 240,
+      "packed_chars": 61675,
+      "source_chars": 115692,
+      "compression": 0.4669,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9615,
+              "ordinal_distance": 4,
+              "candidate_score": 0.422585
+            },
+            {
+              "chunk_id": 11314,
+              "ordinal_distance": 3,
+              "candidate_score": 0.562255
+            },
+            {
+              "chunk_id": 11264,
+              "ordinal_distance": 0,
+              "candidate_score": 0.614554
+            },
+            {
+              "chunk_id": 9076,
+              "ordinal_distance": 2,
+              "candidate_score": 0.604348
+            },
+            {
+              "chunk_id": 9086,
+              "ordinal_distance": 0,
+              "candidate_score": 0.561395
+            },
+            {
+              "chunk_id": 9624,
+              "ordinal_distance": 1,
+              "candidate_score": 0.422585
+            },
+            {
+              "chunk_id": 9625,
+              "ordinal_distance": 0,
+              "candidate_score": 0.422585
+            },
+            {
+              "chunk_id": 9690,
+              "ordinal_distance": 4,
+              "candidate_score": 0.015157
+            },
+            {
+              "chunk_id": 9699,
+              "ordinal_distance": 1,
+              "candidate_score": 0.015157
+            },
+            {
+              "chunk_id": 9700,
+              "ordinal_distance": 0,
+              "candidate_score": 0.015157
+            },
+            {
+              "chunk_id": 9828,
+              "ordinal_distance": 0,
+              "candidate_score": 0.026084
+            },
+            {
+              "chunk_id": 9918,
+              "ordinal_distance": 0,
+              "candidate_score": 0.026036
+            },
+            {
+              "chunk_id": 10697,
+              "ordinal_distance": 0,
+              "candidate_score": 0.025629
+            },
+            {
+              "chunk_id": 9908,
+              "ordinal_distance": 2,
+              "candidate_score": 0.026443
+            },
+            {
+              "chunk_id": 9818,
+              "ordinal_distance": 2,
+              "candidate_score": 0.026324
+            },
+            {
+              "chunk_id": 10687,
+              "ordinal_distance": 2,
+              "candidate_score": 0.025618
+            }
+          ],
+          "extracted_match_ranks": [
+            105,
+            136,
+            137,
+            146,
+            399,
+            400,
+            470,
+            472,
+            474,
+            597
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-02",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9614,
+              "ordinal_distance": 4,
+              "candidate_score": 0.422585
+            },
+            {
+              "chunk_id": 9615,
+              "ordinal_distance": 4,
+              "candidate_score": 0.422585
+            },
+            {
+              "chunk_id": 11314,
+              "ordinal_distance": 3,
+              "candidate_score": 0.562255
+            },
+            {
+              "chunk_id": 9074,
+              "ordinal_distance": 0,
+              "candidate_score": 0.604348
+            },
+            {
+              "chunk_id": 11264,
+              "ordinal_distance": 0,
+              "candidate_score": 0.614554
+            },
+            {
+              "chunk_id": 11321,
+              "ordinal_distance": 0,
+              "candidate_score": 0.55647
+            },
+            {
+              "chunk_id": 9689,
+              "ordinal_distance": 4,
+              "candidate_score": 0.015157
+            },
+            {
+              "chunk_id": 9690,
+              "ordinal_distance": 4,
+              "candidate_score": 0.015157
+            },
+            {
+              "chunk_id": 9816,
+              "ordinal_distance": 0,
+              "candidate_score": 0.026324
+            },
+            {
+              "chunk_id": 9906,
+              "ordinal_distance": 0,
+              "candidate_score": 0.026443
+            },
+            {
+              "chunk_id": 10685,
+              "ordinal_distance": 0,
+              "candidate_score": 0.025618
+            }
+          ],
+          "extracted_match_ranks": [
+            2,
+            3,
+            18,
+            221,
+            222,
+            236,
+            240,
+            244,
+            377,
+            596
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-03",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9615,
+              "ordinal_distance": 4,
+              "candidate_score": 0.422585
+            },
+            {
+              "chunk_id": 11314,
+              "ordinal_distance": 3,
+              "candidate_score": 0.562255
+            },
+            {
+              "chunk_id": 9074,
+              "ordinal_distance": 0,
+              "candidate_score": 0.604348
+            },
+            {
+              "chunk_id": 11264,
+              "ordinal_distance": 0,
+              "candidate_score": 0.614554
+            },
+            {
+              "chunk_id": 11321,
+              "ordinal_distance": 0,
+              "candidate_score": 0.55647
+            },
+            {
+              "chunk_id": 9076,
+              "ordinal_distance": 2,
+              "candidate_score": 0.604348
+            },
+            {
+              "chunk_id": 9086,
+              "ordinal_distance": 0,
+              "candidate_score": 0.561395
+            },
+            {
+              "chunk_id": 9625,
+              "ordinal_distance": 0,
+              "candidate_score": 0.422585
+            },
+            {
+              "chunk_id": 9690,
+              "ordinal_distance": 4,
+              "candidate_score": 0.015157
+            },
+            {
+              "chunk_id": 9816,
+              "ordinal_distance": 0,
+              "candidate_score": 0.026324
+            },
+            {
+              "chunk_id": 9906,
+              "ordinal_distance": 0,
+              "candidate_score": 0.026443
+            },
+            {
+              "chunk_id": 10685,
+              "ordinal_distance": 0,
+              "candidate_score": 0.025618
+            },
+            {
+              "chunk_id": 9700,
+              "ordinal_distance": 0,
+              "candidate_score": 0.015157
+            },
+            {
+              "chunk_id": 9828,
+              "ordinal_distance": 0,
+              "candidate_score": 0.026084
+            },
+            {
+              "chunk_id": 9918,
+              "ordinal_distance": 0,
+              "candidate_score": 0.026036
+            },
+            {
+              "chunk_id": 10697,
+              "ordinal_distance": 0,
+              "candidate_score": 0.025629
+            },
+            {
+              "chunk_id": 9908,
+              "ordinal_distance": 2,
+              "candidate_score": 0.026443
+            },
+            {
+              "chunk_id": 9818,
+              "ordinal_distance": 2,
+              "candidate_score": 0.026324
+            },
+            {
+              "chunk_id": 10687,
+              "ordinal_distance": 2,
+              "candidate_score": 0.025618
+            }
+          ],
+          "extracted_match_ranks": [
+            2,
+            3,
+            18,
+            105,
+            136,
+            137,
+            146,
+            221,
+            222,
+            236
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "A02",
+      "query": "Sn58Bi 钎料加入纳米镍后抗剪强度峰值是多少",
+      "evidence_requirements_hit": 2,
+      "evidence_requirements_total": 2,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 143,
+      "packed_chars": 64000,
+      "source_chars": 144831,
+      "compression": 0.5581,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9209,
+              "ordinal_distance": 4,
+              "candidate_score": 0.025174
+            },
+            {
+              "chunk_id": 9261,
+              "ordinal_distance": 2,
+              "candidate_score": 0.032083
+            },
+            {
+              "chunk_id": 9272,
+              "ordinal_distance": 3,
+              "candidate_score": 0.027266
+            }
+          ],
+          "extracted_match_ranks": [
+            11,
+            12,
+            22,
+            23,
+            34,
+            47,
+            115,
+            116,
+            117,
+            180
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-02",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9209,
+              "ordinal_distance": 4,
+              "candidate_score": 0.025174
+            },
+            {
+              "chunk_id": 9261,
+              "ordinal_distance": 2,
+              "candidate_score": 0.032083
+            },
+            {
+              "chunk_id": 9272,
+              "ordinal_distance": 3,
+              "candidate_score": 0.027266
+            }
+          ],
+          "extracted_match_ranks": [
+            11,
+            12,
+            22,
+            23,
+            34,
+            47,
+            115,
+            116,
+            117,
+            180
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "A03",
+      "query": "PyFTP 实现了哪三种并发模型",
+      "evidence_requirements_hit": 3,
+      "evidence_requirements_total": 3,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 171,
+      "packed_chars": 64000,
+      "source_chars": 123733,
+      "compression": 0.4828,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9805,
+              "ordinal_distance": 3,
+              "candidate_score": 0.640384
+            },
+            {
+              "chunk_id": 10842,
+              "ordinal_distance": 0,
+              "candidate_score": 0.611698
+            },
+            {
+              "chunk_id": 9790,
+              "ordinal_distance": 2,
+              "candidate_score": 0.333483
+            },
+            {
+              "chunk_id": 9783,
+              "ordinal_distance": 3,
+              "candidate_score": 0.364686
+            },
+            {
+              "chunk_id": 11016,
+              "ordinal_distance": 0,
+              "candidate_score": 0.013333
+            },
+            {
+              "chunk_id": 11017,
+              "ordinal_distance": 1,
+              "candidate_score": 0.013333
+            }
+          ],
+          "extracted_match_ranks": [
+            19,
+            20,
+            21,
+            22,
+            36,
+            100,
+            101,
+            102,
+            103,
+            295
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-02",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9805,
+              "ordinal_distance": 3,
+              "candidate_score": 0.640384
+            },
+            {
+              "chunk_id": 10842,
+              "ordinal_distance": 0,
+              "candidate_score": 0.611698
+            },
+            {
+              "chunk_id": 9790,
+              "ordinal_distance": 2,
+              "candidate_score": 0.333483
+            },
+            {
+              "chunk_id": 9783,
+              "ordinal_distance": 3,
+              "candidate_score": 0.364686
+            },
+            {
+              "chunk_id": 11016,
+              "ordinal_distance": 0,
+              "candidate_score": 0.013333
+            },
+            {
+              "chunk_id": 11017,
+              "ordinal_distance": 1,
+              "candidate_score": 0.013333
+            }
+          ],
+          "extracted_match_ranks": [
+            19,
+            20,
+            21,
+            22,
+            36,
+            100,
+            101,
+            102,
+            103,
+            295
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-03",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9805,
+              "ordinal_distance": 3,
+              "candidate_score": 0.640384
+            },
+            {
+              "chunk_id": 10842,
+              "ordinal_distance": 0,
+              "candidate_score": 0.611698
+            },
+            {
+              "chunk_id": 9783,
+              "ordinal_distance": 3,
+              "candidate_score": 0.364686
+            },
+            {
+              "chunk_id": 9785,
+              "ordinal_distance": 3,
+              "candidate_score": 0.333483
+            },
+            {
+              "chunk_id": 11016,
+              "ordinal_distance": 0,
+              "candidate_score": 0.013333
+            },
+            {
+              "chunk_id": 11017,
+              "ordinal_distance": 1,
+              "candidate_score": 0.013333
+            }
+          ],
+          "extracted_match_ranks": [
+            19,
+            20,
+            21,
+            22,
+            36,
+            100,
+            101,
+            102,
+            103,
+            135
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "A04",
+      "query": "学生社团负责人三星级优秀可以加多少分",
+      "evidence_requirements_hit": 1,
+      "evidence_requirements_total": 1,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 141,
+      "packed_chars": 64000,
+      "source_chars": 172830,
+      "compression": 0.6297,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 11675,
+              "ordinal_distance": 4,
+              "candidate_score": 0.028013
+            }
+          ],
+          "extracted_match_ranks": [
+            86,
+            87,
+            1763
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "A05",
+      "query": "冯诺依曼机工作方式的基本特点",
+      "evidence_requirements_hit": 2,
+      "evidence_requirements_total": 2,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 187,
+      "packed_chars": 64000,
+      "source_chars": 254929,
+      "compression": 0.7489,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10350,
+              "ordinal_distance": 4,
+              "candidate_score": 0.010638
+            },
+            {
+              "chunk_id": 10366,
+              "ordinal_distance": 1,
+              "candidate_score": 0.372863
+            }
+          ],
+          "extracted_match_ranks": [
+            1,
+            2,
+            3,
+            4,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-02",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10350,
+              "ordinal_distance": 4,
+              "candidate_score": 0.010638
+            },
+            {
+              "chunk_id": 10366,
+              "ordinal_distance": 1,
+              "candidate_score": 0.372863
+            }
+          ],
+          "extracted_match_ranks": [
+            1,
+            2,
+            3,
+            4,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "A06",
+      "query": "宿舍怎么交电费",
+      "evidence_requirements_hit": 2,
+      "evidence_requirements_total": 2,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 156,
+      "packed_chars": 64000,
+      "source_chars": 268604,
+      "compression": 0.7617,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9195,
+              "ordinal_distance": 2,
+              "candidate_score": 0.752723
+            },
+            {
+              "chunk_id": 9196,
+              "ordinal_distance": 1,
+              "candidate_score": 0.752723
+            },
+            {
+              "chunk_id": 9197,
+              "ordinal_distance": 0,
+              "candidate_score": 0.752723
+            }
+          ],
+          "extracted_match_ranks": [
+            3,
+            19,
+            20,
+            21,
+            32,
+            33,
+            66,
+            2775,
+            2776,
+            2777
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-02",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9195,
+              "ordinal_distance": 2,
+              "candidate_score": 0.752723
+            },
+            {
+              "chunk_id": 9196,
+              "ordinal_distance": 1,
+              "candidate_score": 0.752723
+            },
+            {
+              "chunk_id": 9197,
+              "ordinal_distance": 0,
+              "candidate_score": 0.752723
+            }
+          ],
+          "extracted_match_ranks": [
+            3,
+            19,
+            20,
+            21,
+            32,
+            33,
+            66,
+            2775,
+            2776,
+            2777
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "A07",
+      "query": "低熔点无铅焊料为什么会性能下降",
+      "evidence_requirements_hit": 3,
+      "evidence_requirements_total": 3,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 191,
+      "packed_chars": 64000,
+      "source_chars": 204061,
+      "compression": 0.6864,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9208,
+              "ordinal_distance": 4,
+              "candidate_score": 0.021095
+            },
+            {
+              "chunk_id": 9259,
+              "ordinal_distance": 2,
+              "candidate_score": 0.021095
+            },
+            {
+              "chunk_id": 9265,
+              "ordinal_distance": 2,
+              "candidate_score": 0.02383
+            }
+          ],
+          "extracted_match_ranks": [
+            17,
+            18,
+            39,
+            1275,
+            1278,
+            1279,
+            1874,
+            2275,
+            2595
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-02",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9208,
+              "ordinal_distance": 4,
+              "candidate_score": 0.021095
+            },
+            {
+              "chunk_id": 9259,
+              "ordinal_distance": 2,
+              "candidate_score": 0.021095
+            },
+            {
+              "chunk_id": 9265,
+              "ordinal_distance": 2,
+              "candidate_score": 0.02383
+            }
+          ],
+          "extracted_match_ranks": [
+            17,
+            18,
+            39,
+            1275,
+            1278,
+            1279,
+            1874,
+            2275,
+            2595
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-03",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9208,
+              "ordinal_distance": 4,
+              "candidate_score": 0.021095
+            },
+            {
+              "chunk_id": 9233,
+              "ordinal_distance": 3,
+              "candidate_score": 0.023542
+            },
+            {
+              "chunk_id": 9259,
+              "ordinal_distance": 2,
+              "candidate_score": 0.021095
+            }
+          ],
+          "extracted_match_ranks": [
+            4,
+            5,
+            17,
+            18,
+            20,
+            39,
+            1275,
+            1278,
+            1279,
+            2274
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "A08",
+      "query": "怎么避免进程互相等待资源卡死",
+      "evidence_requirements_hit": 2,
+      "evidence_requirements_total": 2,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 192,
+      "packed_chars": 64000,
+      "source_chars": 118802,
+      "compression": 0.4613,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 11312,
+              "ordinal_distance": 0,
+              "candidate_score": 0.742637
+            },
+            {
+              "chunk_id": 9621,
+              "ordinal_distance": 0,
+              "candidate_score": 0.376755
+            },
+            {
+              "chunk_id": 9622,
+              "ordinal_distance": 1,
+              "candidate_score": 0.376755
+            },
+            {
+              "chunk_id": 9623,
+              "ordinal_distance": 2,
+              "candidate_score": 0.376755
+            },
+            {
+              "chunk_id": 9081,
+              "ordinal_distance": 3,
+              "candidate_score": 0.015391
+            },
+            {
+              "chunk_id": 9082,
+              "ordinal_distance": 2,
+              "candidate_score": 0.015391
+            },
+            {
+              "chunk_id": 9083,
+              "ordinal_distance": 1,
+              "candidate_score": 0.015391
+            },
+            {
+              "chunk_id": 9117,
+              "ordinal_distance": 2,
+              "candidate_score": 0.404079
+            },
+            {
+              "chunk_id": 9118,
+              "ordinal_distance": 1,
+              "candidate_score": 0.404079
+            },
+            {
+              "chunk_id": 9119,
+              "ordinal_distance": 0,
+              "candidate_score": 0.404079
+            },
+            {
+              "chunk_id": 9696,
+              "ordinal_distance": 0,
+              "candidate_score": 0.014296
+            },
+            {
+              "chunk_id": 9697,
+              "ordinal_distance": 1,
+              "candidate_score": 0.014296
+            },
+            {
+              "chunk_id": 9698,
+              "ordinal_distance": 2,
+              "candidate_score": 0.014296
+            },
+            {
+              "chunk_id": 9823,
+              "ordinal_distance": 1,
+              "candidate_score": 0.020613
+            },
+            {
+              "chunk_id": 9824,
+              "ordinal_distance": 0,
+              "candidate_score": 0.020613
+            },
+            {
+              "chunk_id": 9825,
+              "ordinal_distance": 1,
+              "candidate_score": 0.020613
+            },
+            {
+              "chunk_id": 9913,
+              "ordinal_distance": 3,
+              "candidate_score": 0.015422
+            },
+            {
+              "chunk_id": 9914,
+              "ordinal_distance": 2,
+              "candidate_score": 0.015422
+            },
+            {
+              "chunk_id": 10692,
+              "ordinal_distance": 3,
+              "candidate_score": 0.015488
+            },
+            {
+              "chunk_id": 10693,
+              "ordinal_distance": 2,
+              "candidate_score": 0.015488
+            },
+            {
+              "chunk_id": 10694,
+              "ordinal_distance": 1,
+              "candidate_score": 0.015488
+            },
+            {
+              "chunk_id": 9915,
+              "ordinal_distance": 1,
+              "candidate_score": 0.015422
+            }
+          ],
+          "extracted_match_ranks": [
+            13,
+            147,
+            678,
+            951,
+            1114,
+            1788,
+            1797,
+            1799,
+            1803,
+            1810
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-02",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 11313,
+              "ordinal_distance": 1,
+              "candidate_score": 0.742637
+            },
+            {
+              "chunk_id": 9621,
+              "ordinal_distance": 0,
+              "candidate_score": 0.376755
+            },
+            {
+              "chunk_id": 9622,
+              "ordinal_distance": 1,
+              "candidate_score": 0.376755
+            },
+            {
+              "chunk_id": 9623,
+              "ordinal_distance": 2,
+              "candidate_score": 0.376755
+            },
+            {
+              "chunk_id": 9081,
+              "ordinal_distance": 3,
+              "candidate_score": 0.015391
+            },
+            {
+              "chunk_id": 9082,
+              "ordinal_distance": 2,
+              "candidate_score": 0.015391
+            },
+            {
+              "chunk_id": 9083,
+              "ordinal_distance": 1,
+              "candidate_score": 0.015391
+            },
+            {
+              "chunk_id": 9117,
+              "ordinal_distance": 2,
+              "candidate_score": 0.404079
+            },
+            {
+              "chunk_id": 9118,
+              "ordinal_distance": 1,
+              "candidate_score": 0.404079
+            },
+            {
+              "chunk_id": 9119,
+              "ordinal_distance": 0,
+              "candidate_score": 0.404079
+            },
+            {
+              "chunk_id": 9696,
+              "ordinal_distance": 0,
+              "candidate_score": 0.014296
+            },
+            {
+              "chunk_id": 9697,
+              "ordinal_distance": 1,
+              "candidate_score": 0.014296
+            },
+            {
+              "chunk_id": 9698,
+              "ordinal_distance": 2,
+              "candidate_score": 0.014296
+            },
+            {
+              "chunk_id": 9823,
+              "ordinal_distance": 1,
+              "candidate_score": 0.020613
+            },
+            {
+              "chunk_id": 9824,
+              "ordinal_distance": 0,
+              "candidate_score": 0.020613
+            },
+            {
+              "chunk_id": 9825,
+              "ordinal_distance": 1,
+              "candidate_score": 0.020613
+            },
+            {
+              "chunk_id": 9913,
+              "ordinal_distance": 3,
+              "candidate_score": 0.015422
+            },
+            {
+              "chunk_id": 9914,
+              "ordinal_distance": 2,
+              "candidate_score": 0.015422
+            },
+            {
+              "chunk_id": 10692,
+              "ordinal_distance": 3,
+              "candidate_score": 0.015488
+            },
+            {
+              "chunk_id": 10693,
+              "ordinal_distance": 2,
+              "candidate_score": 0.015488
+            },
+            {
+              "chunk_id": 10694,
+              "ordinal_distance": 1,
+              "candidate_score": 0.015488
+            },
+            {
+              "chunk_id": 9915,
+              "ordinal_distance": 1,
+              "candidate_score": 0.015422
+            }
+          ],
+          "extracted_match_ranks": [
+            13,
+            147,
+            678,
+            951,
+            1114,
+            1790,
+            1797,
+            1799,
+            1803,
+            1810
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "A09",
+      "query": "决赛在哪个城市哪所学校举办",
+      "evidence_requirements_hit": 2,
+      "evidence_requirements_total": 2,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 164,
+      "packed_chars": 64000,
+      "source_chars": 274442,
+      "compression": 0.7668,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10773,
+              "ordinal_distance": 4,
+              "candidate_score": 0.009804
+            },
+            {
+              "chunk_id": 10786,
+              "ordinal_distance": 2,
+              "candidate_score": 0.010526
+            },
+            {
+              "chunk_id": 10781,
+              "ordinal_distance": 3,
+              "candidate_score": 0.010526
+            }
+          ],
+          "extracted_match_ranks": [
+            362,
+            363,
+            958,
+            2952,
+            3017
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-02",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10773,
+              "ordinal_distance": 4,
+              "candidate_score": 0.009804
+            },
+            {
+              "chunk_id": 10786,
+              "ordinal_distance": 2,
+              "candidate_score": 0.010526
+            },
+            {
+              "chunk_id": 10781,
+              "ordinal_distance": 3,
+              "candidate_score": 0.010526
+            }
+          ],
+          "extracted_match_ranks": [
+            362,
+            363,
+            958,
+            2952,
+            3017
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "A10",
+      "query": "网站配色和字体该怎么选",
+      "evidence_requirements_hit": 2,
+      "evidence_requirements_total": 2,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 237,
+      "packed_chars": 64000,
+      "source_chars": 241337,
+      "compression": 0.7348,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "font-recommendation",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10058,
+              "ordinal_distance": 3,
+              "candidate_score": 0.445457
+            }
+          ],
+          "extracted_match_ranks": [
+            416,
+            417,
+            2580
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "colour-palette",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10056,
+              "ordinal_distance": 4,
+              "candidate_score": 0.009091
+            }
+          ],
+          "extracted_match_ranks": [
+            100,
+            448,
+            2582
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "A11",
+      "query": "这个 FTP 项目一共写了多少行代码、测试通过多少项",
+      "evidence_requirements_hit": 2,
+      "evidence_requirements_total": 2,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 172,
+      "packed_chars": 63999,
+      "source_chars": 85529,
+      "compression": 0.2517,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10835,
+              "ordinal_distance": 4,
+              "candidate_score": 0.011364
+            },
+            {
+              "chunk_id": 11033,
+              "ordinal_distance": 1,
+              "candidate_score": 0.012821
+            },
+            {
+              "chunk_id": 10908,
+              "ordinal_distance": 1,
+              "candidate_score": 0.0125
+            }
+          ],
+          "extracted_match_ranks": [
+            3,
+            4,
+            5,
+            6,
+            13,
+            14,
+            22,
+            611,
+            1093,
+            1118
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-02",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10835,
+              "ordinal_distance": 4,
+              "candidate_score": 0.011364
+            },
+            {
+              "chunk_id": 10932,
+              "ordinal_distance": 0,
+              "candidate_score": 0.011494
+            }
+          ],
+          "extracted_match_ranks": [
+            3,
+            4,
+            5,
+            6,
+            904,
+            1010,
+            1093,
+            1221
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "A12",
+      "query": "镍含量从 0.1% 加到 2% 强度怎么变化",
+      "evidence_requirements_hit": 2,
+      "evidence_requirements_total": 2,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 143,
+      "packed_chars": 64000,
+      "source_chars": 287627,
+      "compression": 0.7775,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9209,
+              "ordinal_distance": 4,
+              "candidate_score": 0.01087
+            },
+            {
+              "chunk_id": 9272,
+              "ordinal_distance": 1,
+              "candidate_score": 0.640124
+            },
+            {
+              "chunk_id": 9261,
+              "ordinal_distance": 1,
+              "candidate_score": 0.012346
+            }
+          ],
+          "extracted_match_ranks": [
+            1,
+            5,
+            7,
+            8,
+            9,
+            10,
+            15,
+            16,
+            28,
+            48
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-02",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9209,
+              "ordinal_distance": 4,
+              "candidate_score": 0.01087
+            },
+            {
+              "chunk_id": 9272,
+              "ordinal_distance": 1,
+              "candidate_score": 0.640124
+            },
+            {
+              "chunk_id": 9261,
+              "ordinal_distance": 1,
+              "candidate_score": 0.012346
+            }
+          ],
+          "extracted_match_ranks": [
+            1,
+            5,
+            7,
+            8,
+            9,
+            10,
+            15,
+            16,
+            28,
+            48
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "A13",
+      "query": "社团成员加分需要满足什么前提条件",
+      "evidence_requirements_hit": 2,
+      "evidence_requirements_total": 2,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 173,
+      "packed_chars": 64000,
+      "source_chars": 224717,
+      "compression": 0.7152,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 11674,
+              "ordinal_distance": 4,
+              "candidate_score": 0.00965
+            }
+          ],
+          "extracted_match_ranks": [
+            37,
+            2754
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-02",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 11674,
+              "ordinal_distance": 4,
+              "candidate_score": 0.00965
+            }
+          ],
+          "extracted_match_ranks": [
+            37,
+            2754
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "A14",
+      "query": "墨洞项目的定位是什么",
+      "evidence_requirements_hit": 1,
+      "evidence_requirements_total": 1,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 200,
+      "packed_chars": 64000,
+      "source_chars": 182051,
+      "compression": 0.6485,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 11119,
+              "ordinal_distance": 4,
+              "candidate_score": 0.022462
+            },
+            {
+              "chunk_id": 11139,
+              "ordinal_distance": 3,
+              "candidate_score": 0.683307
+            },
+            {
+              "chunk_id": 11140,
+              "ordinal_distance": 2,
+              "candidate_score": 0.683307
+            }
+          ],
+          "extracted_match_ranks": [
+            4,
+            5,
+            6,
+            71,
+            72,
+            109,
+            2671,
+            2675
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "A17",
+      "query": "补码零的表示形式有什么特点",
+      "evidence_requirements_hit": 1,
+      "evidence_requirements_total": 1,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 191,
+      "packed_chars": 64000,
+      "source_chars": 277397,
+      "compression": 0.7693,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10351,
+              "ordinal_distance": 1,
+              "candidate_score": 0.368034
+            },
+            {
+              "chunk_id": 10352,
+              "ordinal_distance": 2,
+              "candidate_score": 0.368034
+            }
+          ],
+          "extracted_match_ranks": [
+            3,
+            4,
+            15,
+            17,
+            30,
+            67,
+            117,
+            118,
+            3882,
+            3884
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "A18",
+      "query": "祠堂三维模型建议怎么拆分文件",
+      "evidence_requirements_hit": 2,
+      "evidence_requirements_total": 2,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 234,
+      "packed_chars": 64000,
+      "source_chars": 164021,
+      "compression": 0.6098,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10064,
+              "ordinal_distance": 1,
+              "candidate_score": 0.019511
+            }
+          ],
+          "extracted_match_ranks": [
+            45,
+            2733
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-02",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10064,
+              "ordinal_distance": 1,
+              "candidate_score": 0.019511
+            },
+            {
+              "chunk_id": 10071,
+              "ordinal_distance": 2,
+              "candidate_score": 0.018002
+            },
+            {
+              "chunk_id": 10097,
+              "ordinal_distance": 1,
+              "candidate_score": 0.011364
+            }
+          ],
+          "extracted_match_ranks": [
+            4,
+            5,
+            12,
+            13,
+            14,
+            15,
+            2200,
+            2201,
+            2202,
+            2203
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "F19",
+      "query": "FTP 服务器默认使用哪个控制端口",
+      "evidence_requirements_hit": 1,
+      "evidence_requirements_total": 1,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 172,
+      "packed_chars": 64000,
+      "source_chars": 82550,
+      "compression": 0.2247,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 11042,
+              "ordinal_distance": 0,
+              "candidate_score": 0.676802
+            },
+            {
+              "chunk_id": 9784,
+              "ordinal_distance": 2,
+              "candidate_score": 0.484438
+            },
+            {
+              "chunk_id": 11014,
+              "ordinal_distance": 1,
+              "candidate_score": 0.032023
+            }
+          ],
+          "extracted_match_ranks": [
+            22,
+            994,
+            1129,
+            1136,
+            1247
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "F20",
+      "query": "PyFTP 使用什么 Python 版本开发",
+      "evidence_requirements_hit": 1,
+      "evidence_requirements_total": 1,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 189,
+      "packed_chars": 64000,
+      "source_chars": 265106,
+      "compression": 0.7586,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10854,
+              "ordinal_distance": 2,
+              "candidate_score": 0.549879
+            },
+            {
+              "chunk_id": 10888,
+              "ordinal_distance": 2,
+              "candidate_score": 0.020067
+            },
+            {
+              "chunk_id": 11006,
+              "ordinal_distance": 0,
+              "candidate_score": 0.515867
+            }
+          ],
+          "extracted_match_ranks": [
+            12,
+            195,
+            196,
+            301,
+            304,
+            305,
+            306,
+            3288
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "F21",
+      "query": "FTP 项目支持哪两种数据连接模式",
+      "evidence_requirements_hit": 2,
+      "evidence_requirements_total": 2,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 189,
+      "packed_chars": 64000,
+      "source_chars": 82086,
+      "compression": 0.2203,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10867,
+              "ordinal_distance": 2,
+              "candidate_score": 0.594316
+            },
+            {
+              "chunk_id": 9786,
+              "ordinal_distance": 2,
+              "candidate_score": 0.329926
+            },
+            {
+              "chunk_id": 10900,
+              "ordinal_distance": 0,
+              "candidate_score": 0.025574
+            }
+          ],
+          "extracted_match_ranks": [
+            14,
+            15,
+            16,
+            17,
+            21,
+            22,
+            23,
+            37,
+            302,
+            1080
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-02",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10867,
+              "ordinal_distance": 2,
+              "candidate_score": 0.594316
+            },
+            {
+              "chunk_id": 9786,
+              "ordinal_distance": 2,
+              "candidate_score": 0.329926
+            },
+            {
+              "chunk_id": 9807,
+              "ordinal_distance": 1,
+              "candidate_score": 0.445903
+            },
+            {
+              "chunk_id": 10900,
+              "ordinal_distance": 0,
+              "candidate_score": 0.025574
+            }
+          ],
+          "extracted_match_ranks": [
+            14,
+            15,
+            16,
+            17,
+            21,
+            22,
+            23,
+            37,
+            79,
+            80
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "F22",
+      "query": "FTP 断点续传使用什么命令",
+      "evidence_requirements_hit": 1,
+      "evidence_requirements_total": 1,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 151,
+      "packed_chars": 64000,
+      "source_chars": 96405,
+      "compression": 0.3361,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 11040,
+              "ordinal_distance": 0,
+              "candidate_score": 0.837685
+            },
+            {
+              "chunk_id": 10940,
+              "ordinal_distance": 2,
+              "candidate_score": 0.022768
+            },
+            {
+              "chunk_id": 10942,
+              "ordinal_distance": 0,
+              "candidate_score": 0.022768
+            },
+            {
+              "chunk_id": 9806,
+              "ordinal_distance": 1,
+              "candidate_score": 0.3544
+            },
+            {
+              "chunk_id": 9794,
+              "ordinal_distance": 1,
+              "candidate_score": 0.431808
+            },
+            {
+              "chunk_id": 9788,
+              "ordinal_distance": 3,
+              "candidate_score": 0.413449
+            }
+          ],
+          "extracted_match_ranks": [
+            30,
+            31,
+            33,
+            34,
+            35,
+            36,
+            48,
+            49,
+            50,
+            51
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "F23",
+      "query": "FAT12 的目录项长度是多少字节",
+      "evidence_requirements_hit": 1,
+      "evidence_requirements_total": 1,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 176,
+      "packed_chars": 64000,
+      "source_chars": 157687,
+      "compression": 0.5941,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9652,
+              "ordinal_distance": 3,
+              "candidate_score": 0.435212
+            },
+            {
+              "chunk_id": 9866,
+              "ordinal_distance": 3,
+              "candidate_score": 0.007407
+            },
+            {
+              "chunk_id": 9868,
+              "ordinal_distance": 2,
+              "candidate_score": 0.007194
+            },
+            {
+              "chunk_id": 9956,
+              "ordinal_distance": 3,
+              "candidate_score": 0.00641
+            },
+            {
+              "chunk_id": 9958,
+              "ordinal_distance": 2,
+              "candidate_score": 0.007246
+            },
+            {
+              "chunk_id": 10737,
+              "ordinal_distance": 1,
+              "candidate_score": 0.007463
+            },
+            {
+              "chunk_id": 10735,
+              "ordinal_distance": 3,
+              "candidate_score": 0.006173
+            }
+          ],
+          "extracted_match_ranks": [
+            5,
+            6,
+            7,
+            8,
+            11,
+            14,
+            15,
+            16,
+            17,
+            34
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "F24",
+      "query": "FAT12 每个 FAT 表项占多少位",
+      "evidence_requirements_hit": 1,
+      "evidence_requirements_total": 1,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 154,
+      "packed_chars": 64000,
+      "source_chars": 218236,
+      "compression": 0.7067,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9652,
+              "ordinal_distance": 3,
+              "candidate_score": 0.464424
+            },
+            {
+              "chunk_id": 9653,
+              "ordinal_distance": 2,
+              "candidate_score": 0.464424
+            },
+            {
+              "chunk_id": 9866,
+              "ordinal_distance": 2,
+              "candidate_score": 0.681224
+            },
+            {
+              "chunk_id": 9867,
+              "ordinal_distance": 3,
+              "candidate_score": 0.45576
+            },
+            {
+              "chunk_id": 11358,
+              "ordinal_distance": 0,
+              "candidate_score": 0.009901
+            },
+            {
+              "chunk_id": 11360,
+              "ordinal_distance": 2,
+              "candidate_score": 0.009901
+            },
+            {
+              "chunk_id": 9956,
+              "ordinal_distance": 2,
+              "candidate_score": 0.025479
+            },
+            {
+              "chunk_id": 9957,
+              "ordinal_distance": 3,
+              "candidate_score": 0.009346
+            },
+            {
+              "chunk_id": 10735,
+              "ordinal_distance": 2,
+              "candidate_score": 0.024128
+            },
+            {
+              "chunk_id": 10736,
+              "ordinal_distance": 3,
+              "candidate_score": 0.009259
+            }
+          ],
+          "extracted_match_ranks": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            9,
+            12,
+            13,
+            22
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "F25",
+      "query": "银行家算法判断资源不足时比较哪两个向量",
+      "evidence_requirements_hit": 2,
+      "evidence_requirements_total": 2,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 198,
+      "packed_chars": 64000,
+      "source_chars": 139170,
+      "compression": 0.5401,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9624,
+              "ordinal_distance": 2,
+              "candidate_score": 0.484631
+            },
+            {
+              "chunk_id": 11321,
+              "ordinal_distance": 1,
+              "candidate_score": 0.605367
+            },
+            {
+              "chunk_id": 9617,
+              "ordinal_distance": 1,
+              "candidate_score": 0.371394
+            },
+            {
+              "chunk_id": 9909,
+              "ordinal_distance": 3,
+              "candidate_score": 0.029088
+            },
+            {
+              "chunk_id": 9113,
+              "ordinal_distance": 4,
+              "candidate_score": 0.328682
+            },
+            {
+              "chunk_id": 9084,
+              "ordinal_distance": 3,
+              "candidate_score": 0.420273
+            },
+            {
+              "chunk_id": 11314,
+              "ordinal_distance": 3,
+              "candidate_score": 0.607336
+            },
+            {
+              "chunk_id": 11264,
+              "ordinal_distance": 0,
+              "candidate_score": 0.605504
+            },
+            {
+              "chunk_id": 9120,
+              "ordinal_distance": 3,
+              "candidate_score": 0.328682
+            },
+            {
+              "chunk_id": 9077,
+              "ordinal_distance": 0,
+              "candidate_score": 0.036116
+            },
+            {
+              "chunk_id": 9699,
+              "ordinal_distance": 2,
+              "candidate_score": 0.029344
+            },
+            {
+              "chunk_id": 9692,
+              "ordinal_distance": 1,
+              "candidate_score": 0.014288
+            },
+            {
+              "chunk_id": 9819,
+              "ordinal_distance": 3,
+              "candidate_score": 0.029177
+            },
+            {
+              "chunk_id": 10688,
+              "ordinal_distance": 3,
+              "candidate_score": 0.028354
+            },
+            {
+              "chunk_id": 9826,
+              "ordinal_distance": 3,
+              "candidate_score": 0.013414
+            },
+            {
+              "chunk_id": 10695,
+              "ordinal_distance": 3,
+              "candidate_score": 0.013419
+            },
+            {
+              "chunk_id": 9916,
+              "ordinal_distance": 3,
+              "candidate_score": 0.013397
+            }
+          ],
+          "extracted_match_ranks": [
+            3,
+            14,
+            93,
+            95,
+            153,
+            171,
+            182,
+            194,
+            259,
+            295
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-02",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9624,
+              "ordinal_distance": 2,
+              "candidate_score": 0.484631
+            },
+            {
+              "chunk_id": 11321,
+              "ordinal_distance": 1,
+              "candidate_score": 0.605367
+            },
+            {
+              "chunk_id": 9617,
+              "ordinal_distance": 1,
+              "candidate_score": 0.371394
+            },
+            {
+              "chunk_id": 9909,
+              "ordinal_distance": 3,
+              "candidate_score": 0.029088
+            },
+            {
+              "chunk_id": 9113,
+              "ordinal_distance": 4,
+              "candidate_score": 0.328682
+            },
+            {
+              "chunk_id": 9084,
+              "ordinal_distance": 3,
+              "candidate_score": 0.420273
+            },
+            {
+              "chunk_id": 11314,
+              "ordinal_distance": 3,
+              "candidate_score": 0.607336
+            },
+            {
+              "chunk_id": 11264,
+              "ordinal_distance": 0,
+              "candidate_score": 0.605504
+            },
+            {
+              "chunk_id": 9120,
+              "ordinal_distance": 3,
+              "candidate_score": 0.328682
+            },
+            {
+              "chunk_id": 9077,
+              "ordinal_distance": 0,
+              "candidate_score": 0.036116
+            },
+            {
+              "chunk_id": 9699,
+              "ordinal_distance": 2,
+              "candidate_score": 0.029344
+            },
+            {
+              "chunk_id": 9692,
+              "ordinal_distance": 1,
+              "candidate_score": 0.014288
+            },
+            {
+              "chunk_id": 9819,
+              "ordinal_distance": 3,
+              "candidate_score": 0.029177
+            },
+            {
+              "chunk_id": 10688,
+              "ordinal_distance": 3,
+              "candidate_score": 0.028354
+            },
+            {
+              "chunk_id": 9826,
+              "ordinal_distance": 3,
+              "candidate_score": 0.013414
+            },
+            {
+              "chunk_id": 10695,
+              "ordinal_distance": 3,
+              "candidate_score": 0.013419
+            },
+            {
+              "chunk_id": 9916,
+              "ordinal_distance": 3,
+              "candidate_score": 0.013397
+            }
+          ],
+          "extracted_match_ranks": [
+            3,
+            14,
+            93,
+            95,
+            153,
+            171,
+            182,
+            194,
+            259,
+            295
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "F26",
+      "query": "FTP 未登录时返回什么状态码",
+      "evidence_requirements_hit": 1,
+      "evidence_requirements_total": 1,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 169,
+      "packed_chars": 63999,
+      "source_chars": 90897,
+      "compression": 0.2959,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10844,
+              "ordinal_distance": 3,
+              "candidate_score": 0.020542
+            },
+            {
+              "chunk_id": 10917,
+              "ordinal_distance": 0,
+              "candidate_score": 0.709305
+            },
+            {
+              "chunk_id": 9794,
+              "ordinal_distance": 1,
+              "candidate_score": 0.420222
+            },
+            {
+              "chunk_id": 9795,
+              "ordinal_distance": 0,
+              "candidate_score": 0.420222
+            },
+            {
+              "chunk_id": 10966,
+              "ordinal_distance": 1,
+              "candidate_score": 0.022523
+            }
+          ],
+          "extracted_match_ranks": [
+            42,
+            43,
+            102,
+            105,
+            172,
+            1115,
+            1129,
+            1255
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "F27",
+      "query": "PyFTP 默认使用哪种并发模型",
+      "evidence_requirements_hit": 1,
+      "evidence_requirements_total": 1,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 186,
+      "packed_chars": 64000,
+      "source_chars": 115042,
+      "compression": 0.4437,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10879,
+              "ordinal_distance": 3,
+              "candidate_score": 0.012821
+            },
+            {
+              "chunk_id": 9806,
+              "ordinal_distance": 3,
+              "candidate_score": 0.374069
+            },
+            {
+              "chunk_id": 9783,
+              "ordinal_distance": 3,
+              "candidate_score": 0.323199
+            },
+            {
+              "chunk_id": 9785,
+              "ordinal_distance": 1,
+              "candidate_score": 0.323199
+            },
+            {
+              "chunk_id": 10855,
+              "ordinal_distance": 3,
+              "candidate_score": 0.013235
+            },
+            {
+              "chunk_id": 10952,
+              "ordinal_distance": 2,
+              "candidate_score": 0.012658
+            }
+          ],
+          "extracted_match_ranks": [
+            47,
+            48,
+            74,
+            75,
+            76,
+            77,
+            84,
+            86,
+            87,
+            88
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "F28",
+      "query": "PyFTP 默认总根目录是什么",
+      "evidence_requirements_hit": 1,
+      "evidence_requirements_total": 1,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 179,
+      "packed_chars": 64000,
+      "source_chars": 85309,
+      "compression": 0.2498,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 11038,
+              "ordinal_distance": 3,
+              "candidate_score": 0.013564
+            },
+            {
+              "chunk_id": 10860,
+              "ordinal_distance": 1,
+              "candidate_score": 0.014786
+            }
+          ],
+          "extracted_match_ranks": [
+            3,
+            4,
+            5,
+            6,
+            7,
+            16,
+            17,
+            1096,
+            1106
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "F29",
+      "query": "FTP 项目要求的最低 TLS 版本是什么",
+      "evidence_requirements_hit": 1,
+      "evidence_requirements_total": 1,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 168,
+      "packed_chars": 64000,
+      "source_chars": 217418,
+      "compression": 0.7056,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 11026,
+              "ordinal_distance": 2,
+              "candidate_score": 0.598874
+            },
+            {
+              "chunk_id": 9810,
+              "ordinal_distance": 2,
+              "candidate_score": 0.54302
+            },
+            {
+              "chunk_id": 9786,
+              "ordinal_distance": 3,
+              "candidate_score": 0.759951
+            },
+            {
+              "chunk_id": 10853,
+              "ordinal_distance": 3,
+              "candidate_score": 0.014493
+            },
+            {
+              "chunk_id": 10936,
+              "ordinal_distance": 1,
+              "candidate_score": 0.015625
+            }
+          ],
+          "extracted_match_ranks": [
+            2,
+            3,
+            9,
+            46,
+            47,
+            48,
+            87,
+            88,
+            1429,
+            1430
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "F30",
+      "query": "FTP 命令未实现时返回什么状态码",
+      "evidence_requirements_hit": 1,
+      "evidence_requirements_total": 1,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 176,
+      "packed_chars": 64000,
+      "source_chars": 71378,
+      "compression": 0.1034,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10844,
+              "ordinal_distance": 2,
+              "candidate_score": 0.024072
+            },
+            {
+              "chunk_id": 10872,
+              "ordinal_distance": 1,
+              "candidate_score": 0.025065
+            },
+            {
+              "chunk_id": 9794,
+              "ordinal_distance": 1,
+              "candidate_score": 0.453034
+            },
+            {
+              "chunk_id": 10964,
+              "ordinal_distance": 0,
+              "candidate_score": 0.023317
+            }
+          ],
+          "extracted_match_ranks": [
+            43,
+            57,
+            58,
+            313,
+            899,
+            948,
+            1000
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "F31",
+      "query": "PyFTP 按职责拆成多少个模块",
+      "evidence_requirements_hit": 1,
+      "evidence_requirements_total": 1,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 146,
+      "packed_chars": 64000,
+      "source_chars": 153788,
+      "compression": 0.5838,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "module-count",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10852,
+              "ordinal_distance": 1,
+              "candidate_score": 0.021389
+            },
+            {
+              "chunk_id": 11033,
+              "ordinal_distance": 0,
+              "candidate_score": 0.019424
+            }
+          ],
+          "extracted_match_ranks": [
+            1,
+            2,
+            3,
+            4,
+            50,
+            51,
+            52,
+            53,
+            1788,
+            1997
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "P19",
+      "query": "网络文件传到一半断了以后怎样接着传",
+      "evidence_requirements_hit": 2,
+      "evidence_requirements_total": 2,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 191,
+      "packed_chars": 64000,
+      "source_chars": 199349,
+      "compression": 0.679,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9788,
+              "ordinal_distance": 1,
+              "candidate_score": 0.395003
+            },
+            {
+              "chunk_id": 9806,
+              "ordinal_distance": 2,
+              "candidate_score": 0.378568
+            }
+          ],
+          "extracted_match_ranks": [
+            166,
+            167,
+            924,
+            2214,
+            2215,
+            3066,
+            3103
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-02",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9780,
+              "ordinal_distance": 3,
+              "candidate_score": 0.463476
+            },
+            {
+              "chunk_id": 9783,
+              "ordinal_distance": 1,
+              "candidate_score": 0.411386
+            },
+            {
+              "chunk_id": 9788,
+              "ordinal_distance": 1,
+              "candidate_score": 0.395003
+            }
+          ],
+          "extracted_match_ranks": [
+            35,
+            36,
+            37,
+            38,
+            166,
+            167,
+            677,
+            2897,
+            2930,
+            3066
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "P20",
+      "query": "怎样防止用户用相对路径跑出自己的文件目录",
+      "evidence_requirements_hit": 2,
+      "evidence_requirements_total": 2,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 194,
+      "packed_chars": 64000,
+      "source_chars": 181467,
+      "compression": 0.6473,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9787,
+              "ordinal_distance": 0,
+              "candidate_score": 0.451089
+            },
+            {
+              "chunk_id": 9807,
+              "ordinal_distance": 2,
+              "candidate_score": 0.008547
+            },
+            {
+              "chunk_id": 11007,
+              "ordinal_distance": 2,
+              "candidate_score": 0.010101
+            },
+            {
+              "chunk_id": 10930,
+              "ordinal_distance": 1,
+              "candidate_score": 0.426165
+            },
+            {
+              "chunk_id": 10850,
+              "ordinal_distance": 1,
+              "candidate_score": 0.008696
+            }
+          ],
+          "extracted_match_ranks": [
+            45,
+            46,
+            47,
+            49,
+            50,
+            51,
+            52,
+            99,
+            101,
+            102
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-02",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9787,
+              "ordinal_distance": 0,
+              "candidate_score": 0.451089
+            },
+            {
+              "chunk_id": 9807,
+              "ordinal_distance": 2,
+              "candidate_score": 0.008547
+            },
+            {
+              "chunk_id": 11007,
+              "ordinal_distance": 2,
+              "candidate_score": 0.010101
+            },
+            {
+              "chunk_id": 10930,
+              "ordinal_distance": 1,
+              "candidate_score": 0.426165
+            },
+            {
+              "chunk_id": 10850,
+              "ordinal_distance": 1,
+              "candidate_score": 0.008696
+            }
+          ],
+          "extracted_match_ranks": [
+            45,
+            46,
+            47,
+            49,
+            50,
+            51,
+            52,
+            99,
+            101,
+            102
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "S14",
+      "query": "FTP 项目如何同时保证客户端兼容性和传输安全",
+      "evidence_requirements_hit": 2,
+      "evidence_requirements_total": 2,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 176,
+      "packed_chars": 64000,
+      "source_chars": 85173,
+      "compression": 0.2486,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10851,
+              "ordinal_distance": 1,
+              "candidate_score": 0.030639
+            },
+            {
+              "chunk_id": 9783,
+              "ordinal_distance": 2,
+              "candidate_score": 0.512341
+            },
+            {
+              "chunk_id": 9785,
+              "ordinal_distance": 0,
+              "candidate_score": 0.512341
+            },
+            {
+              "chunk_id": 11031,
+              "ordinal_distance": 2,
+              "candidate_score": 0.031329
+            },
+            {
+              "chunk_id": 10841,
+              "ordinal_distance": 1,
+              "candidate_score": 0.554272
+            },
+            {
+              "chunk_id": 9778,
+              "ordinal_distance": 0,
+              "candidate_score": 0.379331
+            }
+          ],
+          "extracted_match_ranks": [
+            1,
+            2,
+            3,
+            50,
+            108,
+            121,
+            203,
+            360,
+            361,
+            362
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-02",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10877,
+              "ordinal_distance": 2,
+              "candidate_score": 0.034758
+            },
+            {
+              "chunk_id": 9783,
+              "ordinal_distance": 2,
+              "candidate_score": 0.512341
+            },
+            {
+              "chunk_id": 9797,
+              "ordinal_distance": 0,
+              "candidate_score": 0.420566
+            },
+            {
+              "chunk_id": 9799,
+              "ordinal_distance": 2,
+              "candidate_score": 0.420566
+            },
+            {
+              "chunk_id": 10987,
+              "ordinal_distance": 1,
+              "candidate_score": 0.031719
+            }
+          ],
+          "extracted_match_ranks": [
+            84,
+            114,
+            343,
+            1052,
+            1134,
+            1154,
+            1281
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "S15",
+      "query": "FTP 项目的四道安全防线分别是什么",
+      "evidence_requirements_hit": 4,
+      "evidence_requirements_total": 4,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 176,
+      "packed_chars": 64000,
+      "source_chars": 77801,
+      "compression": 0.1774,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10850,
+              "ordinal_distance": 3,
+              "candidate_score": 0.023592
+            },
+            {
+              "chunk_id": 10853,
+              "ordinal_distance": 3,
+              "candidate_score": 0.024281
+            },
+            {
+              "chunk_id": 9778,
+              "ordinal_distance": 0,
+              "candidate_score": 0.516467
+            },
+            {
+              "chunk_id": 9807,
+              "ordinal_distance": 3,
+              "candidate_score": 0.429798
+            },
+            {
+              "chunk_id": 9799,
+              "ordinal_distance": 0,
+              "candidate_score": 0.358908
+            },
+            {
+              "chunk_id": 11007,
+              "ordinal_distance": 0,
+              "candidate_score": 0.024286
+            }
+          ],
+          "extracted_match_ranks": [
+            1,
+            2,
+            3,
+            16,
+            17,
+            69,
+            89,
+            90,
+            91,
+            92
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-02",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10850,
+              "ordinal_distance": 3,
+              "candidate_score": 0.023592
+            },
+            {
+              "chunk_id": 10853,
+              "ordinal_distance": 3,
+              "candidate_score": 0.024281
+            },
+            {
+              "chunk_id": 9778,
+              "ordinal_distance": 0,
+              "candidate_score": 0.516467
+            },
+            {
+              "chunk_id": 9807,
+              "ordinal_distance": 3,
+              "candidate_score": 0.429798
+            },
+            {
+              "chunk_id": 9799,
+              "ordinal_distance": 0,
+              "candidate_score": 0.358908
+            },
+            {
+              "chunk_id": 11007,
+              "ordinal_distance": 0,
+              "candidate_score": 0.024286
+            }
+          ],
+          "extracted_match_ranks": [
+            1,
+            2,
+            3,
+            16,
+            17,
+            69,
+            89,
+            90,
+            91,
+            92
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-03",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10850,
+              "ordinal_distance": 3,
+              "candidate_score": 0.023592
+            },
+            {
+              "chunk_id": 10853,
+              "ordinal_distance": 3,
+              "candidate_score": 0.024281
+            },
+            {
+              "chunk_id": 9806,
+              "ordinal_distance": 2,
+              "candidate_score": 0.474879
+            },
+            {
+              "chunk_id": 9807,
+              "ordinal_distance": 3,
+              "candidate_score": 0.429798
+            },
+            {
+              "chunk_id": 9799,
+              "ordinal_distance": 0,
+              "candidate_score": 0.358908
+            },
+            {
+              "chunk_id": 11007,
+              "ordinal_distance": 0,
+              "candidate_score": 0.024286
+            }
+          ],
+          "extracted_match_ranks": [
+            1,
+            2,
+            3,
+            16,
+            17,
+            69,
+            89,
+            90,
+            91,
+            92
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-04",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10834,
+              "ordinal_distance": 4,
+              "candidate_score": 0.020453
+            },
+            {
+              "chunk_id": 10853,
+              "ordinal_distance": 3,
+              "candidate_score": 0.024281
+            },
+            {
+              "chunk_id": 9782,
+              "ordinal_distance": 3,
+              "candidate_score": 0.346602
+            },
+            {
+              "chunk_id": 9807,
+              "ordinal_distance": 3,
+              "candidate_score": 0.429798
+            },
+            {
+              "chunk_id": 9792,
+              "ordinal_distance": 3,
+              "candidate_score": 0.350699
+            },
+            {
+              "chunk_id": 11010,
+              "ordinal_distance": 3,
+              "candidate_score": 0.024286
+            }
+          ],
+          "extracted_match_ranks": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            19,
+            20,
+            91,
+            92,
+            173
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "S16",
+      "query": "FAT12 读取文件时依次会用到哪些区域和簇链信息",
+      "evidence_requirements_hit": 4,
+      "evidence_requirements_total": 4,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 196,
+      "packed_chars": 64000,
+      "source_chars": 177684,
+      "compression": 0.6398,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9651,
+              "ordinal_distance": 3,
+              "candidate_score": 0.565244
+            },
+            {
+              "chunk_id": 9652,
+              "ordinal_distance": 3,
+              "candidate_score": 0.337908
+            },
+            {
+              "chunk_id": 9653,
+              "ordinal_distance": 2,
+              "candidate_score": 0.337908
+            },
+            {
+              "chunk_id": 9864,
+              "ordinal_distance": 1,
+              "candidate_score": 0.330864
+            },
+            {
+              "chunk_id": 9867,
+              "ordinal_distance": 3,
+              "candidate_score": 0.011236
+            },
+            {
+              "chunk_id": 9871,
+              "ordinal_distance": 0,
+              "candidate_score": 0.006494
+            },
+            {
+              "chunk_id": 9961,
+              "ordinal_distance": 0,
+              "candidate_score": 0.006452
+            },
+            {
+              "chunk_id": 10736,
+              "ordinal_distance": 1,
+              "candidate_score": 0.00641
+            },
+            {
+              "chunk_id": 10740,
+              "ordinal_distance": 3,
+              "candidate_score": 0.00641
+            },
+            {
+              "chunk_id": 9954,
+              "ordinal_distance": 1,
+              "candidate_score": 0.007576
+            },
+            {
+              "chunk_id": 9957,
+              "ordinal_distance": 1,
+              "candidate_score": 0.006494
+            },
+            {
+              "chunk_id": 10733,
+              "ordinal_distance": 1,
+              "candidate_score": 0.007042
+            }
+          ],
+          "extracted_match_ranks": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            17
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-02",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9651,
+              "ordinal_distance": 3,
+              "candidate_score": 0.565244
+            },
+            {
+              "chunk_id": 9652,
+              "ordinal_distance": 3,
+              "candidate_score": 0.337908
+            },
+            {
+              "chunk_id": 9653,
+              "ordinal_distance": 2,
+              "candidate_score": 0.337908
+            },
+            {
+              "chunk_id": 9864,
+              "ordinal_distance": 1,
+              "candidate_score": 0.330864
+            },
+            {
+              "chunk_id": 9866,
+              "ordinal_distance": 3,
+              "candidate_score": 0.330864
+            },
+            {
+              "chunk_id": 9867,
+              "ordinal_distance": 3,
+              "candidate_score": 0.011236
+            },
+            {
+              "chunk_id": 10735,
+              "ordinal_distance": 2,
+              "candidate_score": 0.00641
+            },
+            {
+              "chunk_id": 10736,
+              "ordinal_distance": 1,
+              "candidate_score": 0.00641
+            },
+            {
+              "chunk_id": 9954,
+              "ordinal_distance": 1,
+              "candidate_score": 0.007576
+            },
+            {
+              "chunk_id": 9956,
+              "ordinal_distance": 2,
+              "candidate_score": 0.006494
+            },
+            {
+              "chunk_id": 9957,
+              "ordinal_distance": 1,
+              "candidate_score": 0.006494
+            },
+            {
+              "chunk_id": 10733,
+              "ordinal_distance": 1,
+              "candidate_score": 0.007042
+            }
+          ],
+          "extracted_match_ranks": [
+            1,
+            3,
+            5,
+            6,
+            7,
+            8,
+            9,
+            17,
+            21,
+            30
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-03",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9651,
+              "ordinal_distance": 3,
+              "candidate_score": 0.565244
+            },
+            {
+              "chunk_id": 9652,
+              "ordinal_distance": 3,
+              "candidate_score": 0.337908
+            },
+            {
+              "chunk_id": 9653,
+              "ordinal_distance": 2,
+              "candidate_score": 0.337908
+            },
+            {
+              "chunk_id": 9864,
+              "ordinal_distance": 1,
+              "candidate_score": 0.330864
+            },
+            {
+              "chunk_id": 9866,
+              "ordinal_distance": 3,
+              "candidate_score": 0.330864
+            },
+            {
+              "chunk_id": 9867,
+              "ordinal_distance": 3,
+              "candidate_score": 0.011236
+            },
+            {
+              "chunk_id": 10735,
+              "ordinal_distance": 2,
+              "candidate_score": 0.00641
+            },
+            {
+              "chunk_id": 10736,
+              "ordinal_distance": 1,
+              "candidate_score": 0.00641
+            },
+            {
+              "chunk_id": 9954,
+              "ordinal_distance": 1,
+              "candidate_score": 0.007576
+            },
+            {
+              "chunk_id": 9956,
+              "ordinal_distance": 2,
+              "candidate_score": 0.006494
+            },
+            {
+              "chunk_id": 9957,
+              "ordinal_distance": 1,
+              "candidate_score": 0.006494
+            },
+            {
+              "chunk_id": 10733,
+              "ordinal_distance": 1,
+              "candidate_score": 0.007042
+            }
+          ],
+          "extracted_match_ranks": [
+            1,
+            3,
+            5,
+            6,
+            7,
+            8,
+            9,
+            17,
+            21,
+            30
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-04",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9651,
+              "ordinal_distance": 3,
+              "candidate_score": 0.565244
+            },
+            {
+              "chunk_id": 9652,
+              "ordinal_distance": 3,
+              "candidate_score": 0.337908
+            },
+            {
+              "chunk_id": 9653,
+              "ordinal_distance": 2,
+              "candidate_score": 0.337908
+            },
+            {
+              "chunk_id": 9864,
+              "ordinal_distance": 1,
+              "candidate_score": 0.330864
+            },
+            {
+              "chunk_id": 9866,
+              "ordinal_distance": 3,
+              "candidate_score": 0.330864
+            },
+            {
+              "chunk_id": 9867,
+              "ordinal_distance": 3,
+              "candidate_score": 0.011236
+            },
+            {
+              "chunk_id": 10735,
+              "ordinal_distance": 2,
+              "candidate_score": 0.00641
+            },
+            {
+              "chunk_id": 10736,
+              "ordinal_distance": 1,
+              "candidate_score": 0.00641
+            },
+            {
+              "chunk_id": 9954,
+              "ordinal_distance": 1,
+              "candidate_score": 0.007576
+            },
+            {
+              "chunk_id": 9956,
+              "ordinal_distance": 2,
+              "candidate_score": 0.006494
+            },
+            {
+              "chunk_id": 9957,
+              "ordinal_distance": 1,
+              "candidate_score": 0.006494
+            },
+            {
+              "chunk_id": 10733,
+              "ordinal_distance": 1,
+              "candidate_score": 0.007042
+            }
+          ],
+          "extracted_match_ranks": [
+            1,
+            3,
+            5,
+            6,
+            7,
+            8,
+            9,
+            17,
+            21,
+            30
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "S17",
+      "query": "银行家算法收到资源请求后的完整判断流程是什么",
+      "evidence_requirements_hit": 4,
+      "evidence_requirements_total": 4,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 206,
+      "packed_chars": 64000,
+      "source_chars": 107557,
+      "compression": 0.405,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9623,
+              "ordinal_distance": 1,
+              "candidate_score": 0.404552
+            },
+            {
+              "chunk_id": 9624,
+              "ordinal_distance": 0,
+              "candidate_score": 0.404552
+            },
+            {
+              "chunk_id": 9625,
+              "ordinal_distance": 1,
+              "candidate_score": 0.404552
+            },
+            {
+              "chunk_id": 9076,
+              "ordinal_distance": 2,
+              "candidate_score": 0.412504
+            },
+            {
+              "chunk_id": 11321,
+              "ordinal_distance": 3,
+              "candidate_score": 0.605689
+            },
+            {
+              "chunk_id": 9081,
+              "ordinal_distance": 0,
+              "candidate_score": 0.014546
+            },
+            {
+              "chunk_id": 9086,
+              "ordinal_distance": 2,
+              "candidate_score": 0.467148
+            },
+            {
+              "chunk_id": 11264,
+              "ordinal_distance": 0,
+              "candidate_score": 0.621062
+            },
+            {
+              "chunk_id": 9119,
+              "ordinal_distance": 1,
+              "candidate_score": 0.311039
+            },
+            {
+              "chunk_id": 9120,
+              "ordinal_distance": 0,
+              "candidate_score": 0.311039
+            },
+            {
+              "chunk_id": 9121,
+              "ordinal_distance": 1,
+              "candidate_score": 0.311039
+            },
+            {
+              "chunk_id": 9823,
+              "ordinal_distance": 3,
+              "candidate_score": 0.018183
+            },
+            {
+              "chunk_id": 9828,
+              "ordinal_distance": 2,
+              "candidate_score": 0.018183
+            },
+            {
+              "chunk_id": 9698,
+              "ordinal_distance": 2,
+              "candidate_score": 0.012827
+            },
+            {
+              "chunk_id": 9699,
+              "ordinal_distance": 3,
+              "candidate_score": 0.012827
+            },
+            {
+              "chunk_id": 9700,
+              "ordinal_distance": 1,
+              "candidate_score": 0.018805
+            },
+            {
+              "chunk_id": 9818,
+              "ordinal_distance": 3,
+              "candidate_score": 0.015851
+            },
+            {
+              "chunk_id": 9908,
+              "ordinal_distance": 3,
+              "candidate_score": 0.015814
+            },
+            {
+              "chunk_id": 10687,
+              "ordinal_distance": 3,
+              "candidate_score": 0.015523
+            },
+            {
+              "chunk_id": 10697,
+              "ordinal_distance": 2,
+              "candidate_score": 0.018137
+            },
+            {
+              "chunk_id": 9918,
+              "ordinal_distance": 2,
+              "candidate_score": 0.018304
+            },
+            {
+              "chunk_id": 9913,
+              "ordinal_distance": 0,
+              "candidate_score": 0.014494
+            },
+            {
+              "chunk_id": 10692,
+              "ordinal_distance": 0,
+              "candidate_score": 0.014496
+            }
+          ],
+          "extracted_match_ranks": [
+            12,
+            18,
+            19,
+            29,
+            44,
+            49,
+            71,
+            97,
+            123,
+            124
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-02",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9623,
+              "ordinal_distance": 1,
+              "candidate_score": 0.404552
+            },
+            {
+              "chunk_id": 9624,
+              "ordinal_distance": 0,
+              "candidate_score": 0.404552
+            },
+            {
+              "chunk_id": 9625,
+              "ordinal_distance": 1,
+              "candidate_score": 0.404552
+            },
+            {
+              "chunk_id": 9074,
+              "ordinal_distance": 0,
+              "candidate_score": 0.412504
+            },
+            {
+              "chunk_id": 9076,
+              "ordinal_distance": 2,
+              "candidate_score": 0.412504
+            },
+            {
+              "chunk_id": 11321,
+              "ordinal_distance": 3,
+              "candidate_score": 0.605689
+            },
+            {
+              "chunk_id": 9086,
+              "ordinal_distance": 2,
+              "candidate_score": 0.467148
+            },
+            {
+              "chunk_id": 11264,
+              "ordinal_distance": 0,
+              "candidate_score": 0.621062
+            },
+            {
+              "chunk_id": 9119,
+              "ordinal_distance": 1,
+              "candidate_score": 0.311039
+            },
+            {
+              "chunk_id": 9120,
+              "ordinal_distance": 0,
+              "candidate_score": 0.311039
+            },
+            {
+              "chunk_id": 9121,
+              "ordinal_distance": 1,
+              "candidate_score": 0.311039
+            },
+            {
+              "chunk_id": 9828,
+              "ordinal_distance": 2,
+              "candidate_score": 0.018183
+            },
+            {
+              "chunk_id": 9698,
+              "ordinal_distance": 2,
+              "candidate_score": 0.012827
+            },
+            {
+              "chunk_id": 9699,
+              "ordinal_distance": 3,
+              "candidate_score": 0.012827
+            },
+            {
+              "chunk_id": 9700,
+              "ordinal_distance": 1,
+              "candidate_score": 0.018805
+            },
+            {
+              "chunk_id": 9816,
+              "ordinal_distance": 1,
+              "candidate_score": 0.015851
+            },
+            {
+              "chunk_id": 9818,
+              "ordinal_distance": 3,
+              "candidate_score": 0.015851
+            },
+            {
+              "chunk_id": 9906,
+              "ordinal_distance": 1,
+              "candidate_score": 0.015814
+            },
+            {
+              "chunk_id": 9908,
+              "ordinal_distance": 3,
+              "candidate_score": 0.015814
+            },
+            {
+              "chunk_id": 10685,
+              "ordinal_distance": 1,
+              "candidate_score": 0.015523
+            },
+            {
+              "chunk_id": 10687,
+              "ordinal_distance": 3,
+              "candidate_score": 0.015523
+            },
+            {
+              "chunk_id": 10697,
+              "ordinal_distance": 2,
+              "candidate_score": 0.018137
+            },
+            {
+              "chunk_id": 9918,
+              "ordinal_distance": 2,
+              "candidate_score": 0.018304
+            }
+          ],
+          "extracted_match_ranks": [
+            12,
+            18,
+            19,
+            29,
+            44,
+            49,
+            71,
+            97,
+            123,
+            124
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-03",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9623,
+              "ordinal_distance": 1,
+              "candidate_score": 0.404552
+            },
+            {
+              "chunk_id": 9624,
+              "ordinal_distance": 0,
+              "candidate_score": 0.404552
+            },
+            {
+              "chunk_id": 9077,
+              "ordinal_distance": 3,
+              "candidate_score": 0.412504
+            },
+            {
+              "chunk_id": 9080,
+              "ordinal_distance": 1,
+              "candidate_score": 0.014546
+            },
+            {
+              "chunk_id": 11321,
+              "ordinal_distance": 3,
+              "candidate_score": 0.605689
+            },
+            {
+              "chunk_id": 9617,
+              "ordinal_distance": 1,
+              "candidate_score": 0.457671
+            },
+            {
+              "chunk_id": 9084,
+              "ordinal_distance": 3,
+              "candidate_score": 0.014546
+            },
+            {
+              "chunk_id": 11264,
+              "ordinal_distance": 0,
+              "candidate_score": 0.621062
+            },
+            {
+              "chunk_id": 9119,
+              "ordinal_distance": 1,
+              "candidate_score": 0.311039
+            },
+            {
+              "chunk_id": 9120,
+              "ordinal_distance": 0,
+              "candidate_score": 0.311039
+            },
+            {
+              "chunk_id": 9822,
+              "ordinal_distance": 3,
+              "candidate_score": 0.033119
+            },
+            {
+              "chunk_id": 9826,
+              "ordinal_distance": 0,
+              "candidate_score": 0.018183
+            },
+            {
+              "chunk_id": 9125,
+              "ordinal_distance": 1,
+              "candidate_score": 0.401533
+            },
+            {
+              "chunk_id": 9698,
+              "ordinal_distance": 2,
+              "candidate_score": 0.012827
+            },
+            {
+              "chunk_id": 9699,
+              "ordinal_distance": 3,
+              "candidate_score": 0.012827
+            },
+            {
+              "chunk_id": 9819,
+              "ordinal_distance": 3,
+              "candidate_score": 0.016154
+            },
+            {
+              "chunk_id": 9909,
+              "ordinal_distance": 3,
+              "candidate_score": 0.016177
+            },
+            {
+              "chunk_id": 9912,
+              "ordinal_distance": 1,
+              "candidate_score": 0.014494
+            },
+            {
+              "chunk_id": 10688,
+              "ordinal_distance": 3,
+              "candidate_score": 0.015672
+            },
+            {
+              "chunk_id": 10691,
+              "ordinal_distance": 1,
+              "candidate_score": 0.014496
+            },
+            {
+              "chunk_id": 9692,
+              "ordinal_distance": 1,
+              "candidate_score": 0.020812
+            },
+            {
+              "chunk_id": 10695,
+              "ordinal_distance": 3,
+              "candidate_score": 0.014496
+            },
+            {
+              "chunk_id": 9916,
+              "ordinal_distance": 3,
+              "candidate_score": 0.014494
+            }
+          ],
+          "extracted_match_ranks": [
+            2,
+            5,
+            6,
+            7,
+            16,
+            34,
+            83,
+            84,
+            97,
+            167
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-04",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9623,
+              "ordinal_distance": 1,
+              "candidate_score": 0.404552
+            },
+            {
+              "chunk_id": 9624,
+              "ordinal_distance": 0,
+              "candidate_score": 0.404552
+            },
+            {
+              "chunk_id": 9625,
+              "ordinal_distance": 1,
+              "candidate_score": 0.404552
+            },
+            {
+              "chunk_id": 9076,
+              "ordinal_distance": 2,
+              "candidate_score": 0.412504
+            },
+            {
+              "chunk_id": 11321,
+              "ordinal_distance": 3,
+              "candidate_score": 0.605689
+            },
+            {
+              "chunk_id": 9084,
+              "ordinal_distance": 3,
+              "candidate_score": 0.014546
+            },
+            {
+              "chunk_id": 9086,
+              "ordinal_distance": 2,
+              "candidate_score": 0.467148
+            },
+            {
+              "chunk_id": 11264,
+              "ordinal_distance": 0,
+              "candidate_score": 0.621062
+            },
+            {
+              "chunk_id": 9119,
+              "ordinal_distance": 1,
+              "candidate_score": 0.311039
+            },
+            {
+              "chunk_id": 9120,
+              "ordinal_distance": 0,
+              "candidate_score": 0.311039
+            },
+            {
+              "chunk_id": 9121,
+              "ordinal_distance": 1,
+              "candidate_score": 0.311039
+            },
+            {
+              "chunk_id": 9826,
+              "ordinal_distance": 0,
+              "candidate_score": 0.018183
+            },
+            {
+              "chunk_id": 9828,
+              "ordinal_distance": 2,
+              "candidate_score": 0.018183
+            },
+            {
+              "chunk_id": 9698,
+              "ordinal_distance": 2,
+              "candidate_score": 0.012827
+            },
+            {
+              "chunk_id": 9699,
+              "ordinal_distance": 3,
+              "candidate_score": 0.012827
+            },
+            {
+              "chunk_id": 9700,
+              "ordinal_distance": 1,
+              "candidate_score": 0.018805
+            },
+            {
+              "chunk_id": 9818,
+              "ordinal_distance": 3,
+              "candidate_score": 0.015851
+            },
+            {
+              "chunk_id": 9908,
+              "ordinal_distance": 3,
+              "candidate_score": 0.015814
+            },
+            {
+              "chunk_id": 10687,
+              "ordinal_distance": 3,
+              "candidate_score": 0.015523
+            },
+            {
+              "chunk_id": 10695,
+              "ordinal_distance": 3,
+              "candidate_score": 0.014496
+            },
+            {
+              "chunk_id": 10697,
+              "ordinal_distance": 2,
+              "candidate_score": 0.018137
+            },
+            {
+              "chunk_id": 9916,
+              "ordinal_distance": 3,
+              "candidate_score": 0.014494
+            },
+            {
+              "chunk_id": 9918,
+              "ordinal_distance": 2,
+              "candidate_score": 0.018304
+            }
+          ],
+          "extracted_match_ranks": [
+            12,
+            18,
+            19,
+            29,
+            44,
+            49,
+            71,
+            97,
+            123,
+            124
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "S18",
+      "query": "FTP 项目的基础功能和增强功能分别有哪些",
+      "evidence_requirements_hit": 4,
+      "evidence_requirements_total": 4,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 200,
+      "packed_chars": 64000,
+      "source_chars": 160619,
+      "compression": 0.6015,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10834,
+              "ordinal_distance": 4,
+              "candidate_score": 0.02244
+            },
+            {
+              "chunk_id": 9806,
+              "ordinal_distance": 1,
+              "candidate_score": 0.486619
+            },
+            {
+              "chunk_id": 9807,
+              "ordinal_distance": 3,
+              "candidate_score": 0.460312
+            },
+            {
+              "chunk_id": 9792,
+              "ordinal_distance": 3,
+              "candidate_score": 0.485146
+            }
+          ],
+          "extracted_match_ranks": [
+            24,
+            25,
+            26,
+            71,
+            72,
+            547,
+            548,
+            886,
+            890,
+            891
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-02",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10834,
+              "ordinal_distance": 4,
+              "candidate_score": 0.02244
+            },
+            {
+              "chunk_id": 10846,
+              "ordinal_distance": 3,
+              "candidate_score": 0.025159
+            },
+            {
+              "chunk_id": 10850,
+              "ordinal_distance": 1,
+              "candidate_score": 0.649458
+            },
+            {
+              "chunk_id": 9783,
+              "ordinal_distance": 3,
+              "candidate_score": 0.42298
+            },
+            {
+              "chunk_id": 9807,
+              "ordinal_distance": 3,
+              "candidate_score": 0.460312
+            },
+            {
+              "chunk_id": 9810,
+              "ordinal_distance": 0,
+              "candidate_score": 0.460312
+            }
+          ],
+          "extracted_match_ranks": [
+            3,
+            4,
+            25,
+            26,
+            71,
+            72,
+            78,
+            79,
+            91,
+            92
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-03",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10834,
+              "ordinal_distance": 4,
+              "candidate_score": 0.02244
+            },
+            {
+              "chunk_id": 10846,
+              "ordinal_distance": 3,
+              "candidate_score": 0.025159
+            },
+            {
+              "chunk_id": 9783,
+              "ordinal_distance": 3,
+              "candidate_score": 0.42298
+            },
+            {
+              "chunk_id": 9806,
+              "ordinal_distance": 1,
+              "candidate_score": 0.486619
+            },
+            {
+              "chunk_id": 9807,
+              "ordinal_distance": 3,
+              "candidate_score": 0.460312
+            },
+            {
+              "chunk_id": 11007,
+              "ordinal_distance": 1,
+              "candidate_score": 0.02244
+            }
+          ],
+          "extracted_match_ranks": [
+            3,
+            4,
+            25,
+            26,
+            71,
+            72,
+            91,
+            92,
+            117,
+            118
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-04",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10834,
+              "ordinal_distance": 4,
+              "candidate_score": 0.02244
+            },
+            {
+              "chunk_id": 9785,
+              "ordinal_distance": 1,
+              "candidate_score": 0.42298
+            },
+            {
+              "chunk_id": 9807,
+              "ordinal_distance": 3,
+              "candidate_score": 0.460312
+            },
+            {
+              "chunk_id": 9789,
+              "ordinal_distance": 3,
+              "candidate_score": 0.42298
+            },
+            {
+              "chunk_id": 11007,
+              "ordinal_distance": 1,
+              "candidate_score": 0.02244
+            }
+          ],
+          "extracted_match_ranks": [
+            25,
+            26,
+            61,
+            71,
+            72,
+            117,
+            118,
+            119,
+            560,
+            562
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "S19",
+      "query": "为什么 FTP 适合作为计算机网络课程设计题目",
+      "evidence_requirements_hit": 3,
+      "evidence_requirements_total": 3,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 187,
+      "packed_chars": 64000,
+      "source_chars": 147953,
+      "compression": 0.5674,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10835,
+              "ordinal_distance": 4,
+              "candidate_score": 0.01087
+            },
+            {
+              "chunk_id": 11034,
+              "ordinal_distance": 1,
+              "candidate_score": 0.013158
+            }
+          ],
+          "extracted_match_ranks": [
+            9,
+            10,
+            48,
+            49,
+            120,
+            314,
+            315,
+            1823,
+            1851
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-02",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10835,
+              "ordinal_distance": 4,
+              "candidate_score": 0.01087
+            },
+            {
+              "chunk_id": 11034,
+              "ordinal_distance": 1,
+              "candidate_score": 0.013158
+            }
+          ],
+          "extracted_match_ranks": [
+            9,
+            10,
+            48,
+            49,
+            120,
+            314,
+            315,
+            1823,
+            1851
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-03",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10839,
+              "ordinal_distance": 3,
+              "candidate_score": 0.012346
+            }
+          ],
+          "extracted_match_ranks": [
+            44,
+            95,
+            1826
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "S20",
+      "query": "PyFTP 使用了哪些 Python 标准库，各自负责什么",
+      "evidence_requirements_hit": 4,
+      "evidence_requirements_total": 4,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 151,
+      "packed_chars": 64000,
+      "source_chars": 239913,
+      "compression": 0.7332,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9786,
+              "ordinal_distance": 2,
+              "candidate_score": 0.444521
+            },
+            {
+              "chunk_id": 10889,
+              "ordinal_distance": 1,
+              "candidate_score": 0.012987
+            },
+            {
+              "chunk_id": 9790,
+              "ordinal_distance": 3,
+              "candidate_score": 0.474757
+            },
+            {
+              "chunk_id": 9793,
+              "ordinal_distance": 0,
+              "candidate_score": 0.474757
+            }
+          ],
+          "extracted_match_ranks": [
+            287,
+            987,
+            988,
+            989,
+            1716,
+            2481,
+            2490
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-02",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9785,
+              "ordinal_distance": 1,
+              "candidate_score": 0.444521
+            },
+            {
+              "chunk_id": 9791,
+              "ordinal_distance": 2,
+              "candidate_score": 0.474757
+            },
+            {
+              "chunk_id": 10921,
+              "ordinal_distance": 1,
+              "candidate_score": 0.011905
+            }
+          ],
+          "extracted_match_ranks": [
+            245,
+            947,
+            1641,
+            1736,
+            1737,
+            2477,
+            2790
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-03",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9786,
+              "ordinal_distance": 2,
+              "candidate_score": 0.444521
+            },
+            {
+              "chunk_id": 10889,
+              "ordinal_distance": 1,
+              "candidate_score": 0.012987
+            },
+            {
+              "chunk_id": 9793,
+              "ordinal_distance": 0,
+              "candidate_score": 0.474757
+            }
+          ],
+          "extracted_match_ranks": [
+            287,
+            987,
+            988,
+            989,
+            2481,
+            2490
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-04",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9785,
+              "ordinal_distance": 1,
+              "candidate_score": 0.444521
+            },
+            {
+              "chunk_id": 10855,
+              "ordinal_distance": 3,
+              "candidate_score": 0.011236
+            },
+            {
+              "chunk_id": 10889,
+              "ordinal_distance": 1,
+              "candidate_score": 0.012987
+            },
+            {
+              "chunk_id": 9790,
+              "ordinal_distance": 3,
+              "candidate_score": 0.474757
+            }
+          ],
+          "extracted_match_ranks": [
+            222,
+            850,
+            944,
+            945,
+            946,
+            947,
+            1716,
+            2477,
+            2479,
+            2490
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "X03",
+      "query": "操作系统实验和 FTP 项目分别用了哪些资源或并发管理机制",
+      "evidence_requirements_hit": 4,
+      "evidence_requirements_total": 4,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 234,
+      "packed_chars": 64000,
+      "source_chars": 135951,
+      "compression": 0.5292,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "os-resource-state",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9615,
+              "ordinal_distance": 4,
+              "candidate_score": 0.47042
+            },
+            {
+              "chunk_id": 9111,
+              "ordinal_distance": 0,
+              "candidate_score": 0.552018
+            },
+            {
+              "chunk_id": 9690,
+              "ordinal_distance": 4,
+              "candidate_score": 0.468102
+            }
+          ],
+          "extracted_match_ranks": [
+            406,
+            736,
+            2064,
+            2066,
+            2142
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "ftp-thread-model",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10834,
+              "ordinal_distance": 4,
+              "candidate_score": 0.024882
+            },
+            {
+              "chunk_id": 9790,
+              "ordinal_distance": 1,
+              "candidate_score": 0.52166
+            },
+            {
+              "chunk_id": 9791,
+              "ordinal_distance": 2,
+              "candidate_score": 0.52166
+            },
+            {
+              "chunk_id": 10842,
+              "ordinal_distance": 1,
+              "candidate_score": 0.02715
+            }
+          ],
+          "extracted_match_ranks": [
+            119,
+            120,
+            121,
+            324,
+            325,
+            326,
+            867,
+            1189,
+            1621,
+            1992
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "ftp-process-model",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10834,
+              "ordinal_distance": 4,
+              "candidate_score": 0.024882
+            },
+            {
+              "chunk_id": 11016,
+              "ordinal_distance": 3,
+              "candidate_score": 0.02532
+            },
+            {
+              "chunk_id": 9790,
+              "ordinal_distance": 1,
+              "candidate_score": 0.52166
+            },
+            {
+              "chunk_id": 9791,
+              "ordinal_distance": 2,
+              "candidate_score": 0.52166
+            }
+          ],
+          "extracted_match_ranks": [
+            119,
+            120,
+            121,
+            324,
+            325,
+            326,
+            334,
+            335,
+            867,
+            1189
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "ftp-select-model",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10834,
+              "ordinal_distance": 4,
+              "candidate_score": 0.024882
+            },
+            {
+              "chunk_id": 9791,
+              "ordinal_distance": 2,
+              "candidate_score": 0.52166
+            },
+            {
+              "chunk_id": 10842,
+              "ordinal_distance": 1,
+              "candidate_score": 0.02715
+            }
+          ],
+          "extracted_match_ranks": [
+            119,
+            120,
+            121,
+            324,
+            325,
+            326,
+            867,
+            1621,
+            1992,
+            2244
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "X07",
+      "query": "墨洞项目与 FTP 课程项目的文件传输定位有什么不同",
+      "evidence_requirements_hit": 3,
+      "evidence_requirements_total": 3,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 171,
+      "packed_chars": 64000,
+      "source_chars": 174886,
+      "compression": 0.634,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "inkhole-positioning",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 11120,
+              "ordinal_distance": 4,
+              "candidate_score": 0.016622
+            }
+          ],
+          "extracted_match_ranks": [
+            11,
+            12,
+            13,
+            69,
+            2169
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "inkhole-transport",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 11120,
+              "ordinal_distance": 4,
+              "candidate_score": 0.016622
+            },
+            {
+              "chunk_id": 11123,
+              "ordinal_distance": 1,
+              "candidate_score": 0.021626
+            }
+          ],
+          "extracted_match_ranks": [
+            11,
+            12,
+            13,
+            69,
+            103,
+            104,
+            167,
+            2169,
+            2173
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "ftp-positioning",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9783,
+              "ordinal_distance": 3,
+              "candidate_score": 0.498239
+            },
+            {
+              "chunk_id": 9785,
+              "ordinal_distance": 0,
+              "candidate_score": 0.546697
+            },
+            {
+              "chunk_id": 10841,
+              "ordinal_distance": 2,
+              "candidate_score": 0.022488
+            },
+            {
+              "chunk_id": 9778,
+              "ordinal_distance": 2,
+              "candidate_score": 0.498239
+            },
+            {
+              "chunk_id": 10851,
+              "ordinal_distance": 1,
+              "candidate_score": 0.023314
+            },
+            {
+              "chunk_id": 10870,
+              "ordinal_distance": 3,
+              "candidate_score": 0.022342
+            }
+          ],
+          "extracted_match_ranks": [
+            61,
+            62,
+            371,
+            705,
+            707,
+            708,
+            1116,
+            1117,
+            1236,
+            1749
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "X10",
+      "query": "计算机组成原理和操作系统实验分别使用了哪些核心数据结构",
+      "evidence_requirements_hit": 3,
+      "evidence_requirements_total": 4,
+      "evidence_recall": 0.75,
+      "all_evidence_retained": false,
+      "source_evidence_recall": 0.75,
+      "all_evidence_retrieved": false,
+      "gold_sources_in_pack": true,
+      "spans": 202,
+      "packed_chars": 64000,
+      "source_chars": 153759,
+      "compression": 0.5838,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "computer-register-file",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 14454,
+              "ordinal_distance": 0,
+              "candidate_score": 0.738218
+            },
+            {
+              "chunk_id": 9144,
+              "ordinal_distance": 2,
+              "candidate_score": 0.01642
+            },
+            {
+              "chunk_id": 9150,
+              "ordinal_distance": 2,
+              "candidate_score": 0.611146
+            },
+            {
+              "chunk_id": 9551,
+              "ordinal_distance": 4,
+              "candidate_score": 0.026232
+            },
+            {
+              "chunk_id": 9561,
+              "ordinal_distance": 3,
+              "candidate_score": 0.026232
+            }
+          ],
+          "extracted_match_ranks": [
+            397,
+            446,
+            514,
+            581,
+            706,
+            742,
+            743,
+            952,
+            2198,
+            2219
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "computer-data-path",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 14454,
+              "ordinal_distance": 0,
+              "candidate_score": 0.738218
+            },
+            {
+              "chunk_id": 9148,
+              "ordinal_distance": 2,
+              "candidate_score": 0.01642
+            },
+            {
+              "chunk_id": 9150,
+              "ordinal_distance": 2,
+              "candidate_score": 0.611146
+            },
+            {
+              "chunk_id": 9151,
+              "ordinal_distance": 1,
+              "candidate_score": 0.611146
+            },
+            {
+              "chunk_id": 10370,
+              "ordinal_distance": 2,
+              "candidate_score": 0.646619
+            },
+            {
+              "chunk_id": 9559,
+              "ordinal_distance": 0,
+              "candidate_score": 0.498515
+            },
+            {
+              "chunk_id": 9561,
+              "ordinal_distance": 3,
+              "candidate_score": 0.026232
+            },
+            {
+              "chunk_id": 9562,
+              "ordinal_distance": 2,
+              "candidate_score": 0.026232
+            }
+          ],
+          "extracted_match_ranks": [
+            100,
+            142,
+            143,
+            213,
+            226,
+            281,
+            282,
+            283,
+            284,
+            360
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "os-resource-vectors",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 9615,
+              "ordinal_distance": 2,
+              "candidate_score": 0.563747
+            }
+          ],
+          "extracted_match_ranks": [
+            942,
+            944,
+            2214
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "os-fat-structures",
+          "source_hit": false,
+          "source_matches": [],
+          "extracted_match_ranks": [],
+          "hit": false
+        }
+      ]
+    },
+    {
+      "qid": "U02",
+      "query": "宿舍热水器的使用时间限制",
+      "evidence_requirements_hit": 2,
+      "evidence_requirements_total": 2,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 179,
+      "packed_chars": 64000,
+      "source_chars": 267806,
+      "compression": 0.761,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 739,
+              "ordinal_distance": 0,
+              "candidate_score": 0.454925
+            }
+          ],
+          "extracted_match_ranks": [
+            38,
+            39,
+            40,
+            2973
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-02",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 754,
+              "ordinal_distance": 1,
+              "candidate_score": 0.516259
+            },
+            {
+              "chunk_id": 739,
+              "ordinal_distance": 0,
+              "candidate_score": 0.454925
+            }
+          ],
+          "extracted_match_ranks": [
+            38,
+            39,
+            40,
+            199,
+            200,
+            201,
+            202,
+            2964,
+            2973
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "U04",
+      "query": "SMTP 协议的握手流程",
+      "evidence_requirements_hit": 3,
+      "evidence_requirements_total": 3,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 181,
+      "packed_chars": 64000,
+      "source_chars": 200305,
+      "compression": 0.6805,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10568,
+              "ordinal_distance": 1,
+              "candidate_score": 0.512957
+            }
+          ],
+          "extracted_match_ranks": [
+            2637
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-02",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10568,
+              "ordinal_distance": 1,
+              "candidate_score": 0.512957
+            }
+          ],
+          "extracted_match_ranks": [
+            2637
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-03",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10568,
+              "ordinal_distance": 1,
+              "candidate_score": 0.512957
+            }
+          ],
+          "extracted_match_ranks": [
+            2637
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "U06",
+      "query": "图书馆借书最多能借几本",
+      "evidence_requirements_hit": 1,
+      "evidence_requirements_total": 1,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 177,
+      "packed_chars": 64000,
+      "source_chars": 244420,
+      "compression": 0.7382,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 3904,
+              "ordinal_distance": 1,
+              "candidate_score": 0.551474
+            }
+          ],
+          "extracted_match_ranks": [
+            2956
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "U09",
+      "query": "毕业论文查重率要求低于多少",
+      "evidence_requirements_hit": 1,
+      "evidence_requirements_total": 1,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 141,
+      "packed_chars": 64000,
+      "source_chars": 279775,
+      "compression": 0.7712,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 5878,
+              "ordinal_distance": 3,
+              "candidate_score": 0.013514
+            },
+            {
+              "chunk_id": 5918,
+              "ordinal_distance": 1,
+              "candidate_score": 0.011494
+            }
+          ],
+          "extracted_match_ranks": [
+            15,
+            2273,
+            2581
+          ],
+          "hit": true
+        }
+      ]
+    },
+    {
+      "qid": "U10",
+      "query": "杭州地铁到浙江音乐学院怎么换乘",
+      "evidence_requirements_hit": 2,
+      "evidence_requirements_total": 2,
+      "evidence_recall": 1.0,
+      "all_evidence_retained": true,
+      "source_evidence_recall": 1.0,
+      "all_evidence_retrieved": true,
+      "gold_sources_in_pack": true,
+      "spans": 166,
+      "packed_chars": 64000,
+      "source_chars": 215335,
+      "compression": 0.7028,
+      "roundtrip_ok": true,
+      "requirements": [
+        {
+          "requirement_id": "evidence-01",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10786,
+              "ordinal_distance": 1,
+              "candidate_score": 0.35236
+            }
+          ],
+          "extracted_match_ranks": [
+            1,
+            2,
+            6,
+            7,
+            2216
+          ],
+          "hit": true
+        },
+        {
+          "requirement_id": "evidence-02",
+          "source_hit": true,
+          "source_matches": [
+            {
+              "chunk_id": 10786,
+              "ordinal_distance": 1,
+              "candidate_score": 0.35236
+            }
+          ],
+          "extracted_match_ranks": [
+            1,
+            2,
+            6,
+            7,
+            2216
+          ],
+          "hit": true
+        }
+      ]
+    }
+  ]
+}

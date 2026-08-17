@@ -9,13 +9,21 @@ without making the desktop search and QA paths drift apart again.
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.db.visibility import (
+    VISIBLE_FILES_COND,
+    visible_content_exists,
+    visible_files_condition,
+)
 from app.index.hierarchy import hierarchy_routes
 from app.index.search import search as child_search
+from app.index.search import vector_route
 from app.retrieval.compress import (
     ContextPack,
     EvidenceSource,
@@ -26,8 +34,83 @@ from app.retrieval.query import decompose_comparative, mentioned_exts
 from app.retrieval.rerank import run_rerank
 
 RRF_K = 60
+DOCUMENT_HEAD_CHUNKS = 3
+
+
+def _main_db_path(conn) -> str:
+    for row in conn.execute("PRAGMA database_list"):
+        if row[1] == "main":
+            return row[2] or ":memory:"
+    return ":memory:"
+
+
+def _parallel_subquery_search(db_path: str, subquery: str, limit: int,
+                              query_vector=None):
+    from app.db.database import connect
+    child = connect(db_path)
+    try:
+        return child_search(
+            child, subquery, limit=limit, include_hierarchy=False,
+            vector_query=query_vector,
+        )
+    finally:
+        child.close()
+
+
+# 查询嵌入是一次 Ollama HTTP 往返，本机实测约 620ms，而同一次调用编码 8 条
+# 也只要 719ms —— 成本几乎全是每请求固定开销，不是算力。由此两条：
+#
+#   1. 全部查询变体合并成一次调用。每条子查询各发一次请求会把比较类问题的
+#      嵌入开销乘上变体数。
+#   2. 整个调用丢后台线程。它不依赖任何词法路线，却曾串在关键路径最前面，
+#      让分层路由和四路召回（p95 合计约 1 秒）白等。
+#
+# 线程里只做 HTTP，不碰 SQLite —— 同一连接并发执行语句不安全。
+def _start_query_embedding(variants: tuple[str, ...]):
+    """后台批量编码全部查询变体。不可用时返回 None，向量路自行降级。"""
+    if not variants:
+        return None
+
+    def work() -> dict[str, Any]:
+        from app.index import embedding as emb
+        if not emb.is_available():
+            return {}
+        vectors = emb.get_embedder().encode(list(variants))
+        return {text: vectors[index] for index, text in enumerate(variants)}
+
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        future = pool.submit(work)
+    except Exception:  # noqa: BLE001 - 起不了线程就退回同步路径
+        pool.shutdown(wait=False)
+        return None
+    return (pool, future)
+
+
+def _collect_query_embedding(handle) -> dict[str, Any]:
+    """取回批量编码结果。任何失败都只是没有向量，检索退化为纯词法。"""
+    if handle is None:
+        return {}
+    pool, future = handle
+    try:
+        return future.result()
+    except Exception:  # noqa: BLE001 - 嵌入失败不能让整次检索失败
+        return {}
+    finally:
+        pool.shutdown(wait=False)
+
+
 # 子查询是补充入口，权重略低于四条主路线，避免分解误判时喧宾夺主
-ROUTE_WEIGHTS = {"document": 0.25, "section": 0.5, "subquery": 0.8}
+ROUTE_WEIGHTS = {
+    "document": 0.25,
+    "section": 0.5,
+    "subquery": 0.8,
+    # Filename matches are explicit metadata supplied by the user, not a fuzzy
+    # semantic hint. Give this route enough weight to survive multi-route body
+    # matches while keeping it inside the same soft RRF fusion contract.
+    "filename": 1.0,
+    "filename:metadata": 3.0,
+}
 
 
 @dataclass(frozen=True)
@@ -57,6 +140,7 @@ class RetrievalTrace:
     stages: list[dict[str, Any]] = field(default_factory=list)
     routes: dict[str, int] = field(default_factory=dict)
     candidates: list[dict[str, Any]] = field(default_factory=list)
+    deep_candidates: list[int] = field(default_factory=list)
     degraded: list[str] = field(default_factory=list)
 
     def stage(self, name: str, started: float, **details: Any) -> None:
@@ -73,6 +157,7 @@ class RetrievalTrace:
             "stages": self.stages,
             "routes": self.routes,
             "candidates": self.candidates,
+            "deep_candidates": self.deep_candidates,
             "degraded": self.degraded,
         }
 
@@ -121,8 +206,11 @@ def _scope_routes_to_book(conn, routes: dict[str, list[tuple[int, float]]],
             f"""SELECT DISTINCT ch.id
                 FROM chunks ch
                 JOIN files f ON f.content_id = ch.content_id
+                LEFT JOIN sources s ON s.id = f.source_id
                 JOIN book_members bm ON bm.file_id = f.id
-                WHERE bm.book_id = ? AND ch.id IN ({marks})""",
+                WHERE bm.book_id = ? AND ch.id IN ({marks})
+                  AND {visible_files_condition()}
+                  AND {visible_content_exists('ch.content_id')}""",
             [book_id, *candidate_ids],
         )
     }
@@ -131,6 +219,33 @@ def _scope_routes_to_book(conn, routes: dict[str, list[tuple[int, float]]],
                if chunk_id in allowed]
         for name, hits in routes.items()
     }
+
+
+def _prioritize_route_heads(
+    candidates: list[Candidate], routes: dict[str, list[tuple[int, float]]],
+) -> list[Candidate]:
+    """Keep strong independent-route evidence inside the rerank/deep pool."""
+    by_id = {candidate.chunk_id: candidate for candidate in candidates}
+    ordered: list[Candidate] = []
+    seen: set[int] = set()
+
+    def add(ids) -> None:
+        for chunk_id in ids:
+            if chunk_id in seen or chunk_id not in by_id:
+                continue
+            seen.add(chunk_id)
+            ordered.append(by_id[chunk_id])
+
+    add(candidate.chunk_id for candidate in candidates[:24])
+    add(chunk_id for chunk_id, _score in routes.get("vector", [])[:20])
+    for name in sorted(route for route in routes if route.startswith("subquery:")):
+        add(chunk_id for chunk_id, _score in routes[name][:10])
+    for name, quota in (("document", 8), ("section", 8),
+                        ("jieba", 8), ("trigram", 8),
+                        ("filename:metadata", 8)):
+        add(chunk_id for chunk_id, _score in routes.get(name, [])[:quota])
+    add(candidate.chunk_id for candidate in candidates)
+    return ordered
 
 
 def _fuse(routes: dict[str, list[tuple[int, float]]]) -> list[Candidate]:
@@ -157,8 +272,16 @@ def _fuse(routes: dict[str, list[tuple[int, float]]]) -> list[Candidate]:
 
 def run(conn, query: str, *, route_limit: int = 100,
         candidate_limit: int | None = None,
-        book_id: int | None = None) -> RetrievalResult:
-    """Run the stable V1 retrieval stages and return a non-persistent trace."""
+        book_id: int | None = None,
+        reranker: str | None = None) -> RetrievalResult:
+    """Run the stable V1 retrieval stages and return a non-persistent trace.
+
+    ``reranker`` 只是「没人指定时用哪个重排实现」的偏好，环境变量
+    `INKTABLE_RERANKER` 始终优先。重排是固定架构阶段（PLAN §0 决策 3），
+    实现可替换 —— 但**搜索与问答共用同一条管线**是 v7 的明确决策，
+    给两边配不同实现会让「搜到的」与「答出来的」证据顺序分叉，
+    不要在没有明确决定的情况下这么做。
+    """
     normalized = str(query or "").strip()
     plan = QueryPlan(query=normalized, route_limit=route_limit,
                      candidate_limit=candidate_limit, book_id=book_id)
@@ -168,6 +291,16 @@ def run(conn, query: str, *, route_limit: int = 100,
     )
 
     started = time.perf_counter()
+    subqueries = tuple(decompose_comparative(normalized))
+    # 先把嵌入丢出去，再做分层路由和词法召回 —— 这两段的耗时因此被
+    # 嵌入的固定往返吃掉，而不是叠加在它后面。
+    # 空查询不发嵌入请求：向量路被拆出来单独调用后，不再受 child_search
+    # 里「两路 FTS 表达式都为空就直接返回」那道闸的保护，空串会拿到一个
+    # 无意义的向量并召回 120 条任意分片。
+    embed_handle = (
+        _start_query_embedding((normalized, *subqueries)) if normalized else None
+    )
+
     hierarchy = hierarchy_routes(conn, normalized, limit=plan.route_limit)
     trace.stage(
         "hierarchy_routing", started,
@@ -176,9 +309,25 @@ def run(conn, query: str, *, route_limit: int = 100,
     )
 
     started = time.perf_counter()
+    # 词法四路先跑：此刻嵌入请求还在后台飞，这段时间是免费的
     routes = child_search(
         conn, normalized, limit=plan.route_limit, include_hierarchy=False,
+        include_vector=False,
     )
+    trace.stage(
+        "lexical_retrieval", started, route_limit=plan.route_limit,
+        candidate_count=sum(len(hits) for hits in routes.values()),
+    )
+
+    started = time.perf_counter()
+    query_vectors = _collect_query_embedding(embed_handle)
+    trace.stage("embed_query", started, variant_count=len(query_vectors))
+
+    started = time.perf_counter()
+    routes["vector"] = vector_route(
+        conn, normalized, plan.route_limit,
+        query_vector=query_vectors.get(normalized),
+    ) if normalized else []
     routes.update(hierarchy)
     trace.routes = {name: len(hits) for name, hits in routes.items() if hits}
     child_count = sum(
@@ -194,13 +343,27 @@ def run(conn, query: str, *, route_limit: int = 100,
     # 只增加入口不做排除（K3）；非比较问题此阶段为空、零额外开销。
     # 每条子路线只取头部命中 —— 尾部是噪声，会把无关文件抬进融合结果。
     started = time.perf_counter()
-    subqueries = tuple(decompose_comparative(normalized))
     subquery_head = min(30, plan.route_limit)
-    for index, subquery in enumerate(subqueries):
-        sub_routes = child_search(
-            conn, subquery, limit=max(20, plan.route_limit // 2),
-            include_hierarchy=False,
-        )
+    sub_limit = max(20, plan.route_limit // 2)
+    sub_results = []
+    db_path = _main_db_path(conn)
+    if len(subqueries) > 1 and db_path not in {"", ":memory:"}:
+        with ThreadPoolExecutor(max_workers=len(subqueries)) as pool:
+            futures = [
+                pool.submit(_parallel_subquery_search, db_path, query, sub_limit,
+                            query_vectors.get(query))
+                for query in subqueries
+            ]
+            sub_results = [future.result() for future in futures]
+    else:
+        sub_results = [
+            child_search(
+                conn, query, limit=sub_limit, include_hierarchy=False,
+                vector_query=query_vectors.get(query),
+            )
+            for query in subqueries
+        ]
+    for index, sub_routes in enumerate(sub_results):
         fused_sub = _fuse(sub_routes)
         routes[f"subquery:{index}"] = [
             (candidate.chunk_id, candidate.rrf_score)
@@ -217,7 +380,8 @@ def run(conn, query: str, *, route_limit: int = 100,
                 candidate_count=sum(trace.routes.values()))
 
     started = time.perf_counter()
-    candidates = _fuse(routes)
+    candidates = _prioritize_route_heads(_fuse(routes), routes)
+    trace.deep_candidates = [candidate.chunk_id for candidate in candidates[:50]]
     trace.candidates = [
         {
             "chunk_id": candidate.chunk_id,
@@ -232,6 +396,7 @@ def run(conn, query: str, *, route_limit: int = 100,
     reranked = run_rerank(
         conn, normalized, candidates,
         subqueries=subqueries, ext_hints=mentioned_exts(normalized),
+        mode=reranker,
     )
     by_id = {candidate.chunk_id: candidate for candidate in candidates}
     candidates = [
@@ -276,24 +441,43 @@ def load_context_candidates(conn, retrieval: RetrievalResult, *,
     marks = ",".join("?" * len(ordered))
     if book_id is None:
         row_iter = conn.execute(
-            f"""SELECT ch.id, ch.content_id, ch.section_id, ch.page,
+            f"""WITH visible_files AS (
+                    SELECT f.id, f.content_id, f.name, f.path,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY f.content_id ORDER BY f.id
+                           ) AS replica_rank
+                    FROM files f
+                    LEFT JOIN sources s ON s.id = f.source_id
+                    WHERE {VISIBLE_FILES_COND}
+                )
+                SELECT ch.id, ch.content_id, ch.section_id, ch.page,
                        ch.section_path, ch.ordinal, ch.text, ch.start_offset,
                        ch.end_offset, f.id AS file_id, f.name, f.path
-                FROM chunks ch JOIN files f ON f.content_id = ch.content_id
-                WHERE ch.id IN ({marks})
-                GROUP BY ch.id""",
+                FROM chunks ch
+                JOIN visible_files f
+                  ON f.content_id = ch.content_id AND f.replica_rank = 1
+                WHERE ch.id IN ({marks})""",
             ordered,
         )
     else:
         row_iter = conn.execute(
-            f"""SELECT ch.id, ch.content_id, ch.section_id, ch.page,
+            f"""WITH visible_book_files AS (
+                    SELECT f.id, f.content_id, f.name, f.path,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY f.content_id ORDER BY f.id
+                           ) AS replica_rank
+                    FROM files f
+                    LEFT JOIN sources s ON s.id = f.source_id
+                    JOIN book_members bm ON bm.file_id = f.id
+                    WHERE bm.book_id = ? AND {VISIBLE_FILES_COND}
+                )
+                SELECT ch.id, ch.content_id, ch.section_id, ch.page,
                        ch.section_path, ch.ordinal, ch.text, ch.start_offset,
                        ch.end_offset, f.id AS file_id, f.name, f.path
                 FROM chunks ch
-                JOIN files f ON f.content_id = ch.content_id
-                JOIN book_members bm ON bm.file_id = f.id
-                WHERE bm.book_id = ? AND ch.id IN ({marks})
-                GROUP BY ch.id""",
+                JOIN visible_book_files f
+                  ON f.content_id = ch.content_id AND f.replica_rank = 1
+                WHERE ch.id IN ({marks})""",
             [book_id, *ordered],
         )
     rows = {row["id"]: row for row in row_iter}
@@ -330,33 +514,48 @@ def load_context_candidates(conn, retrieval: RetrievalResult, *,
 
 def expand_neighbors(conn, candidates: list[ContextCandidate], *,
                      neighbor_span: int = 1,
+                     document_head_chunks: int = DOCUMENT_HEAD_CHUNKS,
                      trace: RetrievalTrace | None = None) -> list[ContextCandidate]:
-    """Restore local Child neighbors after ranking and diversity selection."""
+    """Restore local neighbors plus a small document-head orientation window."""
     started = time.perf_counter()
     expanded: list[ContextCandidate] = []
     for candidate in candidates:
         rows = conn.execute(
-            """SELECT id, content_id, section_id, page, section_path, ordinal,
-                      text, start_offset, end_offset FROM chunks
+            f"""SELECT id, content_id, section_id, page, section_path, ordinal,
+                      text, start_offset, end_offset FROM chunks ch
                WHERE content_id = ? AND index_version = (
                    SELECT active_index_version FROM contents WHERE id = ?
-               ) AND ordinal BETWEEN ? AND ?
+               ) AND (ordinal BETWEEN ? AND ? OR ordinal < ?)
+                 AND {visible_content_exists('ch.content_id')}
                ORDER BY ordinal""",
             (candidate.content_id, candidate.content_id,
              candidate.ordinal - neighbor_span,
-             candidate.ordinal + neighbor_span),
+             candidate.ordinal + neighbor_span, document_head_chunks),
         ).fetchall()
-        sources = tuple(EvidenceSource(
-            chunk_id=row["id"], content_id=row["content_id"],
-            section_id=row["section_id"], file_id=candidate.file_id,
-            file_name=candidate.file_name, file_path=candidate.file_path,
-            page=row["page"], section_path=row["section_path"] or "",
-            ordinal=row["ordinal"], text=row["text"],
-            document_start_offset=row["start_offset"],
-            document_end_offset=row["end_offset"],
-            candidate_score=candidate.relevance_score,
-            ordinal_distance=abs(row["ordinal"] - candidate.ordinal),
-        ) for row in rows)
+        sources = tuple(
+            EvidenceSource(
+                chunk_id=row["id"], content_id=row["content_id"],
+                section_id=row["section_id"], file_id=candidate.file_id,
+                file_name=candidate.file_name, file_path=candidate.file_path,
+                page=row["page"], section_path=row["section_path"] or "",
+                ordinal=row["ordinal"], text=row["text"],
+                document_start_offset=row["start_offset"],
+                document_end_offset=row["end_offset"],
+                candidate_score=candidate.relevance_score,
+                # A document head is orientation context, not hundreds of
+                # semantic hops away from a hit near the end of the document.
+                ordinal_distance=(
+                    min(
+                        abs(row["ordinal"] - candidate.ordinal),
+                        neighbor_span + 1,
+                    )
+                    if row["ordinal"] < document_head_chunks else
+                    abs(row["ordinal"] - candidate.ordinal)
+                ),
+                is_document_head=row["ordinal"] < document_head_chunks,
+            )
+            for row in rows
+        )
         expanded.append(ContextCandidate(
             **{**candidate.__dict__,
                "expanded_text": "\n".join(row["text"] for row in rows),
@@ -364,7 +563,8 @@ def expand_neighbors(conn, candidates: list[ContextCandidate], *,
         ))
     if trace is not None:
         trace.stage("expand", started, selected_count=len(expanded),
-                    neighbor_span=neighbor_span)
+                    neighbor_span=neighbor_span,
+                    document_head_chunks=document_head_chunks)
     return expanded
 
 

@@ -102,10 +102,19 @@ def probe(*, timeout: float = 20.0) -> dict:
         }
     started = time.monotonic()
     try:
-        text = chat(
-            [{"role": "user", "content": "这是一次连接测试。请只回复两个字：确认"}],
-            temperature=0, max_tokens=512, timeout=timeout,
-        )
+        for attempt in range(3):
+            try:
+                text = chat(
+                    [{"role": "user", "content": "这是一次连接测试。请只回复两个字：确认"}],
+                    temperature=0, max_tokens=512, timeout=timeout,
+                )
+                break
+            except LLMConnectionError as exc:
+                if attempt == 2 or exc.code != "unreachable":
+                    raise
+                # A freshly started local provider can be bound before its
+                # serving thread begins accepting connections.
+                time.sleep(0.05 * (attempt + 1))
         latency_ms = int((time.monotonic() - started) * 1000)
         reply = " ".join(text.split())
         if not reply:
@@ -136,6 +145,56 @@ def probe(*, timeout: float = 20.0) -> dict:
         code, message = ("invalid_response",
                          "接口连通但没有拿到有效回复（检查模型名，或该中转不兼容 OpenAI 协议）")
     return {**status(), "available": False, "code": code, "message": message}
+
+
+def chat_stream(messages: list[dict], *, temperature: float = 0.1,
+                max_tokens: int | None = 1500, timeout: float = 60.0):
+    """Yield OpenAI-compatible SSE delta text for a draft answer."""
+    endpoint, api_key, model = _config_snapshot()
+    if not (endpoint and api_key and model):
+        raise LLMNotConfigured("未配置模型服务（设置 → AI 问答）")
+    payload: dict = {
+        "model": model, "messages": messages,
+        "temperature": temperature, "stream": True,
+    }
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+    req = urllib.request.Request(
+        f"{endpoint}/chat/completions",
+        data=json.dumps(payload).encode("utf-8"), method="POST",
+        headers={"Content-Type": "application/json",
+                 "Authorization": f"Bearer {api_key}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            for raw_line in resp:
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line or line.startswith(":"):
+                    continue
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    return
+                try:
+                    event = json.loads(data)
+                    content = event["choices"][0].get("delta", {}).get("content")
+                except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+                    continue
+                if isinstance(content, str) and content:
+                    yield content
+    except urllib.error.HTTPError as e:
+        raise LLMHTTPError(e.code) from e
+    except TimeoutError as e:
+        raise LLMConnectionError("timeout", "模型服务响应超时") from e
+    except urllib.error.URLError as e:
+        if isinstance(e.reason, (TimeoutError, socket.timeout)):
+            raise LLMConnectionError("timeout", "模型服务响应超时") from e
+        raise LLMConnectionError("unreachable", "无法连接模型服务") from e
+    except OSError as e:
+        raise LLMConnectionError("unreachable", "无法连接模型服务") from e
+    except ValueError as e:
+        raise LLMConnectionError("unreachable", "无法连接模型服务") from e
 
 
 def chat(messages: list[dict], *, temperature: float = 0.1,

@@ -57,5 +57,7 @@ uv run --group dev pyinstaller sidecar.spec --noconfirm   # 冻结打包
 
 - 改检索/分片/融合/重排/压缩前后必须跑同一评测集（`docs/eval/` 有冻结基线）。
 - 18 条硬约束见 `../../docs/HANDOFF.md`，动任何一条前先读。
-- 桌面端开发态加载的是 `dist/inktable-sidecar` 冻结产物 ——
-  改完后端记得重新打包，否则改动不生效。
+- 桌面端开发态直接加载本目录源码：先执行 `uv sync`，再在
+  `apps/desktop` 执行 `npm start`；不需要先冻结 sidecar。
+- 最终发布前才执行 `uv run --group dev pyinstaller sidecar.spec`，
+  electron-builder 发布包只使用 `Resources/sidecar` 中的冻结产物。

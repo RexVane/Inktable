@@ -152,12 +152,74 @@ def _check_embedding() -> dict:
         return {"ok": False, "available": True, "error": str(e)}
 
 
+def _check_reranker() -> dict:
+    """Verify dynamically imported Cross-Encoder runtime when assets exist."""
+    try:
+        from app.retrieval.cross_encoder import MODEL_ID, is_available
+    except ImportError as e:
+        return {"ok": False, "available": False, "error": f"import failed: {e}"}
+
+    assets_available = is_available()
+    if not assets_available:
+        return {
+            "ok": True,
+            "available": False,
+            "model": MODEL_ID,
+            "note": "Cross-Encoder assets are not installed; local-static is the default",
+        }
+    try:
+        import onnxruntime
+        import tokenizers
+    except ImportError as e:
+        return {
+            "ok": False,
+            "available": False,
+            "model": MODEL_ID,
+            "error": f"runtime import failed: {e}",
+        }
+    return {
+        "ok": True,
+        "available": True,
+        "model": MODEL_ID,
+        "onnxruntime": onnxruntime.__version__,
+        "tokenizers": tokenizers.__version__,
+    }
+
+
+def _check_ocr() -> dict:
+    """Probe the platform OCR runtime; absence remains an optional capability."""
+    try:
+        from app.parsing import ocr
+    except ImportError as e:
+        return {"ok": False, "available": False, "error": f"import failed: {e}"}
+    try:
+        available = ocr.is_available()
+        result = {
+            "ok": True,
+            "available": available,
+            "engine": ocr.engine_id(),
+            "engine_label": ocr.engine_label(),
+        }
+        if not available:
+            result["note"] = "系统 OCR 或 OCR 语言包不可用"
+        return result
+    except Exception as e:
+        return {
+            "ok": False,
+            "available": False,
+            "engine": ocr.engine_id(),
+            "error": str(e),
+        }
+
+
 def collect_health() -> dict:
     checks = {
         "sqlite_vec": _check_sqlite_vec(),
         "fts5": _check_fts5(),
         "chinese_search": _check_chinese_search(),
         "embedding": _check_embedding(),
+        "reranker": _check_reranker(),
+        "ocr": _check_ocr(),
     }
     return {
         "status": "ok" if all(c["ok"] for c in checks.values()) else "degraded",

@@ -70,6 +70,19 @@ def test_context_pack_preserves_cross_document_coverage_before_score_fill():
     assert {span.content_id for span in pack.spans} == {1, 2}
 
 
+def test_identical_short_evidence_keeps_distinct_document_provenance():
+    first = extract_spans("加分", [_source(content_id=1, text="35", score=1.0)])[0]
+    second = extract_spans(
+        "加分", [_source(content_id=2, chunk_id=2, text="35", score=0.9)],
+    )[0]
+
+    pack = assemble_pack(
+        [first, second], source_chars=4, char_budget=20, max_spans=4,
+    )
+
+    assert [(span.content_id, span.text) for span in pack.spans] == [(1, "35"), (2, "35")]
+
+
 def test_context_pack_respects_budget_and_reports_compression():
     source = _source(text="相关证据一句。" * 20)
     spans = extract_spans("相关证据", [source])
@@ -104,6 +117,57 @@ def test_context_pack_keeps_one_span_per_direct_hit_before_neighbors():
     }
     assert direct_ids == {1, 2}
     assert any("TLS 1.2" in span.text for span in pack.spans)
+
+
+def test_context_pack_keeps_document_head_before_score_only_fill():
+    high = extract_spans(
+        "target", [_source(chunk_id=1, text="target high", score=1.0)],
+    )[0]
+    medium = extract_spans(
+        "target", [_source(chunk_id=2, text="target medium", score=0.8)],
+    )[0]
+    head_source = _source(
+        chunk_id=3,
+        text="orientation one\norientation two\nprotected fact\norientation four",
+        score=0.1,
+    )
+    head_source = EvidenceSource(
+        **{**head_source.__dict__, "is_document_head": True},
+    )
+    head_spans = extract_spans("target", [head_source])
+
+    pack = assemble_pack(
+        [high, medium, *head_spans], source_chars=100,
+        char_budget=100, max_spans=2,
+    )
+
+    assert [span.chunk_id for span in pack.spans] == [1, 3]
+    assert pack.spans[1].is_fallback is True
+    assert "protected fact" in pack.spans[1].text
+
+
+def test_context_pack_prefers_whole_short_priority_child():
+    source = _source(
+        text="query fact\ncontext two\nprotected tail fact\ncontext four",
+    )
+    spans = extract_spans("query fact", [source])
+
+    pack = assemble_pack(
+        spans, source_chars=len(source.text), char_budget=200, max_spans=2,
+    )
+
+    assert any(span.is_fallback for span in pack.spans)
+    assert any("protected tail fact" in span.text for span in pack.spans)
+
+
+def test_page_sized_child_gets_exact_fallback_beyond_sentence_window_limit():
+    source = _source(text="prefix\n" + "x" * 950 + "\nanswer at tail")
+
+    spans = extract_spans("unrelated paraphrase", [source])
+
+    fallback = next(span for span in spans if span.is_fallback)
+    assert len(fallback.text) > 900
+    assert fallback.text == source.text
 
 
 def test_adjacent_sentence_window_preserves_reason_and_solution():

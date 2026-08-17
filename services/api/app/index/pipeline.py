@@ -76,8 +76,15 @@ def _content_savepoint(conn: sqlite3.Connection):
         conn.execute(f"RELEASE SAVEPOINT {name}")
 
 
-def index_content(conn: sqlite3.Connection, content_id: int, path: Path) -> dict:
-    """解析并索引单个 content。返回结果摘要。"""
+def index_content(conn: sqlite3.Connection, content_id: int, path: Path,
+                  embed: bool = True) -> dict:
+    """解析并索引单个 content。返回结果摘要。
+
+    ``embed=False`` 时跳过内联向量编码（embedding_model_id 留空，由
+    embed_backfill 分批补课）—— 整盘首扫这类大批量场景必须走此模式：
+    嵌入是分钟级慢操作，内联做会让持锁的索引批次把扫描/实时入库
+    饿死（实测 reconcile 线程等锁 20 分钟零进展）。
+    """
     version: int | None = None
     try:
         if path.stat().st_size > MAX_INDEX_BYTES:
@@ -167,7 +174,7 @@ def index_content(conn: sqlite3.Connection, content_id: int, path: Path) -> dict
 
                 # 模型/向量表明确不可用时允许纯 FTS 降级；一旦开始向量写入，
                 # 任何异常必须冒泡，由 savepoint 回滚 chunks/FTS/vector 三者。
-                embedded = _embed_chunks(conn, inserted)
+                embedded = _embed_chunks(conn, inserted) if embed else None
 
                 activated_at = time.time()
                 conn.execute(
@@ -292,37 +299,61 @@ def activate_index_version(
     }
 
 
-def _delete_content_indexes(conn: sqlite3.Connection, content_id: int) -> None:
-    """删除一个 content 的 chunks、FTS 与向量；调用方负责事务边界。"""
-    old = conn.execute(
-        "SELECT id FROM chunks WHERE content_id = ?", (content_id,)
-    ).fetchall()
-    if old:
-        ids = [r["id"] for r in old]
-        marks = ",".join("?" * len(ids))
-        conn.execute(f"DELETE FROM chunks_fts WHERE rowid IN ({marks})", ids)
-        conn.execute(f"DELETE FROM chunks_fts_tri WHERE rowid IN ({marks})", ids)
+SQL_ID_BATCH = 4000
+
+
+def _id_batches(ids: list[int], size: int = SQL_ID_BATCH):
+    for start in range(0, len(ids), size):
+        yield ids[start:start + size]
+
+
+def _delete_virtual_rows(conn: sqlite3.Connection, table: str, ids: list[int]) -> None:
+    for batch in _id_batches(ids):
+        marks = ",".join("?" * len(batch))
+        conn.execute(f"DELETE FROM {table} WHERE rowid IN ({marks})", batch)
+
+
+def _delete_content_indexes_batch(
+    conn: sqlite3.Connection,
+    content_ids: list[int],
+) -> None:
+    """Delete relational and virtual indexes for a bounded content set."""
+    if not content_ids:
+        return
+    content_marks = ",".join("?" * len(content_ids))
+    chunk_ids = [row["id"] for row in conn.execute(
+        f"SELECT id FROM chunks WHERE content_id IN ({content_marks})", content_ids,
+    )]
+    if chunk_ids:
+        _delete_virtual_rows(conn, "chunks_fts", chunk_ids)
+        _delete_virtual_rows(conn, "chunks_fts_tri", chunk_ids)
         if _vector_table_exists(conn):
-            conn.execute(f"DELETE FROM chunks_vec WHERE rowid IN ({marks})", ids)
-        conn.execute("DELETE FROM chunks WHERE content_id = ?", (content_id,))
+            _delete_virtual_rows(conn, "chunks_vec", chunk_ids)
+        conn.execute(
+            f"DELETE FROM chunks WHERE content_id IN ({content_marks})", content_ids,
+        )
 
     section_ids = [row["id"] for row in conn.execute(
-        "SELECT id FROM sections WHERE content_id = ?", (content_id,),
+        f"SELECT id FROM sections WHERE content_id IN ({content_marks})", content_ids,
     )]
     if section_ids:
-        marks = ",".join("?" * len(section_ids))
-        conn.execute(f"DELETE FROM sections_fts WHERE rowid IN ({marks})", section_ids)
+        _delete_virtual_rows(conn, "sections_fts", section_ids)
     document_ids = [row["id"] for row in conn.execute(
-        "SELECT id FROM document_representations WHERE content_id = ?", (content_id,),
+        f"""SELECT id FROM document_representations
+            WHERE content_id IN ({content_marks})""",
+        content_ids,
     )]
     if document_ids:
-        marks = ",".join("?" * len(document_ids))
-        conn.execute(f"DELETE FROM documents_fts WHERE rowid IN ({marks})", document_ids)
-    conn.execute("DELETE FROM sections WHERE content_id = ?", (content_id,))
-    conn.execute(
-        "DELETE FROM document_representations WHERE content_id = ?", (content_id,)
-    )
-    conn.execute("DELETE FROM index_versions WHERE content_id = ?", (content_id,))
+        _delete_virtual_rows(conn, "documents_fts", document_ids)
+    for table in ("sections", "document_representations", "index_versions"):
+        conn.execute(
+            f"DELETE FROM {table} WHERE content_id IN ({content_marks})", content_ids,
+        )
+
+
+def _delete_content_indexes(conn: sqlite3.Connection, content_id: int) -> None:
+    """删除一个 content 的 chunks、FTS 与向量；调用方负责事务边界。"""
+    _delete_content_indexes_batch(conn, [content_id])
 
 
 def _vector_table_exists(conn: sqlite3.Connection) -> bool:
@@ -427,7 +458,11 @@ def _embed_chunks(conn, inserted: list[tuple[int, object]]) -> str | None:
     return model_id
 
 
-def embed_backfill(conn: sqlite3.Connection, limit: int = 500) -> dict:
+def embed_backfill(
+    conn: sqlite3.Connection,
+    limit: int = 500,
+    content_ids: set[int] | list[int] | tuple[int, ...] | None = None,
+) -> dict:
     """给存量分片补向量 —— 模型晚于内容入库时的补课路径。
 
     正常路径在 _embed_chunks 内联编码；但如果内容是在嵌入模型可用
@@ -442,19 +477,29 @@ def embed_backfill(conn: sqlite3.Connection, limit: int = 500) -> dict:
     if not emb.is_available() or not _vector_table_exists(conn):
         return {"embedded": 0, "remaining": 0, "available": False}
 
+    ids = sorted({int(item) for item in content_ids}) if content_ids is not None else None
+    scope = ""
+    scope_params: list[int] = []
+    if ids:
+        marks = ",".join("?" * len(ids))
+        scope = f" AND ch.content_id IN ({marks})"
+        scope_params = ids
+    elif content_ids is not None:
+        return {"embedded": 0, "remaining": 0, "available": True}
+
     remaining_sql = (
         "SELECT count(*) c FROM chunks ch "
         "JOIN contents c ON c.id = ch.content_id "
         "WHERE ch.embedding_model_id IS NULL "
-        "AND ch.index_version = c.active_index_version"
+        "AND ch.index_version = c.active_index_version" + scope
     )
     rows = conn.execute(
-        """SELECT ch.id, ch.text, ch.section_path
+        f"""SELECT ch.id, ch.text, ch.section_path
            FROM chunks ch JOIN contents c ON c.id = ch.content_id
            WHERE ch.embedding_model_id IS NULL
-             AND ch.index_version = c.active_index_version
+             AND ch.index_version = c.active_index_version{scope}
            ORDER BY ch.id LIMIT ?""",
-        (limit,),
+        [*scope_params, limit],
     ).fetchall()
     if not rows:
         return {"embedded": 0, "remaining": 0, "available": True}
@@ -474,14 +519,30 @@ def embed_backfill(conn: sqlite3.Connection, limit: int = 500) -> dict:
         f"UPDATE chunks SET embedding_model_id = ? WHERE id IN ({marks})",
         [m.model_id, *(r["id"] for r in rows)],
     )
-    remaining = conn.execute(remaining_sql).fetchone()["c"]
+    remaining = conn.execute(remaining_sql, scope_params).fetchone()["c"]
     logging.getLogger("inktable.pipeline").info(
         "向量补齐 %d 片，剩余 %d 片", len(rows), remaining)
     return {"embedded": len(rows), "remaining": remaining,
             "available": True, "model": m.model_id}
 
 
-def cleanup_orphan_contents(conn: sqlite3.Connection) -> int:
+ORPHAN_CLEANUP_BATCH = 25
+
+
+def count_orphan_contents(conn: sqlite3.Connection) -> int:
+    """Return the number of content rows no file still references."""
+    return int(conn.execute(
+        """SELECT count(*) FROM contents c
+           WHERE NOT EXISTS (
+               SELECT 1 FROM files f WHERE f.content_id = c.id
+           )"""
+    ).fetchone()[0])
+
+
+def cleanup_orphan_contents(
+    conn: sqlite3.Connection,
+    limit: int = ORPHAN_CLEANUP_BATCH,
+) -> int:
     """清理没有任何文件指向的 content 及其索引。
 
     编辑文件 → 新 sha256 → 新 content，旧 content 随即成为孤儿。
@@ -490,17 +551,26 @@ def cleanup_orphan_contents(conn: sqlite3.Connection) -> int:
     **必须放在索引批之后**：新 content 的向量复用要从旧 content 抄，
     先清就抄不到了（清早了只损失复用、不损失正确性，但没必要）。
     """
+    if limit < 1:
+        raise ValueError("limit must be positive")
     orphans = conn.execute(
-        """SELECT id FROM contents
-           WHERE id NOT IN (SELECT content_id FROM files
-                            WHERE content_id IS NOT NULL)"""
+        """SELECT id FROM contents c
+           WHERE NOT EXISTS (
+               SELECT 1 FROM files f WHERE f.content_id = c.id
+           )
+           ORDER BY id
+           LIMIT ?""",
+        (limit,),
     ).fetchall()
-    for o in orphans:
-        # 每个孤儿 content 也独立原子清理；向量删除失败时保留它的 chunks/FTS，
-        # 不制造「主表已删、向量还在」的悬挂条目。
+    ids = [row["id"] for row in orphans]
+    if ids:
+        # The whole bounded batch is atomic. Set-based virtual-table deletes are
+        # orders of magnitude faster than issuing four statements per content,
+        # while a failure still rolls back every relational and index mutation.
         with _content_savepoint(conn):
-            _delete_content_indexes(conn, o["id"])
-            conn.execute("DELETE FROM contents WHERE id = ?", (o["id"],))
+            _delete_content_indexes_batch(conn, ids)
+            marks = ",".join("?" * len(ids))
+            conn.execute(f"DELETE FROM contents WHERE id IN ({marks})", ids)
     return len(orphans)
 
 
@@ -577,27 +647,45 @@ def count_readable_pending(conn: sqlite3.Connection) -> int:
     return sum(1 for row in rows if _readable_index_paths(conn, row["id"], exts))
 
 
-def index_pending(conn: sqlite3.Connection, limit: int = 500, progress=None) -> dict:
-    """索引所有待处理的 content。
+def index_pending(
+    conn: sqlite3.Connection,
+    limit: int = 500,
+    progress=None,
+    embed: bool = True,
+    content_ids: set[int] | list[int] | tuple[int, ...] | None = None,
+) -> dict:
+    """索引待处理的 content，可选地限制到一组 content id。
 
     只处理有对应文件、且扩展名可解析的 —— 源码类已在扫描阶段降级为
     仅元数据（§M2 决策），不会进到这里。
     """
     # OCR 开关经模块级状态传给解析器（解析器拿不到 conn）
     from app.db.database import get_setting
-    from app.parsing import ocr_mac
+    from app.parsing import ocr
 
-    ocr_mac.set_runtime_enabled(get_setting(conn, "ocr_enabled", "1") == "1")
+    ocr.set_runtime_enabled(get_setting(conn, "ocr_enabled", "1") == "1")
 
     exts = indexable_exts()
     marks = ",".join("?" * len(exts))
+    scoped_ids = sorted({int(item) for item in content_ids}) if content_ids is not None else None
+    if scoped_ids:
+        content_marks = ",".join("?" * len(scoped_ids))
+        content_scope = f" AND c.id IN ({content_marks})"
+        content_params = scoped_ids
+    elif content_ids is not None:
+        return {"indexed": 0, "chunks": 0, "no_text": 0, "failed": 0,
+                "unsupported": 0, "too_large": 0, "total": 0,
+                "orphans_cleaned": 0, "orphans_remaining": count_orphan_contents(conn)}
+    else:
+        content_scope = ""
+        content_params = []
 
     # 先把当前没有任何可解析副本的内容一次性出队（源码、媒体、压缩包等）。
     # missing 原件若有保全副本仍然可解析，不能被提前标成 unsupported。
     # 同一 content 可被不同扩展名的多个 file 共享，不能用 MIN(ext) 代表整组。
     conn.execute(
         f"""UPDATE contents AS c SET parse_state = 'unsupported'
-            WHERE c.parse_state = 'pending'
+            WHERE c.parse_state = 'pending'{content_scope}
               AND EXISTS (
                   SELECT 1 FROM files f
                   WHERE f.content_id = c.id
@@ -609,7 +697,7 @@ def index_pending(conn: sqlite3.Connection, limit: int = 500, progress=None) -> 
                     AND (f.state != 'missing' OR COALESCE(f.preserved_path, '') != '')
                     AND lower(f.ext) IN ({marks})
               )""",
-        list(exts),
+        [*content_params, *exts],
     )
     conn.commit()
 
@@ -617,7 +705,7 @@ def index_pending(conn: sqlite3.Connection, limit: int = 500, progress=None) -> 
     # 若后来出现了可解析副本，也应被重新拾起（例如先看到 .bin，后出现 .txt）。
     rows = conn.execute(
         f"""SELECT c.id FROM contents c
-            WHERE c.parse_state IN ('pending', 'unsupported')
+            WHERE c.parse_state IN ('pending', 'unsupported'){content_scope}
               AND EXISTS (
                   SELECT 1 FROM files f
                   WHERE f.content_id = c.id
@@ -626,7 +714,7 @@ def index_pending(conn: sqlite3.Connection, limit: int = 500, progress=None) -> 
               )
             ORDER BY c.id
             LIMIT ?""",
-        [*exts, limit],
+        [*content_params, *exts, limit],
     ).fetchall()
 
     summary = {"indexed": 0, "chunks": 0, "no_text": 0, "failed": 0,
@@ -646,7 +734,7 @@ def index_pending(conn: sqlite3.Connection, limit: int = 500, progress=None) -> 
             # 预期解析失败时继续试同 content 的下一副本；FTS/向量等索引阶段
             # 异常仍立即冒泡到批处理边界，不能靠换路径掩盖真实写入故障。
             for p in paths:
-                result = index_content(conn, row["id"], p)
+                result = index_content(conn, row["id"], p, embed=embed)
                 if result["state"] not in {"parse_failed", "unsupported"}:
                     break
         except Exception as e:  # 单文档已由 savepoint 回滚；批处理继续其余文档
@@ -676,5 +764,6 @@ def index_pending(conn: sqlite3.Connection, limit: int = 500, progress=None) -> 
     # 孤儿清扫必须在索引批之后（向量复用要从旧 content 抄，见函数注释）
     summary["orphans_cleaned"] = cleanup_orphan_contents(conn)
     conn.commit()
+    summary["orphans_remaining"] = count_orphan_contents(conn)
     summary["total"] = len(rows)
     return summary

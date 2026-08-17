@@ -6,12 +6,15 @@ OCR 不真调 osascript（CI/无权限环境不可依赖），全部经 monkeypa
 
 from __future__ import annotations
 
+import re
+import subprocess
+import sys
 import time
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app.parsing import ocr_mac, parsers
+from app.parsing import ocr, ocr_windows, parsers
 
 TOKEN = "test-token"
 H = {"Authorization": f"Bearer {TOKEN}"}
@@ -42,12 +45,12 @@ def _blank_pdf(path):
 def test_pdf_ocr_fallback_extracts_text(tmp_path, monkeypatch):
     pdf = tmp_path / "扫描.pdf"
     _blank_pdf(pdf)
-    monkeypatch.setattr(ocr_mac, "is_available", lambda: True)
+    monkeypatch.setattr(ocr, "is_available", lambda: True)
     monkeypatch.setattr(
-        ocr_mac, "ocr_pdf",
+        ocr, "ocr_pdf",
         lambda path: ([(1, "扫描出来的合同条款文本。")], []),
     )
-    ocr_mac.set_runtime_enabled(True)
+    ocr.set_runtime_enabled(True)
 
     doc = parsers.parse_pdf(pdf)
     assert doc.blocks, "OCR 文本必须进入 blocks"
@@ -59,18 +62,18 @@ def test_pdf_ocr_fallback_extracts_text(tmp_path, monkeypatch):
 def test_pdf_ocr_respects_disabled(tmp_path, monkeypatch):
     pdf = tmp_path / "扫描.pdf"
     _blank_pdf(pdf)
-    monkeypatch.setattr(ocr_mac, "is_available", lambda: True)
+    monkeypatch.setattr(ocr, "is_available", lambda: True)
     monkeypatch.setattr(
-        ocr_mac, "ocr_pdf",
+        ocr, "ocr_pdf",
         lambda path: ([(1, "不该出现的文本")], []),
     )
-    ocr_mac.set_runtime_enabled(False)
+    ocr.set_runtime_enabled(False)
     try:
         doc = parsers.parse_pdf(pdf)
         assert not doc.blocks
         assert any("未启用或不可用" in w for w in doc.warnings)
     finally:
-        ocr_mac.set_runtime_enabled(True)
+        ocr.set_runtime_enabled(True)
 
 
 def test_retry_scanned_requeues_and_indexes(client, tmp_path, monkeypatch):
@@ -80,7 +83,7 @@ def test_retry_scanned_requeues_and_indexes(client, tmp_path, monkeypatch):
     _blank_pdf(d / "扫描合同.pdf")
 
     # 第一轮：OCR 不可用 → no_text
-    monkeypatch.setattr(ocr_mac, "is_available", lambda: False)
+    monkeypatch.setattr(ocr, "is_available", lambda: False)
     client.post("/sources/enable", headers=H, json={"name": "S", "path": str(d)})
     client.post("/index/run", headers=H, json={"limit": 10})
     assert client.get("/index/status", headers=H).json()["chunks"] == 0
@@ -90,9 +93,9 @@ def test_retry_scanned_requeues_and_indexes(client, tmp_path, monkeypatch):
     assert r0["requeued"] == 1
 
     # 第二轮：OCR 可用 → 补出文本
-    monkeypatch.setattr(ocr_mac, "is_available", lambda: True)
+    monkeypatch.setattr(ocr, "is_available", lambda: True)
     monkeypatch.setattr(
-        ocr_mac, "ocr_pdf",
+        ocr, "ocr_pdf",
         lambda path: ([(1, "青花瓷钴料配比试验记录。")], []),
     )
     client.post("/index/run", headers=H, json={"limit": 10})
@@ -122,9 +125,62 @@ def test_qa_answer_length_setting(client):
 def test_ocr_setting_toggle(client):
     st = client.get("/settings/ocr", headers=H).json()
     assert st["enabled"] is True   # 默认开
+    assert st["engine"] in {"macos-vision", "windows-media-ocr", "unavailable"}
+    assert st["engine_label"]
     client.post("/settings/ocr", headers=H, json={"enabled": False})
     assert client.get("/settings/ocr", headers=H).json()["enabled"] is False
     client.post("/settings/ocr", headers=H, json={"enabled": True})
+
+
+def test_windows_ocr_image_normalizes_text(tmp_path, monkeypatch):
+    image = tmp_path / "任意 名称.png"
+    image.write_bytes(b"not-read-by-the-mock")
+    monkeypatch.setattr(ocr_windows, "is_available", lambda: True)
+
+    def fake_run(command, *, image_path=None, timeout):
+        assert command == ocr_windows._ENCODED_SCRIPT
+        assert image_path == image
+        assert timeout == ocr_windows.OCR_PAGE_TIMEOUT
+        return subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="个 人 知 识 库\r\nINKTABLE  OCR", stderr="",
+        )
+
+    monkeypatch.setattr(ocr_windows, "_run_powershell", fake_run)
+    assert ocr_windows.ocr_image(image) == "个人知识库\nINKTABLE OCR"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows OCR integration")
+def test_windows_system_ocr_reads_image_only_pdf(tmp_path):
+    if not ocr_windows.is_available():
+        pytest.skip("Windows OCR language pack unavailable")
+
+    import pymupdf as fitz
+
+    source = fitz.open()
+    page = source.new_page(width=595, height=842)
+    page.insert_text((72, 180), "INKTABLE OCR 2048", fontsize=32)
+    pix = page.get_pixmap(dpi=200, alpha=False)
+    png = tmp_path / "ocr-source.png"
+    pix.save(str(png))
+    source.close()
+
+    scan = fitz.open()
+    page = scan.new_page(width=595, height=842)
+    page.insert_image(page.rect, filename=str(png))
+    pdf = tmp_path / "image-only.pdf"
+    scan.save(str(pdf))
+    scan.close()
+
+    check = fitz.open(pdf)
+    try:
+        assert check[0].get_text("text") == ""
+    finally:
+        check.close()
+
+    parsed = parsers.parse_pdf(pdf)
+    recognized = re.sub(r"\W+", "", " ".join(b.text for b in parsed.blocks)).upper()
+    assert "INKTABLEOCR2048" in recognized
+    assert any("已通过 OCR" in warning for warning in parsed.warnings)
 
 
 def test_weekly_report_generates_and_caches(client, tmp_path, monkeypatch):

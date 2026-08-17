@@ -13,14 +13,28 @@
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 import threading
 import time
 from collections import deque
 from pathlib import Path
 
-from app.index.pipeline import count_readable_pending, index_pending
-from app.watcher.scanner import ScanStats, register_file, scan_source, should_skip_path
+from app.index.pipeline import (
+    ORPHAN_CLEANUP_BATCH,
+    cleanup_orphan_contents,
+    count_readable_pending,
+    embed_backfill,
+    index_pending,
+)
+from app.watcher.policy import is_drive_root
+from app.watcher.scanner import (
+    ScanStats,
+    path_is_within,
+    register_file,
+    scan_source,
+    should_skip_path,
+)
 from app.watcher.watcher import Watcher
 
 
@@ -51,6 +65,7 @@ ACTIVITY_LIMIT = 50
 INITIAL_RECONCILE_DELAY = 2.0
 RECONCILE_INTERVAL = 6 * 60 * 60
 RECONCILE_INDEX_BUDGET = 2000
+RECONCILE_ORPHAN_BUDGET = 500
 
 
 class WatchService:
@@ -65,10 +80,240 @@ class WatchService:
                           "skipped": 0, "missing": 0, "preserved": 0}
         self._reconcile_stop = threading.Event()
         self._reconcile_thread: threading.Thread | None = None
+        self._scan_thread: threading.Thread | None = None
+        self._scan_wake = threading.Event()
+        self._scan_stop = threading.Event()
+        self._scan_queue: deque[tuple[str, int, str, bool]] = deque()
+        self._scan_jobs: dict[str, dict] = {}
+        self._scan_cancel: dict[str, threading.Event] = {}
+        self._scan_lock = threading.Lock()
+        self._started = False
         self._reconcile = {
             "runs": 0, "last_at": None, "last_error": "",
             "scanned": 0, "registered": 0, "indexed": 0,
+            "phase": "idle", "current_source": None,
         }
+
+    # ------------------------------------------------------------ 后台来源扫描
+
+    def queue_scan(self, source_id: int, root: str, *, prune_projects: bool = False) -> str:
+        """Queue a non-blocking source scan and return its job id."""
+        import uuid
+
+        job_id = uuid.uuid4().hex
+        job = {
+            "job_id": job_id,
+            "source_id": source_id,
+            "root": root,
+            "state": "queued",
+            "phase": "queued",
+            "scanned": 0,
+            "registered": 0,
+            "unchanged": 0,
+            "errors": 0,
+            "indexed": 0,
+            "embedded": 0,
+            "embedding_remaining": None,
+            "embedding_available": None,
+            "embedding_error": "",
+            "started_at": None,
+            "updated_at": time.time(),
+            "finished_at": None,
+            "error": "",
+        }
+        cancel_event = threading.Event()
+        with self._scan_lock:
+            self._scan_jobs[job_id] = job
+            self._scan_cancel[job_id] = cancel_event
+            self._scan_queue.append((job_id, source_id, root, prune_projects))
+            if self._scan_thread is None or not self._scan_thread.is_alive():
+                self._scan_stop.clear()
+                self._scan_thread = threading.Thread(
+                    target=self._scan_loop,
+                    name="inktable-source-scan",
+                    daemon=True,
+                )
+                self._scan_thread.start()
+        self._scan_wake.set()
+        return job_id
+
+    def _update_scan_job(self, job_id: str, **updates) -> None:
+        with self._scan_lock:
+            job = self._scan_jobs.get(job_id)
+            if job is not None:
+                job.update(updates)
+                job["updated_at"] = time.time()
+
+    def _scan_loop(self) -> None:
+        while not self._scan_stop.is_set():
+            self._scan_wake.wait(0.5)
+            self._scan_wake.clear()
+            while not self._scan_stop.is_set():
+                with self._scan_lock:
+                    if not self._scan_queue:
+                        break
+                    job_id, source_id, root, prune_projects = self._scan_queue.popleft()
+                    cancel_event = self._scan_cancel.get(job_id)
+                self._run_scan_job(
+                    job_id, source_id, root, prune_projects,
+                    cancel_event or threading.Event(),
+                )
+
+    def _run_scan_job(
+        self, job_id: str, source_id: int, root: str,
+        prune_projects: bool, cancel_event: threading.Event,
+    ) -> None:
+        with self._scan_lock:
+            job = self._scan_jobs.get(job_id)
+            if not job or job["state"] == "cancelled":
+                return
+            job.update(state="scanning", phase="scanning", started_at=time.time())
+        conn = None
+
+        def active() -> bool:
+            return not self._scan_stop.is_set() and not cancel_event.is_set()
+
+        try:
+            conn = self._conn_factory()
+
+            def progress(stats: ScanStats) -> None:
+                self._update_scan_job(
+                    job_id,
+                    scanned=stats.scanned,
+                    registered=stats.registered + stats.content_updated,
+                    unchanged=stats.unchanged + stats.path_updated,
+                    errors=stats.errors,
+                )
+
+            stats = scan_source(
+                conn, source_id, Path(root), progress=progress,
+                lock=self._lock, prune_projects=prune_projects,
+            )
+            if not active():
+                self._update_scan_job(job_id, state="cancelled", phase="cancelled",
+                                      finished_at=time.time())
+                return
+
+            content_ids = set(stats.content_ids)
+            self._update_scan_job(
+                job_id,
+                scanned=stats.scanned,
+                registered=stats.registered + stats.content_updated,
+                unchanged=stats.unchanged + stats.path_updated,
+                errors=stats.errors,
+                phase="indexing", state="indexing",
+            )
+            indexed_total = 0
+            while active():
+                with self._lock:
+                    result = index_pending(
+                        conn, limit=24, embed=False,
+                        content_ids=content_ids,
+                    )
+                    conn.commit()
+                indexed_total += result.get("indexed", 0)
+                self._update_scan_job(job_id, indexed=indexed_total)
+                if result.get("total", 0) <= 0:
+                    break
+                if result.get("indexed", 0) <= 0 and result.get("failed", 0) <= 0:
+                    break
+                time.sleep(0.05)
+
+            if not active():
+                self._update_scan_job(job_id, state="cancelled", phase="cancelled",
+                                      finished_at=time.time())
+                return
+
+            self._update_scan_job(job_id, phase="embedding", state="embedding")
+            embedded_total = 0
+            while active():
+                try:
+                    with self._lock:
+                        backfill = embed_backfill(
+                            conn, limit=128, content_ids=content_ids,
+                        )
+                        conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+                available = bool(backfill.get("available"))
+                remaining = backfill.get("remaining")
+                embedded = int(backfill.get("embedded", 0) or 0)
+                embedded_total += embedded
+                self._update_scan_job(
+                    job_id,
+                    embedded=embedded_total,
+                    embedding_remaining=remaining,
+                    embedding_available=available,
+                    embedding_error="" if available else "embedding unavailable",
+                )
+                if not available:
+                    self._update_scan_job(
+                        job_id, state="blocked", phase="embedding",
+                        finished_at=time.time(),
+                    )
+                    return
+                if remaining == 0:
+                    break
+                if embedded == 0:
+                    self._update_scan_job(
+                        job_id, state="blocked", phase="embedding",
+                        embedding_error="embedding made no progress",
+                        finished_at=time.time(),
+                    )
+                    return
+                time.sleep(0.05)
+
+            self._update_scan_job(
+                job_id,
+                state="done" if active() else "cancelled",
+                phase="idle" if active() else "cancelled",
+                indexed=indexed_total,
+                finished_at=time.time(),
+            )
+        except Exception as exc:
+            if conn is not None:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+            log.exception("后台来源扫描失败 %s: %s", root, exc)
+            self._update_scan_job(
+                job_id, state="failed", phase="error", error=str(exc),
+                embedding_error=str(exc), finished_at=time.time(),
+            )
+        finally:
+            # main.db() returns a thread-local connection owned by the app;
+            # do not close it here and leave a closed handle in that thread.
+            with self._scan_lock:
+                self._scan_cancel.pop(job_id, None)
+
+    def scan_jobs(self) -> list[dict]:
+        with self._scan_lock:
+            return [dict(job) for job in self._scan_jobs.values()]
+
+    def active_scan_source_ids(self) -> set[int]:
+        with self._scan_lock:
+            return {
+                job["source_id"] for job in self._scan_jobs.values()
+                if job["state"] in {"queued", "scanning", "indexing", "embedding"}
+            }
+
+    def cancel_scans_for_source(self, source_id: int) -> None:
+        with self._scan_lock:
+            for job_id, job in self._scan_jobs.items():
+                if job["source_id"] == source_id and job["state"] in {
+                    "queued", "scanning", "indexing", "embedding",
+                }:
+                    event = self._scan_cancel.get(job_id)
+                    if event:
+                        event.set()
+                    job["state"] = "cancelled"
+                    job["phase"] = "cancelled"
+                    job["finished_at"] = time.time()
+            self._scan_queue = deque(
+                item for item in self._scan_queue if item[1] != source_id
+            )
 
     # ------------------------------------------------------------ 生命周期
 
@@ -95,6 +340,7 @@ class WatchService:
                 # 权限不足是最常见的原因（未授予完全磁盘访问）
                 failed.append({"name": r["name"], "reason": str(e)})
 
+        self._started = True
         if rows:
             # 先挂监听再补扫：应用关闭期间新增的文件不会漏；补扫期间新事件
             # 也会进入 watcher 队列。延迟两秒让首屏先完成加载。
@@ -102,20 +348,50 @@ class WatchService:
         log.info("监听已启动：%d 个来源，%d 个失败", len(ok), len(failed))
         return {"watching": ok, "failed": failed}
 
+    def sync_watched_paths(self) -> None:
+        """Make watcher paths match the currently enabled source roots."""
+        conn = self._conn_factory()
+        enabled = {row["path"] for row in conn.execute(
+            "SELECT path FROM sources WHERE enabled = 1"
+        ).fetchall()}
+        watched = set(self._watcher.watched_paths)
+        for path in watched - enabled:
+            self._watcher.unwatch(path)
+        for path in enabled - watched:
+            try:
+                self._watcher.watch(path)
+            except Exception:
+                log.exception("无法同步监听来源：%s", path)
+
     def watch(self, path: str) -> bool:
         watched = self._watcher.watch(path)
         # 新来源在 enable API 中已经同步扫描过；这里只需启动后续周期兜底。
-        self._start_reconciler(RECONCILE_INTERVAL)
+        # start() 前启用来源时不能先创建一个等待 6 小时的线程，否则随后
+        # start() 无法安排首次 2 秒补扫。
+        if self._started:
+            self._start_reconciler(RECONCILE_INTERVAL)
         return watched
 
     def unwatch(self, path: str) -> bool:
+        conn = self._conn_factory()
+        row = conn.execute("SELECT id FROM sources WHERE path = ?", (path,)).fetchone()
+        if row:
+            self.cancel_scans_for_source(row["id"])
         return self._watcher.unwatch(path)
 
     def stop(self) -> None:
+        self._started = False
         self._reconcile_stop.set()
+        self._scan_stop.set()
+        self._scan_wake.set()
+        if self._scan_thread:
+            self._scan_thread.join(timeout=10)
+            if not self._scan_thread.is_alive():
+                self._scan_thread = None
         if self._reconcile_thread:
             self._reconcile_thread.join(timeout=10)
-            self._reconcile_thread = None
+            if not self._reconcile_thread.is_alive():
+                self._reconcile_thread = None
         self._watcher.stop()
 
     def _start_reconciler(self, initial_delay: float) -> None:
@@ -138,6 +414,7 @@ class WatchService:
                 self._reconcile_once()
             except Exception as e:
                 self._reconcile["last_error"] = str(e)
+                self._reconcile["phase"] = "error"
                 log.exception("来源补扫失败：%s", e)
             if self._reconcile_stop.wait(RECONCILE_INTERVAL):
                 return
@@ -148,49 +425,111 @@ class WatchService:
         FSEvents 不是持久队列：应用没运行、网络卷断续或事件缓冲溢出时都会
         漏事件。周期全量扫描是实时监听的正确性兜底，不是性能优化。
         """
-        result = {"scanned": 0, "registered": 0, "indexed": 0, "failed": 0}
+        result = {
+            "scanned": 0,
+            "registered": 0,
+            "indexed": 0,
+            "orphans_cleaned": 0,
+            "failed": 0,
+        }
+        # 锁的粒度：逐来源、逐索引批次进出，而不是整个补扫霸占一把锁 ——
+        # 否则 API 写请求与实时入库会被整盘首扫饿死几十分钟。
         with self._lock:
             conn = self._conn_factory()
             rows = conn.execute(
                 "SELECT id, name, path FROM sources WHERE enabled = 1 ORDER BY id"
             ).fetchall()
-            watched = set(self._watcher.watched_paths)
+        watched = set(self._watcher.watched_paths)
+        active_scan_ids = self.active_scan_source_ids()
 
-            for row in rows:
-                root = Path(row["path"])
-                if not root.is_dir():
-                    result["failed"] += 1
-                    continue
-                if row["path"] not in watched:
-                    try:
-                        if self._watcher.watch(row["path"]):
-                            watched.add(row["path"])
-                    except Exception as e:
-                        log.warning("补扫时重新挂载监听失败 %s：%s", row["path"], e)
+        for row in rows:
+            if row["id"] in active_scan_ids:
+                continue
+            self._reconcile.update({"phase": "scan", "current_source": row["name"]})
+            root = Path(row["path"])
+            if not root.is_dir():
+                result["failed"] += 1
+                continue
+            if row["path"] not in watched:
                 try:
-                    stats = scan_source(conn, row["id"], root)
+                    if self._watcher.watch(row["path"]):
+                        watched.add(row["path"])
                 except Exception as e:
-                    conn.rollback()
-                    result["failed"] += 1
-                    log.exception("补扫来源失败 %s：%s", row["name"], e)
-                    continue
-                result["scanned"] += stats.scanned
-                result["registered"] += stats.registered + stats.content_updated
+                    log.warning("补扫时重新挂载监听失败 %s：%s", row["path"], e)
+            try:
+                # 锁交给 scan_source 按小批次进出 —— 整来源一把锁会让
+                # /ask 等持锁请求排队几十分钟（实测问答被饿数分钟）
+                stats = scan_source(
+                    conn,
+                    row["id"],
+                    root,
+                    lock=self._lock,
+                    prune_projects=not is_drive_root(row["path"]),
+                )
+                time.sleep(0.1)
+            except Exception as e:
+                conn.rollback()
+                result["failed"] += 1
+                log.exception("补扫来源失败 %s：%s", row["name"], e)
+                continue
+            result["scanned"] += stats.scanned
+            result["registered"] += stats.registered + stats.content_updated
+            self._reconcile.update({
+                "scanned": result["scanned"],
+                "registered": result["registered"],
+            })
 
-            budget = RECONCILE_INDEX_BUDGET
-            while budget > 0:
+        self._reconcile.update({"phase": "index", "current_source": None})
+        budget = RECONCILE_INDEX_BUDGET
+        while budget > 0:
+            with self._lock:
                 pending_before = count_readable_pending(conn)
-                indexed = index_pending(conn, limit=min(200, budget))
-                result["indexed"] += indexed.get("indexed", 0)
-                consumed = indexed.get("total", 0)
-                if consumed <= 0:
-                    break
-                budget -= consumed
-                if count_readable_pending(conn) >= pending_before:
-                    # 解析器持续返回 unsupported 等终态时，同一 content 仍可
-                    # 被 index_pending 再次选中；没有进展就停止本轮，避免周期
-                    # 补扫在一个坏文件上空转 2000 次。
-                    break
+                # 批量索引不内联嵌入 —— 向量走下面的 backfill 小批补齐
+                indexed = index_pending(conn, limit=min(24, budget), embed=False)
+                pending_after = count_readable_pending(conn)
+            time.sleep(0.1)  # 批间让锁（无公平锁的让路窗口）
+            result["indexed"] += indexed.get("indexed", 0)
+            consumed = indexed.get("total", 0)
+            if consumed <= 0:
+                break
+            budget -= consumed
+            if pending_after >= pending_before:
+                # 解析器持续返回 unsupported 等终态时，同一 content 仍可
+                # 被 index_pending 再次选中；没有进展就停止本轮，避免周期
+                # 补扫在一个坏文件上空转 2000 次。
+                break
+
+        # index_pending only removes one bounded orphan batch. Continue with a
+        # finite maintenance budget while releasing both the Python lock and
+        # SQLite write transaction between batches. A one-time large cleanup
+        # is handled by scripts/cleanup_ingestion_noise.py with the same helper.
+        self._reconcile["phase"] = "cleanup"
+        orphan_budget = RECONCILE_ORPHAN_BUDGET
+        while orphan_budget > 0:
+            batch = min(ORPHAN_CLEANUP_BATCH, orphan_budget)
+            with self._lock:
+                cleaned = cleanup_orphan_contents(conn, limit=batch)
+                conn.commit()
+            result["orphans_cleaned"] += cleaned
+            orphan_budget -= cleaned
+            time.sleep(0.1)
+            if cleaned < batch:
+                break
+
+        # 向量补课：小批次进出锁，慢慢磨（嵌入是分钟级慢操作，绝不能
+        # 长期霸占写锁）。前端的 embed_backfill 循环也在驱动，双方幂等。
+        self._reconcile["phase"] = "embed"
+        while True:
+            try:
+                with self._lock:
+                    bf = embed_backfill(conn, limit=128)
+                    conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            time.sleep(0.1)  # 批间让锁
+            if not bf.get("available") or bf.get("embedded", 0) <= 0:
+                break
 
         self._reconcile.update({
             "runs": self._reconcile["runs"] + 1,
@@ -199,6 +538,8 @@ class WatchService:
             "scanned": result["scanned"],
             "registered": result["registered"],
             "indexed": result["indexed"],
+            "phase": "idle",
+            "current_source": None,
         })
         if result["registered"] or result["indexed"]:
             log.info(
@@ -297,9 +638,13 @@ class WatchService:
         target = self._real(path)
         best, best_len = None, -1
         for r in rows:
-            base = self._real(r["path"]).rstrip("/") + "/"
-            if target.startswith(base) and len(base) > best_len:
-                best, best_len = r["id"], len(base)
+            base = self._real(r["path"])
+            # commonpath + normcase 同时解决分隔符、路径边界和 Windows
+            # 大小写问题；字符串 startswith 会把 C:\foo 误当成 C:\foobar。
+            if path_is_within(target, base):
+                normalized_len = len(os.path.normcase(os.path.normpath(base)))
+                if normalized_len > best_len:
+                    best, best_len = r["id"], normalized_len
         return best
 
     @staticmethod

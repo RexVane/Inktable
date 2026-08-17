@@ -4,18 +4,21 @@
 这是选 sqlite-vec 而非 LanceDB 的核心理由：跨库方案要自己实现两阶段提交，
 而这里三表同步天然原子 —— 索引不会出现"搜得到但打不开"的悬挂状态。
 
-检索策略随库规模切换（个人电脑场景，实测推算）：
+主路径走进程内矩阵乘。逐行从 vec0 取向量确实慢得无法用于查询路径
+（71378 条实测 369.7 秒，约 5ms/行，换任何 SELECT 写法都一样），但向量
+并不是逐行存的：sqlite-vec 把每 1024 条打包成一个 blob 放在影子表
+`<表名>_vector_chunks00` 里。整块读 70 个 blob 重建同一个矩阵只要 1.1 秒，
+之后每次查询 13ms，而 vec0 KNN 每次 780-980ms。
 
-    ≤ 10 万分片   全量载入内存做矩阵乘  ← 98 MB，最快
-    > 10 万分片   走 sqlite-vec 的 KNN  ← 按需读磁盘，不全量载入
-
-暴力矩阵乘在小库上比 sqlite-vec 的 KNN 更快（无 SQL 开销），
-但内存随库线性增长，所以设了切换阈值。
+影子表是 sqlite-vec 的内部实现，所以这条路全程校验（表存在、blob 尺寸能
+整除维度、validity 位图长度相符、重建条数与 vec0 count 一致），任一步不符
+就退回 KNN。查询路径永远不会触发逐行慢导出。
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 import struct
 
@@ -25,7 +28,8 @@ from app.index.embedding import DIM
 
 log = logging.getLogger("inktable.vector")
 
-# 超过这个分片数就不再全量载入内存
+# 个人库通常在十万级分片；超过此阈值才避免一次性载入约 0.5GB 矩阵。
+# 矩阵缓存让比较类查询的多个向量变体复用同一份向量数据。
 INMEM_LIMIT = 100_000
 
 
@@ -124,6 +128,94 @@ def count(conn: sqlite3.Connection) -> int:
         return 0
 
 
+# sqlite-vec vec0 的影子表布局（v0.1.x）：
+#   <t>_chunks(chunk_id, size, validity BLOB, rowids BLOB)
+#       size     该块的槽位数（末块可能不满）
+#       validity 每槽 1 bit 的有效位图，小端
+#       rowids   每槽 1 个 int64 的 rowid 数组
+#   <t>_vector_chunks00(rowid=chunk_id, vectors BLOB)
+#       该块全部槽位的向量按行紧密排列的 float32
+_VEC_TABLE = "chunks_vec"
+
+
+def _matrix_disabled() -> bool:
+    """`INKTABLE_VECTOR_NO_MATRIX=1` 关掉矩阵路，强制走 vec0 KNN。
+
+    用于两件事：验证两条路给出的检索结果一致（把它设上跑一遍评测，指标
+    应当逐位相同），以及影子表布局出问题时的现场排查开关。
+    """
+    return os.environ.get("INKTABLE_VECTOR_NO_MATRIX", "").strip() in {"1", "true", "yes"}
+
+
+def _shadow_bulk_vectors(conn: sqlite3.Connection, dim: int = DIM):
+    """整块读影子表重建 (ids, matrix)。布局不符合预期时返回 None。
+
+    只读且全程校验 —— 这里踩的是 sqlite-vec 的内部实现，升级扩展版本后
+    布局若变化必须安全退化，而不是给出错位的向量。
+    """
+    try:
+        names = {
+            row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?, ?)",
+                (f"{_VEC_TABLE}_chunks", f"{_VEC_TABLE}_vector_chunks00"),
+            )
+        }
+        if len(names) != 2:
+            return None
+
+        blobs = {
+            row[0]: row[1] for row in conn.execute(
+                f"SELECT rowid, vectors FROM {_VEC_TABLE}_vector_chunks00"
+            )
+        }
+        meta = list(conn.execute(
+            f"SELECT chunk_id, size, validity, rowids FROM {_VEC_TABLE}_chunks "
+            f"ORDER BY chunk_id"
+        ))
+    except sqlite3.Error as e:
+        log.debug("影子表读取失败，退回逐行/KNN：%s", e)
+        return None
+
+    stride = dim * 4  # float32
+    id_parts: list[np.ndarray] = []
+    vec_parts: list[np.ndarray] = []
+    for chunk_id, size, validity, rowids in meta:
+        raw = blobs.get(chunk_id)
+        if raw is None or not isinstance(raw, (bytes, bytearray)):
+            return None
+        size = int(size or 0)
+        if size <= 0:
+            continue
+        # 校验三份数据的尺寸互相自洽，任一不符说明布局假设已失效
+        if len(raw) % stride or len(raw) // stride < size:
+            return None
+        if not isinstance(rowids, (bytes, bytearray)) or len(rowids) < size * 8:
+            return None
+        if not isinstance(validity, (bytes, bytearray)) or len(validity) * 8 < size:
+            return None
+        vectors = np.frombuffer(raw, dtype=np.float32).reshape(-1, dim)[:size]
+        ids = np.frombuffer(rowids, dtype=np.int64)[:size]
+        valid = np.unpackbits(
+            np.frombuffer(validity, dtype=np.uint8), bitorder="little",
+        )[:size].astype(bool)
+        if valid.any():
+            id_parts.append(ids[valid])
+            vec_parts.append(vectors[valid])
+
+    if not id_parts:
+        return None
+    ids = np.concatenate(id_parts)
+    matrix = np.concatenate(vec_parts)
+    # 最后一道闸：重建条数必须与 vec0 自己报的行数一致
+    if len(ids) != count(conn):
+        log.warning(
+            "影子表重建 %d 条与 chunks_vec 的 %d 条不一致，退回 KNN",
+            len(ids), count(conn),
+        )
+        return None
+    return ids, matrix
+
+
 def search(
     conn: sqlite3.Connection,
     query_vec: np.ndarray,
@@ -135,7 +227,7 @@ def search(
     candidate_ids 用于「先过滤后检索」（§12.3b ③）：
     元数据过滤后只在子集里搜，避免召回被无关文件占满。
 
-    小库走内存矩阵乘，大库走 sqlite-vec KNN —— 见模块 docstring。
+    无过滤主路径走 sqlite-vec KNN；过滤后的小候选集走内存矩阵乘。
     """
     q = np.asarray(query_vec, dtype=np.float32)
     q = q / max(float(np.linalg.norm(q)), 1e-12)
@@ -145,17 +237,33 @@ def search(
         return []
 
     if total <= INMEM_LIMIT:
-        return _search_inmem(conn, q, limit, candidate_ids)
+        # 无过滤主路径也走矩阵：vec0 KNN 每次 780-980ms，矩阵乘 13ms。
+        # 矩阵可能取不到（影子表布局不符、扩展升级），此时 _search_inmem
+        # 返回 None 而不是空列表 —— "缓存缺失"必须与"确实没有结果"区分开。
+        hits = _search_inmem(conn, q, limit, candidate_ids)
+        if hits is not None:
+            return hits
     return _search_knn(conn, q, limit, candidate_ids)
 
 
-def _search_inmem(conn, q: np.ndarray, limit: int, candidate_ids) -> list[tuple[int, float]]:
-    """全量载入做矩阵乘。10 万分片约 98 MB，个人电脑可承受。
-
-    无 candidate_ids 的主路径走进程内矩阵缓存；带 candidate_ids 的
-    元数据过滤场景（小集合）保持逐次查询，不值得为其建缓存键。
-    """
+def _load_inmem_matrix(conn, candidate_ids=None, *, allow_slow: bool = False):
+    """Load vectors once so several query variants share the same matrix."""
     if candidate_ids:
+        # 小候选集优先从整库缓存里切片 —— 逐行取 vec0 约 5ms/行，
+        # 80 个候选就是 400ms，比整块重建全库还慢。
+        cached = _cached_matrix(conn)
+        if cached is not None:
+            ids_all, matrix_all = cached
+            wanted = np.asarray(
+                sorted({int(i) for i in candidate_ids}), dtype=np.int64,
+            )
+            positions = np.clip(
+                np.searchsorted(ids_all, wanted), 0, len(ids_all) - 1,
+            )
+            hit = positions[ids_all[positions] == wanted]
+            if len(hit) == 0:
+                return None, None
+            return ids_all[hit], matrix_all[hit]
         marks = ",".join("?" * len(candidate_ids))
         ids: list[int] = []
         vecs: list[np.ndarray] = []
@@ -166,36 +274,127 @@ def _search_inmem(conn, q: np.ndarray, limit: int, candidate_ids) -> list[tuple[
             ids.append(row[0])
             vecs.append(np.frombuffer(row[1], dtype=np.float32))
         if not ids:
-            return []
-        matrix = np.vstack(vecs)
-        id_array = np.asarray(ids)
-    else:
-        stats = conn.execute(
-            "SELECT count(*) AS c, coalesce(max(rowid), 0) AS m FROM chunks_vec"
-        ).fetchone()
-        key = (_main_db_path(conn), stats["c"], stats["m"], _write_generation)
-        if _matrix_cache["key"] != key:
-            ids = []
-            vecs = []
-            for row in conn.execute("SELECT rowid, embedding FROM chunks_vec"):
-                ids.append(row[0])
-                vecs.append(np.frombuffer(row[1], dtype=np.float32))
-            if not ids:
-                return []
-            _matrix_cache["ids"] = np.asarray(ids)
-            _matrix_cache["matrix"] = np.vstack(vecs)
-            _matrix_cache["key"] = key
-        id_array = _matrix_cache["ids"]
-        matrix = _matrix_cache["matrix"]
-        if id_array is None or len(id_array) == 0:
-            return []
+            return None, None
+        return np.asarray(ids), np.vstack(vecs)
 
-    # 库里存的已是归一化向量，点积即余弦
-    scores = matrix @ q
+    cached = _cached_matrix(conn, allow_slow=allow_slow)
+    if cached is None:
+        return None, None
+    return cached
+
+
+def _cached_matrix(conn, *, allow_slow: bool = False):
+    """整库矩阵缓存。取不到且不允许慢路径时返回 None，由调用方退回 KNN。
+
+    键必须每次现查 `count(*)` 与 `max(rowid)`，不能只依赖写代数：
+    事务回滚会让实际行数变化而**不经过** upsert/delete，写代数不会递增；
+    只用写代数做键会在回滚后交出一份与库不符的矩阵（index atomicity
+    与 orphan cleanup 的用例正是守这一点）。`max(rowid)` 同时挡住同进程内
+    多个 `:memory:` 测试库共用一个键的串扰。
+    """
+    stats = conn.execute(
+        "SELECT count(*) AS c, coalesce(max(rowid), 0) AS m FROM chunks_vec"
+    ).fetchone()
+    key = (_main_db_path(conn), stats["c"], stats["m"], _write_generation)
+    if _matrix_cache["key"] == key:
+        return _matrix_cache["ids"], _matrix_cache["matrix"]
+
+    built = None if _matrix_disabled() else _shadow_bulk_vectors(conn)
+    if built is None:
+        if not allow_slow:
+            # 查询路径绝不在这里做逐行导出：71378 条实测 369.7 秒。
+            return None
+        ids_list: list[int] = []
+        vecs: list[np.ndarray] = []
+        for row in conn.execute("SELECT rowid, embedding FROM chunks_vec"):
+            ids_list.append(row[0])
+            vecs.append(np.frombuffer(row[1], dtype=np.float32))
+        if not ids_list:
+            return None
+        built = (np.asarray(ids_list), np.vstack(vecs))
+
+    ids, matrix = built
+    # rowid 升序存放，让候选集切片能用 searchsorted 而不是逐个查找
+    order = np.argsort(ids, kind="stable")
+    ids = ids[order]
+    matrix = matrix[order]
+    # 归一化一次，之后每次查询就是纯矩阵乘。bge-m3 的向量本已接近单位长度，
+    # 这一步对已归一化的向量是恒等变换，同时让分数严格等于余弦。
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    matrix = matrix / np.maximum(norms, 1e-12)
+    _matrix_cache["ids"] = ids
+    _matrix_cache["matrix"] = matrix
+    _matrix_cache["key"] = key
+    return ids, matrix
+
+
+def warmup(conn: sqlite3.Connection) -> bool:
+    """预热整库矩阵。首次约 1.1 秒（71k 条），放后台线程避免撞到首个查询。"""
+    if count(conn) == 0 or count(conn) > INMEM_LIMIT:
+        return False
+    return _cached_matrix(conn) is not None
+
+
+def vectors_for(conn: sqlite3.Connection, chunk_ids) -> dict[int, np.ndarray]:
+    """按 chunk_id 取向量，优先走整库缓存切片（重排复用）。"""
+    ids = [int(i) for i in chunk_ids]
+    if not ids:
+        return {}
+    got_ids, matrix = _load_inmem_matrix(conn, ids)
+    if got_ids is None:
+        return {}
+    return {int(got_ids[i]): matrix[i] for i in range(len(got_ids))}
+
+
+
+def _top_rows(scores, id_array, limit):
     k = min(limit, len(id_array))
+    if k <= 0:
+        return []
     top = np.argpartition(-scores, k - 1)[:k]
     top = top[np.argsort(-scores[top])]
     return [(int(id_array[i]), float(scores[i])) for i in top]
+
+
+def _search_inmem(
+    conn, q: np.ndarray, limit: int, candidate_ids,
+) -> list[tuple[int, float]] | None:
+    """矩阵乘检索。返回 None 表示矩阵不可用，调用方应退回 KNN。
+
+    区分 None 与 [] 是这条路径的关键契约：把"矩阵取不到"误当成"没有结果"
+    会让语义检索静默消失，而不是慢一点。
+    """
+    id_array, matrix = _load_inmem_matrix(conn, candidate_ids)
+    if id_array is None:
+        # 指定了候选集却一条向量都没取到，是真空结果；否则是缓存缺失
+        return [] if candidate_ids else None
+    if len(id_array) == 0:
+        return []
+    return _top_rows(matrix @ q, id_array, limit)
+
+
+def search_many(
+    conn: sqlite3.Connection,
+    query_vecs: list[np.ndarray],
+    limit: int = 50,
+    candidate_ids: list[int] | None = None,
+) -> list[list[tuple[int, float]]]:
+    """Search several normalized query vectors in one matrix multiplication."""
+    if not query_vecs:
+        return []
+    total = count(conn)
+    if total == 0 or total > INMEM_LIMIT or candidate_ids:
+        return [search(conn, query, limit, candidate_ids) for query in query_vecs]
+    id_array, matrix = _load_inmem_matrix(conn)
+    if id_array is None or len(id_array) == 0:
+        # 矩阵拿不到时逐条走 search()，由它退回 KNN —— 不能当作无结果
+        return [search(conn, query, limit, candidate_ids) for query in query_vecs]
+    q = np.asarray(query_vecs, dtype=np.float32)
+    norms = np.linalg.norm(q, axis=1, keepdims=True)
+    q = q / np.maximum(norms, 1e-12)
+    scores = matrix @ q.T
+    return [_top_rows(scores[:, index], id_array, limit)
+            for index in range(len(query_vecs))]
 
 
 def _search_knn(conn, q: np.ndarray, limit: int, candidate_ids) -> list[tuple[int, float]]:

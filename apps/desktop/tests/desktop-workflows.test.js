@@ -48,7 +48,7 @@ test('book search, indexing drain, and source preview stay wired end to end', ()
 });
 
 test('file list, evidence, and knowledge answer columns coexist without legacy modes', () => {
-  const layout = sourceBetween('<div class="content-layout">', '</div>\n    </div>\n  </div>');
+  const layout = sourceBetween('<div class="content-layout">', '<div class="toast"');
   assert.match(layout, /<section class="nav-panel"[^>]*aria-label="文件库导航"/);
   assert.match(layout, /<section class="results-panel"[^>]*aria-label="文件管理"/);
   assert.match(layout, /<aside class="qa-panel"[^>]*aria-label="知识问答"/);
@@ -74,11 +74,15 @@ test('knowledge questions render only in the answer column', async () => {
   const filesRows = { innerHTML: 'file list stays visible' };
   const submit = { disabled: false };
   const context = {
-    api: async (requestPath, options) => {
-      assert.equal(requestPath, '/ask');
-      assert.deepEqual(JSON.parse(options.body),
-        { question: '什么是银行家算法？', book_id: null, history: [] });
-      return { status: 'answered', answer: '用于避免死锁 [C1]', citations: [] };
+    apiStream: async (requestPath, payload, onEvent) => {
+      assert.equal(requestPath, '/ask/stream');
+      assert.equal(JSON.stringify(payload), JSON.stringify(
+        { question: '什么是银行家算法？', book_id: null, history: [] }));
+      onEvent('chat.finalize', {
+        status: 'answered', answer: '用于避免死锁 [C1]', mode: 'knowledge',
+        retrieved: [], hedge: '', validation: {},
+      });
+      onEvent('chat.citations', { citations: [] });
     },
     document: {
       getElementById(id) {

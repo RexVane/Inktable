@@ -98,12 +98,18 @@
     </div>
     <div class="foot">
       <button id="btnEnable" disabled>启用并开始索引</button>
+      <button class="ghost" id="btnDeepScan" title="发现固定磁盘根目录，启用后递归扫描盘内文件">发现固定盘</button>
       <button class="ghost" id="btnSkip">全不选</button>
       <span class="hint" id="setupHint"></span>
+      <button class="ghost" id="btnSetupClose" style="margin-left:auto">暂不启用</button>
     </div>
   </div>
 
 <script>
+// 平台类：非 macOS 没有窗口红绿灯，CSS 据此去掉预留空隙（见 workbench.css 平台适配段）
+document.documentElement.classList.add(
+  'is-' + ((window.inktable && window.inktable.platform) || 'unknown'));
+
 const PAGE_SIZE = 300;
 let sources = [], files = [], activeSource = null, stats = null;
 let categories = { tree: [], unclassified: 0 };
@@ -187,7 +193,7 @@ function currentScopeLabel() {
     return category ? ('分类 · ' + category.name) : '当前分类';
   }
   if (activeDir !== null) {
-    var segs = activeDir.split('/').filter(Boolean);
+    var segs = activeDir.split(/[\\/]/).filter(Boolean);
     return '目录 · ' + (segs[segs.length - 1] || activeDir);
   }
   if (activeRecent === 7) return '最近一周';
@@ -524,6 +530,36 @@ async function api(path, opts = {}) {
   });
   if (!r.ok) throw new Error('HTTP ' + r.status);
   return r.json();
+}
+
+async function apiStream(path, payload, onEvent) {
+  const info = await window.inktable.getSidecarInfo();
+  if (!info) throw new Error('sidecar 未就绪');
+  const response = await fetch('http://127.0.0.1:' + info.port + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json',
+               Authorization: 'Bearer ' + info.token },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok || !response.body) throw new Error('HTTP ' + response.status);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const item = await reader.read();
+    buffer += decoder.decode(item.value || new Uint8Array(), { stream: !item.done });
+    let split;
+    while ((split = buffer.indexOf('\n\n')) >= 0) {
+      const block = buffer.slice(0, split); buffer = buffer.slice(split + 2);
+      let event = 'message'; const data = [];
+      block.split(/\r?\n/).forEach(function (line) {
+        if (line.startsWith('event:')) event = line.slice(6).trim();
+        else if (line.startsWith('data:')) data.push(line.slice(5).trim());
+      });
+      if (data.length) onEvent(event, JSON.parse(data.join('\n')));
+    }
+    if (item.done) break;
+  }
 }
 
 function fmtSize(b) {
@@ -1111,10 +1147,37 @@ async function runAsk(q) {
       chatHistory.push({ q: qaHistory[i].question,
                          a: String(prev.answer || '').slice(0, 300) });
     }
-    const a = await api('/ask', { method: 'POST', body: JSON.stringify({
+    let finalAnswer = null;
+    let draftText = '';
+    await apiStream('/ask/stream', {
       question: question, book_id: activeBook,
-      history: chatHistory.slice(-4) }) });
-    renderAnswer(a, question);
+      history: chatHistory.slice(-4),
+    }, function (event, payload) {
+      var current = el.lastElementChild;
+      if (event === 'chat.searching' && current) {
+        current.innerHTML = '<span class="tlabel">正在检索资料…</span>';
+      } else if (event === 'chat.draft') {
+        draftText += String(payload.text || '');
+        if (current) { current.className = 'ans draft'; current.textContent = draftText; }
+        el.scrollTop = el.scrollHeight;
+      } else if (event === 'chat.regenerating') {
+        draftText = '';
+        if (current) { current.className = 'ans thinking'; current.innerHTML =
+          '<span class="tlabel">引用校验未通过，正在重新生成…</span>'; }
+      } else if (event === 'chat.finalize') {
+        finalAnswer = payload;
+      } else if (event === 'chat.citations') {
+        finalAnswer = finalAnswer || {};
+        finalAnswer.citations = payload.citations || [];
+        renderAnswer(finalAnswer, question);
+      } else if (event === 'chat.error') {
+        throw new Error(payload.message || '问答失败');
+      }
+    });
+    if (finalAnswer && !Array.isArray(finalAnswer.citations)) {
+      finalAnswer.citations = [];
+      renderAnswer(finalAnswer, question);
+    }
     var box = document.getElementById('askQ');
     if (box) { box.value = ''; box.style.height = ''; }
   } catch (e) {
@@ -1375,7 +1438,8 @@ function renderSetup() {
     '找到 ' + sources.length + ' 个来源。勾选后才会索引 —— 未勾选的目录不会被访问。';
   document.getElementById('srcList').innerHTML = sources.map(function (s, i) {
     return '<div class="src">' +
-      '<input type="checkbox" data-i="' + esc(i) + '"' + (s.doc_count > 0 ? ' checked' : '') + '>' +
+      '<input type="checkbox" data-i="' + esc(i) + '"' +
+        ((s.is_drive_root || s.doc_count > 0) ? ' checked' : '') + '>' +
       '<div class="info"><div class="nm">' + esc(s.name) +
         (s.volatile ? '<span class="badge">易失</span>' : '') + '</div>' +
         '<div class="pth">' + esc(String(s.path || '').replace(new RegExp('^/Users/[^/]+'), '~')) + '</div></div>' +
@@ -1397,8 +1461,55 @@ document.getElementById('btnSkip').onclick = function () {
   document.querySelectorAll('.src input').forEach(function (cb) { cb.checked = false; });
   updateSetupHint();
 };
+// 「重新发现」也走这个弹层 —— 必须有不启用任何来源就能退出的路径
+document.getElementById('btnSetupClose').onclick = function () {
+  document.getElementById('setup').style.display = 'none';
+};
+document.getElementById('setup').addEventListener('click', function (e) {
+  if (e.target === this) this.style.display = 'none';
+});
+// 发现固定盘：只列出盘根，真正递归扫描在用户启用后后台执行。
+document.getElementById('btnDeepScan').onclick = async function () {
+  var btn = this;
+  btn.disabled = true;
+  btn.textContent = '正在查找…';
+  var hint = document.getElementById('setupHint');
+  hint.textContent = '只查找固定磁盘，不读取盘内文件';
+  try {
+    // 保留用户当前的勾选状态，重渲染后按路径还原
+    var checked = {};
+    document.querySelectorAll('.src input').forEach(function (cb) {
+      checked[sources[cb.dataset.i].path] = cb.checked;
+    });
+    var r = await api('/sources/discover_deep', { method: 'POST' });
+    var known = {};
+    try {
+      (await api('/sources')).sources.forEach(function (s) { known[s.path] = 1; });
+    } catch (e2) {}
+    var seen = {};
+    sources.forEach(function (s) { seen[s.path] = 1; });
+    var added = 0;
+    (r.sources || []).forEach(function (s) {
+      if (!seen[s.path] && !known[s.path]) { seen[s.path] = 1; sources.push(s); added++; }
+    });
+    renderSetup();
+    document.querySelectorAll('.src input').forEach(function (cb) {
+      var p = sources[cb.dataset.i].path;
+      // 已有条目还原用户勾选；新发现的文档目录默认全选 ——
+      // 目标是"文档应收尽收"，不想要的由用户反选剔除
+      if (p in checked) cb.checked = checked[p];
+    });
+    updateSetupHint();
+    hint.textContent = added ? '发现 ' + added + ' 个固定盘' : '没有发现新的固定盘';
+  } catch (e) {
+    hint.textContent = '发现固定盘失败：' + e.message;
+  }
+  btn.textContent = '发现固定盘';
+  btn.disabled = false;
+};
 
 async function previewAndConfirmSource(source, hintEl) {
+  if (source.is_drive_root || /^[A-Za-z]:[\\/]?$/.test(String(source.path || ''))) return true;
   if (hintEl) hintEl.textContent = '正在预扫描…';
   let p;
   try {
@@ -1432,6 +1543,7 @@ document.getElementById('btnEnable').onclick = async function () {
     .map(function (cb) { return sources[cb.dataset.i]; });
   let enabled = 0;
   let skipped = 0;
+  let scanJobs = [];
   const failures = [];
   for (let i = 0; i < chosen.length; i++) {
     const s = chosen[i];
@@ -1443,9 +1555,10 @@ document.getElementById('btnEnable').onclick = async function () {
     }
     btn.textContent = '正在扫描 ' + (i + 1) + '/' + chosen.length + '…';
     try {
-      await api('/sources/enable', { method: 'POST', body: JSON.stringify({
+      const enabledResult = await api('/sources/enable', { method: 'POST', body: JSON.stringify({
         name: s.name, path: s.path, kind: s.kind,
         discovered_by: s.discovered_by, volatile: s.volatile }) });
+      if (enabledResult.job_id) scanJobs.push(enabledResult.job_id);
       enabled += 1;
     } catch (e) {
       skipped += 1;
@@ -1462,13 +1575,13 @@ document.getElementById('btnEnable').onclick = async function () {
       : (skipped ? '没有启用来源，可重新选择后再试' : '');
     return;
   }
-  // 扫描只登记文件，正文索引另起一步 —— 让用户先看到文件列表
-  btn.textContent = '正在解析文档内容…';
+  // 固定盘扫描已进入后台，先关闭引导并让用户继续使用界面。
+  btn.textContent = '已开始后台扫描';
   document.getElementById('setup').style.display = 'none';
-  await boot();
+  await boot(true);
   try { await api('/watch/start', { method: 'POST' }); } catch (e) {}
   startWatchPolling();
-  runIndexing();
+  runIndexing(true);
 };
 
 /* 后台索引：解析正文并建全文索引，完成前顶部显示进度 */
@@ -1632,6 +1745,17 @@ function toast(msg) {
 async function pollWatch() {
   try {
     const st = await api('/watch/status');
+    const scans = (st.source_scans || []).filter(function (job) {
+      return ['queued', 'scanning', 'indexing', 'embedding'].indexOf(job.state) >= 0;
+    });
+    const progressEl = document.getElementById('count');
+    if (scans.length && progressEl) {
+      const job = scans[0];
+      const phase = job.phase === 'indexing' ? '解析' :
+        (job.phase === 'embedding' ? '补齐向量' : '扫描');
+      progressEl.textContent = phase + ' ' + safeNumber(job.scanned) +
+        ' 个文件，已登记 ' + safeNumber(job.registered) + ' 个';
+    }
     const n = st.watched.length;
     if (!st.running || !n) {
       setLive('off', '未监听', '没有已启用的来源');
@@ -1655,6 +1779,12 @@ async function pollWatch() {
       const q = document.getElementById('q').value.trim();
       if (q) { doSearch(q); } else { load(''); }
     }
+    if (!scans.length && progressEl && progressEl.textContent.indexOf('扫描') === 0) {
+      stats = await api('/stats');
+      invalidateTree();
+      renderNav();
+      load(document.getElementById('q').value.trim());
+    }
     liveSeen = done;
   } catch (e) {
     setLive('off', '', '监听状态获取失败');
@@ -1675,6 +1805,7 @@ function stopWatchPolling() {
 
 /* ---------- 设置（通用配置 / 文件来源 / 模型配置） ---------- */
 let settingsTab = 'general';
+let sourcePaneTimer = null;
 const SETTINGS_TABS = [
   ['general', '通用配置'],
   ['sources', '文件来源'],
@@ -1683,6 +1814,7 @@ const SETTINGS_TABS = [
 
 function sheetOpen(on, tab) {
   document.getElementById('sheet').classList.toggle('show', on);
+  if (!on) clearTimeout(sourcePaneTimer);
   if (on) {
     if (tab) settingsTab = tab;
     renderSettings();
@@ -1734,7 +1866,7 @@ async function renderGeneralPane(pane) {
   var zoom = localStorage.getItem('uiZoom') || '1';
   var theme = localStorage.getItem('uiTheme') || 'system';
   var autoOn = localStorage.getItem('autoClassify') !== '0';
-  var ocr = { enabled: true, available: false };
+   var ocr = { enabled: true, available: false, engine_label: '系统 OCR' };
   try { ocr = await api('/settings/ocr'); } catch (e) {}
   var qa = { answer_max_tokens: 'auto' };
   try { qa = await api('/settings/qa'); } catch (e) {}
@@ -1751,7 +1883,7 @@ async function renderGeneralPane(pane) {
         '<div class="set-desc">新收录的文件按扩展名自动归入分类</div></div>' +
         segHtml('autoSeg', [['1', '开'], ['0', '关']], autoOn ? '1' : '0') + '</div>' +
       '<div class="set-row"><div class="set-info"><div class="set-label">扫描件 OCR</div>' +
-        '<div class="set-desc">用 macOS 自带 Vision 识别无文本层的 PDF，纯本地' +
+        '<div class="set-desc">使用 ' + esc(ocr.engine_label || '系统 OCR') + ' 识别无文本层的 PDF，纯本地' +
         (ocr.available ? '' : '（当前系统不可用）') + '</div></div>' +
         '<div style="display:flex;gap:8px;align-items:center">' +
         (ocr.available && ocr.enabled
@@ -1846,6 +1978,7 @@ async function bindDataDirRow() {
 }
 
 async function renderSourcesPane(pane) {
+  clearTimeout(sourcePaneTimer);
   pane.innerHTML = '<div class="empty" style="padding:30px">加载中…</div>';
   let list;
   try {
@@ -1866,7 +1999,11 @@ async function renderSourcesPane(pane) {
   }
   pane.innerHTML = list.map(function (s) {
     const tags = [];
-    if (!s.exists) tags.push('<span class="tag gone">目录不存在</span>');
+    if (s.scan && ['queued', 'scanning', 'indexing'].indexOf(s.scan.state) >= 0) {
+      tags.push('<span class="tag">' + (s.scan.phase === 'indexing' ? '解析中' :
+        (s.scan.phase === 'embedding' ? '补齐向量中' : '扫描中')) +
+        ' · ' + safeNumber(s.scan.scanned) + ' 个</span>');
+    } else if (!s.exists) tags.push('<span class="tag gone">目录不存在</span>');
     else if (s.watching) tags.push('<span class="tag live">监听中</span>');
     else if (s.enabled) tags.push('<span class="tag">已启用</span>');
     else tags.push('<span class="tag">已停用</span>');
@@ -1897,6 +2034,13 @@ async function renderSourcesPane(pane) {
   pane.querySelectorAll('button[data-act]').forEach(function (b) {
     b.onclick = function () { onSourceAction(b); };
   });
+  if (list.some(function (s) { return s.scan && ['queued', 'scanning', 'indexing'].indexOf(s.scan.state) >= 0; })) {
+    sourcePaneTimer = setTimeout(function () {
+      if (settingsTab === 'sources' && document.getElementById('sheet').classList.contains('show')) {
+        renderSettings();
+      }
+    }, 1200);
+  }
 }
 
 async function renderModelPane(pane) {
@@ -2142,7 +2286,7 @@ async function addDirectorySource(nameHint) {
   const dir = await window.inktable.pickDirectory();
   if (!dir) return;
   const hint = document.getElementById('sheetHint');
-  const base = dir.split('/').filter(Boolean).slice(-1)[0] || '所选目录';
+  const base = dir.split(/[\\/]/).filter(Boolean).slice(-1)[0] || '所选目录';
   const source = { name: nameHint || base, path: dir };
   if (!await previewAndConfirmSource(source, hint)) return;
   hint.textContent = '正在扫描…';
@@ -2174,15 +2318,17 @@ document.getElementById('btnRescan').onclick = async function () {
     // 噪音抑制在后端发现阶段完成（工作应用/旧版路径需有文档才上报），
     // 这里只过滤已登记的 —— 下载/QQ 这类明确入口即使暂无文档也要能启用
     const fresh = found.filter(function (s) { return !known.has(s.path); });
-    if (!fresh.length) {
-      hint.textContent = '没有发现新来源';
-      return;
-    }
-    // 发现结果不自动启用 —— §1 约束 4：用户没同意的目录不监听
+    hint.textContent = '';
+    // 发现结果不自动启用 —— §1 约束 4：用户没同意的目录不监听。
+    // 没有新来源也要打开弹层：「全盘发现」在弹层里，入口不能堵死。
     sources = fresh;
     sheetOpen(false);
     document.getElementById('setup').style.display = 'flex';
     renderSetup();
+    if (!fresh.length) {
+      document.getElementById('setupSub').textContent =
+        '没有发现新的固定盘。固定盘启用后，盘内目录会按真实路径展开。';
+    }
   } catch (e) {
     hint.textContent = '查找失败：' + e.message;
   }
@@ -2208,13 +2354,13 @@ document.addEventListener('keydown', function (e) {
   }
 });
 
-async function boot() {
+async function boot(skipSetup = false) {
   stats = await api('/stats');
   await refreshCats();
   try { updateModelState(await api('/settings/llm')); } catch (e) { updateModelState({ configured: false }); }
   // 启动即后台检测模型可用性（真实补全探测），不阻塞界面
   scheduleModelAutoCheck();
-  if (stats.files === 0) {
+  if (stats.files === 0 && !skipSetup) {
     document.getElementById('setup').style.display = 'flex';
     sources = (await api('/sources/discover', { method: 'POST' })).sources;
     renderSetup();

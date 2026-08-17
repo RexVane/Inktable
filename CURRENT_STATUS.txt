@@ -1,0 +1,264 @@
+Inktable 项目当前状态总结
+
+一、项目定位
+
+Inktable 是一个本地优先的个人知识库，目标是扫描固定磁盘中的资料文件，保留真实文件路径，并通过全文检索、语义检索和带引用问答帮助用户查找资料。
+
+当前 Windows 来源模型已经统一为固定盘根目录：B:\、C:\、D:\ 等固定盘作为顶层来源，盘内的 openclaw、workspace、项目目录等不再创建独立来源，而是作为文件树节点逐层展开。文件仍然以真实路径登记，例如：
+
+B:\openclaw\openclaw云端部署\workspace\notes.md
+
+二、最终文件入库规则
+
+当前确认的入库白名单为：
+
+.txt
+.docx
+.pdf
+.md
+.csv
+.html
+.htm
+
+上述七种格式都会解析正文，进入全文索引、语义向量和知识问答流程。
+
+以下格式完全不入库：
+
+.doc
+.xlsx
+.xls
+.ppt
+.pptx
+图片、音视频、压缩包、电子书、设计文件、源码、配置文件、安装包、日志和临时文件。
+
+白名单之外的历史文件在下一次对应固定盘扫描时会被标记为 ignored，从浏览、检索和问答中隐藏，但不会删除、移动、重命名或修改磁盘上的原始文件。
+
+三、当前已经完成的功能
+
+1. 固定盘来源发现
+
+Windows 下来源发现返回固定盘根目录。微信、QQ、哈希目录和其他子目录不再作为顶层来源显示，真实目录结构通过左侧文件树展开。
+
+2. 后台扫描
+
+固定盘启用后，扫描在后台执行，任务阶段为：
+
+scanning → indexing → embedding → done
+
+如果 Ollama 或向量扩展不可用，任务状态会显示 blocked，不会把没有向量的状态伪装成完成。
+
+3. 向量闭环
+
+后台扫描完成后，会继续补齐当前扫描内容的向量。向量回填按批次提交，支持中断后继续，并记录 remaining、available 和 embedding 状态。
+
+4. 统一可见性
+
+停用来源、ignored 文件、已消失且没有保全副本的文件不会进入普通检索、向量检索、层级检索、重排、问答上下文和邻居扩展。共享内容存在多个副本时，问答会优先使用可见副本。
+
+5. 元数据 SQL 路由
+
+纯文件元数据问题直接使用 SQL 处理，不经过 embedding 或 RAG。例如文件数量、PDF 数量、来源文件数量、最近文件列表等问题可以直接返回结果。
+
+6. 流式问答
+
+新增 /ask/stream 流式问答协议，事件顺序为：
+
+chat.searching
+chat.draft
+chat.regenerating（需要重新生成时）
+chat.finalize
+chat.citations
+
+引用只在 finalize 之后发送。原有非流式 /ask 端点仍然保留，用于兼容和评测。
+
+7. 增量索引
+
+严格 200 片增量测试已经通过：修改 200 个分片中的 1 个分片时，只重新编码变化的分片，其他分片复用已有向量。
+
+8. Windows runtime
+
+源码模式 sidecar 已通过 Windows runtime acceptance：SQLite-vec 正常、Ollama bge-m3 正常、Cross-Encoder 运行时正常、搜索 smoke 有结果、没有 degraded 状态，sidecar 能正常退出。
+
+四、当前隔离发布数据库
+
+当前严格发布验收使用的是隔离数据库：
+
+output/release-gate-20260817/library-working.db
+
+该数据库经过白名单清理和工具链目录清理，当前状态为：
+
+files：4,336
+contents：4,215
+active chunks：71,378
+vector rows：71,378
+向量覆盖率：100%
+孤儿 contents：0
+孤儿 chunks：0
+inactive chunks：0
+Gold 内容保留：29/29
+PRAGMA quick_check：ok
+integrity_check：ok
+
+真实用户数据库没有被迁移、清理或删除。真实数据库仍然位于用户数据目录中，当前所有清理、回填和评测都在隔离 working 数据库上完成。
+
+五、测试结果
+
+后端全量测试：276 passed
+桌面端全量测试：16 passed
+
+专项测试包括：
+
+来源与扫描测试：通过
+索引原子性测试：通过
+向量回填测试：通过
+检索与可见性测试：通过
+问答引用校验测试：通过
+元数据 SQL 路由测试：通过
+SSE 流式问答测试：通过
+200 片增量测试：通过
+Windows runtime acceptance：通过
+向量矩阵影子表重建与退化测试：通过（新增）
+级联重排截断/融合/降级测试：通过（新增）
+
+六、当前本地评测结果
+
+当前严格评测使用固定盘清理后的 working 数据库、Ollama bge-m3、local-static-v3，并绑定源码和数据库 fingerprint。
+
+最终生产深度评测的主要结果：
+
+Content Recall@5：90.6%
+Content Recall@20：98.1%
+Content Recall@50：100%
+Gold Evidence Recall@50：93.8%
+MRR@10：86.9%
+nDCG@10：88.8%
+搜索 P50：0.61 秒
+搜索 P95：0.98 秒
+Rerank P95：0.03 秒
+
+Gold Evidence Recall@50 已达到 90% 门槛，压缩门槛也已经通过。
+搜索 P95 与 Rerank P95 两条延迟门槛在 2026-08-18 的检索性能优化后已通过
+（原为 4.1 秒 / 0.88 秒），详见 docs/RETRIEVAL-PERF.md。
+
+延迟优化的三处根因（质量指标未变，逐位与优化前一致）：
+
+1. 向量路每次查询都在 sqlite-vec 的 vec0 虚拟表上暴力 KNN 扫 71,378×1024 维，
+   单路 782ms。改为进程内矩阵乘后 13ms。矩阵此前不可用是因为逐行导出全库
+   向量要 369.7 秒；发现 vec0 实际把向量每 1024 条打包在影子表里，整块读
+   70 个 blob 重建只需 1.1 秒（快 327 倍）。
+2. 重排逐行从 vec0 取 80 个候选向量约 400ms，占 rerank 耗时绝大部分（打分
+   本身只有几十毫秒）。改为从整库矩阵按 rowid 切片。
+3. 620ms 的 Ollama 查询嵌入串在关键路径最前面，而它不依赖任何词法路线。
+   改为后台线程与分层路由+词法四路重叠，并把所有查询变体合并成一次调用
+   （实测一次调用编码 8 条也只要 719ms，成本几乎全是每请求固定开销）。
+
+已用 INKTABLE_VECTOR_NO_MATRIX=1 强制走原 vec0 KNN 路径复跑评测，
+两条路径的 Recall/MRR/nDCG 完全一致，确认只改执行方式、不改排序结果。
+
+压缩评测结果（检索改动后复跑，全部通过；压缩延迟略有改善）：
+
+Gold Evidence Recall：96.9%（门槛 95%）
+Pre-compression evidence：98.4%
+Median compression：60.6%（门槛 ≥35%）
+Compression P95：178.6ms（预算 500ms，此前 219.3ms）
+Offset roundtrip errors：0（门槛 0）
+
+七、RRF 与 Rerank 对照
+
+同一 working 数据库、同一份代码、同一份 gold 的完整对照（route_limit=120，
+53 道可评估题）：
+
+配置                                    R@5    R@20   MRR@10  nDCG@10  搜索P95  RerankP95
+rrf（对照分母）                        90.6%  98.1%  81.2%   84.3%    961ms    1ms
+auto = local-static-v3（生产默认）     90.6%  98.1%  86.9%   88.8%    977ms    29ms
+cascade K=26（本轮新增，可选）         96.2%  100%   90.3%   92.2%    2274ms   1642ms
+门槛                                   ≥80%   —      ≥93.4%  ≥97.0%   ≤2500ms  ≤1500ms
+
+相对 RRF 的提升：
+
+local-static-v3：MRR +7.0%，nDCG +5.3%
+cascade K=26：  MRR +11.0%，nDCG +9.2%
+
+严格发布门槛要求 MRR 和 nDCG 相对 RRF 都提升至少 15%，两种配置都没有达到。
+
+本轮新增的级联重排（Cross-Encoder 只精排融合顺序前 26 位，截断深度由
+scripts/probe_cascade_depth.py 实测确定：最深的 gold 落在第 25 位）把
+Content Recall@5 从 90.6% 提到 96.2%、Recall@20 从 98.1% 提到 100%，
+并把最差名次从第 24 名收到第 9 名，但 Rerank P95 为 1642ms，超门槛约 10%。
+把送进 CE 的正文从 420 字压到 300 字可以让 Rerank P95 降到 1165ms 过门槛，
+但 nDCG 会掉到 88.5%，反而低于 local-static-v3，因此不采用。
+
+生产默认保持 local-static-v3（交互搜索 P50 0.61 秒）；cascade 用
+INKTABLE_RERANKER=cascade 开启。
+
+关于 +15% 这条门槛本身：RRF 基线的 nDCG@10 已是 84.3%，+15% 意味着绝对值
+要达到 97.0%。53 道题单文档相关，rank 1 得 1.0、rank 2 得 0.631，所以 97.0%
+等价于「约 49 题排第 1、其余 4 题排第 2、且没有一题更差」，接近完美排序。
+而且一级召回越强、分母越高、相对门槛越难达到（本轮 RRF 基线自身从 83.9%
+升到 84.3%，把 nDCG 门槛从 96.4% 顶到 97.0%）。继续靠这 53 题调参逼近
+97.0% 会违反 HANDOFF H12 的立意（评测集先于实现冻结、不因算法结果反向
+修改）。建议由项目决定：改用绝对值口径，或先扩评测集再继续调 Rerank。
+
+八、当前发布门槛判断
+
+已通过：
+
+固定盘来源和后台扫描链路
+白名单过滤和索引收敛
+向量覆盖率 100%
+Gold Evidence Recall@50
+证据压缩门槛
+压缩延迟门槛
+非生成搜索 P95 ≤ 2.5 秒（0.98 秒）
+Rerank 延迟门槛（0.03 秒）
+H11 元数据 SQL 路由
+H17 draft/finalize/citations 流式协议
+200 片增量验收
+后端和桌面全量测试
+Windows runtime acceptance
+
+未通过：
+
+Rerank 相对 RRF 的 MRR/nDCG 提升未达到 +15%
+（local-static-v3 为 +7.0%/+5.3%；cascade 为 +11.0%/+9.2%；
+ 门槛的可达性本身建议复核，见第七节）
+
+九、真实模型 QA 和正式打包状态
+
+搜索与 Rerank 两条延迟门槛已在 2026-08-18 通过，真实外部模型 65 题 QA 的
+前置阻塞因此解除，但该步需要外部 provider 凭据（kocode / gpt-5.6-sol），
+尚未执行。隔离数据库也还没有迁回真实数据库。
+
+当前没有重新生成 PyInstaller sidecar，也没有生成最终 Electron 安装包。
+本轮改动全在 services/api 源码层（app/index/vector.py、app/retrieval/*、
+app/main.py 启动预热），正式发布前需要重新冻结 sidecar 并重打包。
+
+当前总体发布结论：
+
+功能链路跑通，测试和运行验收通过；压缩、向量、元数据、流式问答、
+以及搜索与 Rerank 两条延迟门槛均已通过。唯一未过的是「Rerank 相对 RRF
+提升 ≥15%」这条相对门槛，且该门槛的可达性本身建议复核（见第七节）。
+除这一条外，其余阻塞项均已清空。
+
+十、本轮改动清单（2026-08-18）
+
+代码：
+  app/index/vector.py        影子表整块读重建矩阵、矩阵主路径、预热、
+                             vectors_for、INKTABLE_VECTOR_NO_MATRIX 开关
+  app/index/search.py        vector_route 拆出，供管线与嵌入并行
+  app/retrieval/pipeline.py  查询嵌入后台化并批量合并、词法与向量分段计时、
+                             空查询不发嵌入、run() 新增 reranker 参数
+  app/retrieval/rerank.py    CascadeReranker（截断+融合+焦点窗口+自适应权重）、
+                             _load_vectors 改走矩阵切片、run_rerank mode 参数
+  app/retrieval/cross_encoder.py  线程数可配，默认上限从 8 提到 14
+  app/main.py                启动后台预热向量矩阵
+
+工具：
+  scripts/profile_retrieval.py    逐阶段/逐路线延迟剖析
+  scripts/probe_cascade_depth.py  级联截断深度实测判据
+
+文档：
+  docs/RETRIEVAL-PERF.md     本轮全部实测数据、根因、退化路径与门槛讨论
+
+新增测试 10 条（影子表重建与删除、矩阵/KNN 退化、级联截断与融合、
+焦点窗口、空查询守卫），后端 266 → 276 passed。

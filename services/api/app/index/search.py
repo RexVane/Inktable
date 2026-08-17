@@ -26,6 +26,8 @@ import sqlite3
 
 import jieba
 
+from app.db.visibility import visible_content_exists, visible_files_condition
+
 jieba.setLogLevel(60)  # 关掉 jieba 的构建日志，避免污染 sidecar stdout（端口协议走 stdout）
 
 
@@ -109,6 +111,34 @@ _STOPWORDS = {
     "分别", "各自", "之间", "相比", "对比",
 }
 
+_FILENAME_STOPWORDS = {
+    "找出", "查找", "哪份", "哪个", "文件", "文件名", "文档", "资料", "格式",
+    "记录", "包含", "有关", "相关", "里面", "一份", "这份", "显示",
+    "pdf", "doc", "docx", "word", "markdown", "md", "txt", "xlsx", "xls",
+    "ppt", "pptx",
+}
+_FILENAME_EXT_HINTS = {
+    "pdf": {".pdf"},
+    "doc": {".doc"},
+    "docx": {".docx"},
+    "word": {".doc", ".docx"},
+    "markdown": {".md"},
+    "md": {".md"},
+    "txt": {".txt"},
+    "xlsx": {".xlsx"},
+    "xls": {".xls"},
+    "ppt": {".ppt"},
+    "pptx": {".pptx"},
+}
+_FILENAME_INTENT_MARKERS = (
+    "哪份", "找出", "查找", "文件名", "哪个文件", "哪一个文件", "哪些文件",
+)
+
+
+def _filename_intent(query: str) -> bool:
+    lowered = str(query or "").lower()
+    return any(marker in lowered for marker in _FILENAME_INTENT_MARKERS)
+
 
 def _needs_split(term: str) -> bool:
     """判断是否是需要分词的中文长串。"""
@@ -179,7 +209,11 @@ def index_chunk(conn, chunk_id: int, text: str, section_path: str = "") -> None:
 
 
 def search(conn, query: str, limit: int = 100, *,
-           include_hierarchy: bool = True) -> dict[str, list[tuple[int, float]]]:
+           include_hierarchy: bool = True,
+           vector_query=None,
+           vector_hits=None,
+           include_vector: bool = True,
+           include_substring: bool = True) -> dict[str, list[tuple[int, float]]]:
     """多路检索，返回各路的 (chunk_id, 分数) 排名列表。
 
     不在这里融合 —— 融合是 §12.3b ④ 两级 RRF 的职责。
@@ -205,7 +239,8 @@ def search(conn, query: str, limit: int = 100, *,
     raw_q = build_fts_query(query, segment=False)
 
     out: dict[str, list[tuple[int, float]]] = {
-        "jieba": [], "trigram": [], "substr": [], "vector": [],
+        "jieba": [], "trigram": [], "substr": [], "filename": [],
+        "filename:metadata": [], "vector": [],
     }
     if not jieba_q and not raw_q:
         return out
@@ -222,6 +257,7 @@ def search(conn, query: str, limit: int = 100, *,
                     f"JOIN contents c ON c.id = ch.content_id "
                     f"WHERE {table} MATCH ? "
                     f"AND ch.index_version = c.active_index_version "
+                    f"AND {visible_content_exists('ch.content_id')} "
                     f"ORDER BY bm25({table}) LIMIT ?",
                     (q, k),
                 )
@@ -238,10 +274,17 @@ def search(conn, query: str, limit: int = 100, *,
     # （比如查「汝窑」时 trigram 恰好在别处匹配到），此时正确结果
     # 仍然出不来。只要召回明显不足就补，代价是一次全表扫描。
     found = len({cid for r in (out["jieba"], out["trigram"]) for cid, _ in r})
-    if found < min(3, limit):
+    if include_substring and found < min(3, limit):
         out["substr"] = _substring_search(conn, query, limit)
 
-    out["vector"] = _vector_search(conn, query, limit)
+    filename_route = "filename:metadata" if _filename_intent(query) else "filename"
+    out[filename_route] = _filename_search(conn, query, limit)
+    if include_vector:
+        out["vector"] = (
+            _filter_vector_hits(conn, vector_hits, limit)
+            if vector_hits is not None
+            else _vector_search(conn, query, limit, query_vector=vector_query)
+        )
 
     if include_hierarchy:
         try:
@@ -252,7 +295,110 @@ def search(conn, query: str, limit: int = 100, *,
     return out
 
 
-def _vector_search(conn, query: str, limit: int) -> list[tuple[int, float]]:
+def vector_route(conn, query: str, limit: int, *,
+                 query_vector=None) -> list[tuple[int, float]]:
+    """单独跑向量路。
+
+    供检索管线把「查询嵌入」与词法召回重叠执行：嵌入是一次约 620ms 的
+    Ollama 往返，词法四路 p95 合计约 1 秒，串行做等于白等一整秒。
+    管线先用 include_vector=False 跑词法，再 join 嵌入结果调这里。
+    """
+    return _vector_search(conn, query, limit, query_vector=query_vector)
+
+
+def _filename_search(conn, query: str, limit: int) -> list[tuple[int, float]]:
+    """Rank one active Child per content by filename coverage.
+
+    A filename is metadata, not document text. Feeding the name only to a
+    reranker is too late because the correct content may never enter the
+    candidate pool. This independent route gives explicit "which file" queries
+    a recall path while RRF keeps it soft for ordinary content questions.
+    """
+    raw_terms = extract_query_terms(query)
+    terms = [term for term in raw_terms if term not in _FILENAME_STOPWORDS]
+    ext_hints = {
+        ext
+        for token, extensions in _FILENAME_EXT_HINTS.items()
+        if token in str(query).lower()
+        for ext in extensions
+    }
+    # A bare type request ("show all PDFs") belongs to the file-list filters;
+    # routing every PDF through a representative Child would be both noisy and
+    # expensive. Filename recall requires at least one distinctive name term.
+    if not terms:
+        return []
+    match_clauses = ["lower(f.name) LIKE ?" for _term in terms]
+    params: list[str] = [f"%{term}%" for term in terms]
+    match_sql = " OR ".join(match_clauses)
+    try:
+        rows = conn.execute(
+            f"""SELECT f.content_id, f.name, lower(COALESCE(f.ext, '')) AS ext
+               FROM files f
+               LEFT JOIN sources s ON s.id = f.source_id
+               WHERE {visible_files_condition()}
+                 AND f.content_id IS NOT NULL
+                 AND ({match_sql})""",
+            params,
+        ).fetchall()
+        content_ids = sorted({row["content_id"] for row in rows})
+        marks = ",".join("?" * len(content_ids))
+        first_chunks = {
+            row["content_id"]: row["chunk_id"]
+            for row in conn.execute(
+                f"""SELECT ch.content_id, min(ch.id) AS chunk_id
+                    FROM chunks ch JOIN contents c ON c.id = ch.content_id
+                    WHERE ch.content_id IN ({marks})
+                      AND ch.index_version = c.active_index_version
+                      AND ch.layer = 'child'
+                    GROUP BY ch.content_id""",
+                content_ids,
+            )
+        } if content_ids else {}
+    except sqlite3.Error:
+        return []
+
+    best_by_chunk: dict[int, tuple[float, int, int]] = {}
+    denominator = sum(len(term) for term in terms) or 1
+    for row in rows:
+        chunk_id = first_chunks.get(row["content_id"])
+        if chunk_id is None:
+            continue
+        name = str(row["name"] or "").lower()
+        matched = [term for term in terms if term in name]
+        type_match = bool(ext_hints and row["ext"] in ext_hints)
+        if not matched and not type_match:
+            continue
+        coverage = sum(len(term) for term in matched) / denominator
+        score = coverage + 0.08 * len(matched) + 0.12 * int(type_match)
+        ordering = (score, len(matched), -len(name))
+        if ordering > best_by_chunk.get(chunk_id, (-1.0, -1, -10**9)):
+            best_by_chunk[chunk_id] = ordering
+    ranked = sorted(
+        best_by_chunk.items(), key=lambda item: item[1], reverse=True,
+    )
+    return [(chunk_id, values[0]) for chunk_id, values in ranked[:limit]]
+
+
+def _filter_vector_hits(conn, hits, limit: int):
+    if not hits:
+        return []
+    ids = [chunk_id for chunk_id, _score in hits]
+    marks = ",".join("?" * len(ids))
+    active = {row["id"] for row in conn.execute(
+        f"""SELECT ch.id FROM chunks ch
+            JOIN contents c ON c.id = ch.content_id
+            WHERE ch.id IN ({marks})
+              AND ch.index_version = c.active_index_version
+              AND {visible_content_exists('ch.content_id')}""",
+        ids,
+    )}
+    return [(chunk_id, score) for chunk_id, score in hits
+            if chunk_id in active][:limit]
+
+
+def _vector_search(
+    conn, query: str, limit: int, *, query_vector=None,
+) -> list[tuple[int, float]]:
     """语义检索路。模型或扩展不可用时静默返回空 —— 不能让整次检索失败。
 
     活跃版本过滤采用「先检索、后过滤」：把全部 active chunk id 当 SQL
@@ -269,21 +415,17 @@ def _vector_search(conn, query: str, limit: int) -> list[tuple[int, float]]:
             return []
         if vec.count(conn) == 0:
             return []
-        qv = emb.get_embedder().encode_one(query)
-        hits = vec.search(conn, qv, limit=limit * 3)
-        if not hits:
-            return []
-        ids = [chunk_id for chunk_id, _score in hits]
-        marks = ",".join("?" * len(ids))
-        active = {row["id"] for row in conn.execute(
-            f"""SELECT ch.id FROM chunks ch
-                JOIN contents c ON c.id = ch.content_id
-                WHERE ch.id IN ({marks})
-                  AND ch.index_version = c.active_index_version""",
-            ids,
-        )}
-        return [(chunk_id, score) for chunk_id, score in hits
-                if chunk_id in active][:limit]
+        qv = query_vector if query_vector is not None else emb.get_embedder().encode_one(query)
+        # Start with the exact requested depth. Only overfetch when inactive or
+        # hidden rows leave too few visible hits; the final 3x fallback preserves
+        # the old correctness bound without paying it on every clean query.
+        visible = []
+        for factor in (2, 3):
+            hits = vec.search(conn, qv, limit=limit * factor)
+            visible = _filter_vector_hits(conn, hits, limit)
+            if len(visible) >= limit:
+                break
+        return visible
     except Exception as e:  # noqa: BLE001 - 任何异常都只降级，不冒泡
         import logging
         logging.getLogger("inktable.search").debug("向量路跳过：%s", e)
@@ -323,7 +465,8 @@ def _substring_search(conn, query: str, limit: int) -> list[tuple[int, float]]:
         rows = conn.execute(
             f"SELECT ch.id, ({score_expr}) AS hits FROM chunks ch "
             f"JOIN contents c ON c.id = ch.content_id "
-            f"WHERE ch.index_version = c.active_index_version AND ({where}) "
+            f"WHERE ch.index_version = c.active_index_version "
+            f"AND {visible_content_exists('ch.content_id')} AND ({where}) "
             f"ORDER BY hits DESC LIMIT ?",
             [*like, *like, limit],
         ).fetchall()

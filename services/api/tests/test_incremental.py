@@ -29,8 +29,8 @@ def db():
 @pytest.fixture
 def source(db, tmp_path):
     db.execute(
-        "INSERT INTO sources (name, path, kind, discovered_by, created_at) "
-        "VALUES ('S', ?, 'manual', 'manual', ?)",
+        "INSERT INTO sources (name, path, kind, discovered_by, enabled, created_at) "
+        "VALUES ('S', ?, 'manual', 'manual', 1, ?)",
         (str(tmp_path), time.time()),
     )
     db.commit()
@@ -74,20 +74,20 @@ def _make_doc(path, n=30, changed: int | None = None):
 
 
 def test_edit_one_para_encodes_one_chunk(db, source, tmp_path, encode_log):
-    """§12.5 验收：30 片改 1 片 → 编码器只收到 1 条文本。"""
+    """H10/H16 strict gate: 200 chunks changed in one place encode one text."""
     f = tmp_path / "长文.txt"
-    _make_doc(f, n=30)
+    _make_doc(f, n=200)
     scan_source(db, source, tmp_path)
     r1 = index_pending(db, limit=10)
     assert r1["indexed"] == 1
     n_chunks = r1["chunks"]
-    assert n_chunks >= 25, f"分片数异常：{n_chunks}"
+    assert n_chunks >= 190, f"分片数异常：{n_chunks}"
     first_encoded = sum(encode_log)
     assert first_encoded >= n_chunks  # 首次全量编码（含健康检查等杂项调用）
 
     encode_log.clear()
     time.sleep(1.1)                    # 跨过 mtime 容差
-    _make_doc(f, n=30, changed=7)      # 只改第 7 段
+    _make_doc(f, n=200, changed=7)     # 只改第 7 段
     scan_source(db, source, tmp_path)  # 内容变化 → 新 content
     r2 = index_pending(db, limit=10)
     assert r2["indexed"] == 1

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
+from app.db.visibility import visible_content_exists
 from app.index.search import build_fts_query, segment_for_index
 
 
@@ -162,20 +163,22 @@ def hierarchy_routes(conn, query: str, limit: int = 100):
 
     try:
         docs = conn.execute(
-            """SELECT d.content_id, -bm25(documents_fts) AS score
+            f"""SELECT d.content_id, -bm25(documents_fts) AS score
                FROM documents_fts
                JOIN document_representations d ON d.id = documents_fts.rowid
                JOIN contents c ON c.id = d.content_id
                WHERE documents_fts MATCH ?
                  AND d.index_version = c.active_index_version
+                 AND {visible_content_exists('d.content_id')}
                ORDER BY bm25(documents_fts) LIMIT 12""",
             (fts_query,),
         ).fetchall()
         for doc in docs:
             rows = conn.execute(
-                """SELECT ch.id FROM chunks ch JOIN contents c ON c.id = ch.content_id
+                f"""SELECT ch.id FROM chunks ch JOIN contents c ON c.id = ch.content_id
                    WHERE ch.content_id = ?
                      AND ch.index_version = c.active_index_version
+                     AND {visible_content_exists('ch.content_id')}
                    ORDER BY ch.ordinal LIMIT 5""",
                 (doc["content_id"],),
             ).fetchall()
@@ -184,21 +187,23 @@ def hierarchy_routes(conn, query: str, limit: int = 100):
                 break
 
         sections = conn.execute(
-            """SELECT s.content_id, s.index_version, s.start_chunk_ordinal,
+            f"""SELECT s.content_id, s.index_version, s.start_chunk_ordinal,
                       s.end_chunk_ordinal, -bm25(sections_fts) AS score
                FROM sections_fts
                JOIN sections s ON s.id = sections_fts.rowid
                JOIN contents c ON c.id = s.content_id
                WHERE sections_fts MATCH ?
                  AND s.index_version = c.active_index_version
+                 AND {visible_content_exists('s.content_id')}
                ORDER BY bm25(sections_fts) LIMIT 20""",
             (fts_query,),
         ).fetchall()
         for section in sections:
             rows = conn.execute(
-                """SELECT id FROM chunks
+                f"""SELECT id FROM chunks
                    WHERE content_id = ? AND index_version = ?
                      AND ordinal BETWEEN ? AND ?
+                     AND {visible_content_exists('content_id')}
                    ORDER BY ordinal LIMIT 5""",
                 (section["content_id"], section["index_version"],
                  section["start_chunk_ordinal"],

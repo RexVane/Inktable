@@ -54,8 +54,10 @@ test('main process has single-instance, key-clear, and timeout cleanup guards', 
   assert.match(main, /app\.on\(['"]second-instance['"]/);
   assert.match(main, /incoming\.clear === true/);
   assert.match(main, /fs\.unlinkSync\(llmConfigPath\(\)\)/);
-  assert.match(main, /sidecar 启动超时（15s）/);
+  assert.match(main, /sidecar 启动超时（60s）/);
   assert.match(main, /terminateSidecarProcess\(proc\)/);
+  assert.match(main, /spawnSync\(['"]taskkill['"][\s\S]*?['"]\/T['"][\s\S]*?windowsHide: true/);
+  assert.doesNotMatch(main, /spawn\(['"]taskkill['"]/);
   assert.match(main, /const rejectStartup = \(err\) => \{[\s\S]*?terminateSidecarProcess\(proc\)/);
   assert.match(main, /webContents\.on\(['"]will-navigate['"]/);
   assert.match(main, /protocol === 'http:' \|\| protocol === 'https:'/);
@@ -63,6 +65,17 @@ test('main process has single-instance, key-clear, and timeout cleanup guards', 
   assert.match(main, /\/health/);
   assert.match(main, /scheduleSidecarRestart/);
   assert.match(main, /sidecar:status/);
+});
+
+test('development and packaged sidecar launch modes stay separated', () => {
+  assert.match(main, /app\.isPackaged/);
+  assert.match(main, /path\.join\(process\.resourcesPath, 'sidecar', exeName\)/);
+  assert.match(main, /\.venv/);
+  assert.match(main, /args: \['-u', '-m', 'app\.main'\]/);
+  assert.match(main, /cwd: apiRoot/);
+  assert.match(main, /spawn\(launch\.command, launch\.args, \{/);
+  assert.match(main, /windowsHide: process\.platform === 'win32'/);
+  assert.doesNotMatch(main, /services', 'api', 'dist'/);
 });
 
 test('clear action uses an explicit flag instead of an empty key', () => {

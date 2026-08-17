@@ -13,7 +13,7 @@ const {
   app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu,
   nativeImage, nativeTheme, safeStorage, shell, Tray,
 } = require('electron');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
@@ -80,26 +80,43 @@ async function pushLLMToSidecar(cfg) {
 }
 
 function resolveSidecarPath() {
-  // 打包后：Contents/Resources/sidecar/inktable-sidecar
-  const packaged = path.join(process.resourcesPath || '', 'sidecar', 'inktable-sidecar');
-  if (fs.existsSync(packaged)) return packaged;
+  // 发布态只使用随应用分发的 PyInstaller 产物，避免误用开发机环境。
+  const exeName = process.platform === 'win32' ? 'inktable-sidecar.exe' : 'inktable-sidecar';
+  if (app.isPackaged) {
+    const command = path.join(process.resourcesPath, 'sidecar', exeName);
+    if (!fs.existsSync(command)) return null;
+    return { command, args: [], cwd: path.dirname(command) };
+  }
 
-  // 开发态：仓库内的 PyInstaller 产物
-  // __dirname = apps/desktop/electron → 上溯 3 层到仓库根
-  const dev = path.join(__dirname, '..', '..', '..', 'services', 'api', 'dist', 'inktable-sidecar');
-  if (fs.existsSync(dev)) return dev;
-
-  return null;
+  // 开发态直接运行源码。__dirname = apps/desktop/electron，上溯 3 层到仓库根。
+  const repoRoot = path.resolve(__dirname, '..', '..', '..');
+  const apiRoot = path.join(repoRoot, 'services', 'api');
+  const pythonName = process.platform === 'win32' ? 'python.exe' : 'python';
+  const command = process.env.INKTABLE_PYTHON
+    ? path.resolve(process.env.INKTABLE_PYTHON)
+    : path.join(apiRoot, '.venv', process.platform === 'win32' ? 'Scripts' : 'bin', pythonName);
+  if (!fs.existsSync(command)) return null;
+  return { command, args: ['-u', '-m', 'app.main'], cwd: apiRoot };
 }
 
 function startSidecar() {
   return new Promise((resolve, reject) => {
-    const bin = resolveSidecarPath();
-    if (!bin) return reject(new Error('sidecar 二进制未找到，先运行 pyinstaller sidecar.spec'));
+    const launch = resolveSidecarPath();
+    if (!launch) {
+      const message = app.isPackaged
+        ? '发布版 sidecar 未找到，请先构建 PyInstaller 产物'
+        : '开发环境 Python 未找到，请先在 services/api 执行 uv sync';
+      return reject(new Error(message));
+    }
 
     const env = { ...process.env };
     if (customDataDir) env.INKTABLE_DATA_DIR = customDataDir;
-    const proc = spawn(bin, [], { stdio: ['pipe', 'pipe', 'pipe'], env });
+    const proc = spawn(launch.command, launch.args, {
+      cwd: launch.cwd,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env,
+      windowsHide: process.platform === 'win32',
+    });
     sidecar = proc;
 
     let settled = false;
@@ -112,8 +129,11 @@ function startSidecar() {
         sidecarInfo = null;
       }
       terminateSidecarProcess(proc);
-      reject(new Error('sidecar 启动超时（15s）'));
-    }, 15000);
+      // 启动包含对整库的完整性检查，耗时随库体积增长（实测 1.17GB 库
+      // 约 15s）。超时必须给足余量 —— 杀掉健康但繁忙的进程会造成
+      // "后端全灭"假象。
+      reject(new Error('sidecar 启动超时（60s）'));
+    }, 60000);
 
     const rejectStartup = (err) => {
       if (settled) return;
@@ -242,6 +262,18 @@ function scheduleSidecarRestart(error = null) {
 
 function terminateSidecarProcess(proc) {
   if (!proc || proc.exitCode !== null || proc.signalCode !== null) return;
+  if (process.platform === 'win32') {
+    // PyInstaller onefile 在 Windows 上是「引导进程 + Python 子进程」两层，
+    // proc.kill() 只杀引导进程，Python 子进程会成为孤儿并继续持有
+    // 数据库单实例锁（实测复现）。必须整棵进程树一起杀。
+    try {
+      spawnSync('taskkill', ['/pid', String(proc.pid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+    } catch {}
+    return;
+  }
   try { proc.kill('SIGTERM'); } catch {}
   // 5 秒不退就强杀，避免残留进程占着端口和数据库锁
   setTimeout(() => {
@@ -277,13 +309,39 @@ function stopSidecarAndWait(timeoutMs = 6000) {
   });
 }
 
+function updateTitleBarOverlay() {
+  // Windows 叠加按钮的配色跟随主题（浅色 #fff/深色 #202226 与 .topbar 一致）
+  if (process.platform !== 'win32' || !mainWindow || mainWindow.isDestroyed()) return;
+  const dark = nativeTheme.shouldUseDarkColors;
+  try {
+    mainWindow.setTitleBarOverlay({
+      color: dark ? '#202226' : '#ffffff',
+      symbolColor: dark ? '#f4f5f7' : '#1d1d1f',
+      height: 48,
+    });
+  } catch { /* 旧版 Electron 或非叠加窗口：忽略 */ }
+}
+
+nativeTheme.on('updated', updateTitleBarOverlay);
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 820,
     minWidth: 960,
     minHeight: 640,
-    titleBarStyle: 'hiddenInset',
+    // 与 macOS 的 hiddenInset 观感对齐：Windows 用「窗口控件叠加」——
+    // 隐藏系统标题栏，把最小化/最大化/关闭按钮叠进应用顶栏（高度 48
+    // 与 .topbar 一致）；按钮配色由 updateTitleBarOverlay 跟随主题。
+    // Linux 无叠加能力，保持系统原生标题栏。
+    ...(process.platform === 'darwin'
+      ? { titleBarStyle: 'hiddenInset' }
+      : process.platform === 'win32'
+        ? {
+            titleBarStyle: 'hidden',
+            titleBarOverlay: { color: '#ffffff', symbolColor: '#1d1d1f', height: 48 },
+          }
+        : {}),
     backgroundColor: '#faf9f7',
     show: false,
     webPreferences: {
@@ -293,6 +351,8 @@ function createWindow() {
       sandbox: true,
     },
   });
+
+  updateTitleBarOverlay();
 
   const rendererPath = path.join(__dirname, '..', 'renderer', 'index.html');
   const rendererUrl = pathToFileURL(rendererPath).toString();

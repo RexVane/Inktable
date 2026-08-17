@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import mimetypes
+import os
 import time
 
 import pytest
@@ -24,14 +25,12 @@ def db():
     conn.close()
 
 
-def test_chat_export_exts_are_fulltext():
-    """聊天记录导出（HTML）与 CSV 走全文解析，不再降级为仅元数据。"""
-    assert scanner.classify_ext(".html") == "fulltext"
-    assert scanner.classify_ext(".htm") == "fulltext"
-    assert scanner.classify_ext(".csv") == "fulltext"
-    # 真代码类仍只登记元数据
-    assert scanner.classify_ext(".css") == "metadata"
-    assert scanner.classify_ext(".py") == "metadata"
+def test_ingest_extension_whitelist():
+    """Only the agreed text/office formats enter the library."""
+    for ext in (".txt", ".docx", ".pdf", ".md", ".csv", ".html", ".htm"):
+        assert scanner.classify_ext(ext) == "fulltext"
+    for ext in (".doc", ".xlsx", ".xls", ".pptx", ".png", ".zip", ".py", ".css"):
+        assert scanner.classify_ext(ext) == "ignore"
 
 
 def test_parse_html_extracts_chat_text():
@@ -287,11 +286,13 @@ def test_path_fallback_reuses_row_after_atomic_replace(db, source, tmp_path):
     assert stats.content_updated == 1
 
 
-def test_live_filter_uses_same_package_and_depth_rules(tmp_path):
-    """实时监听调用的路径过滤与扫描器的 package / 深度规则一致。"""
-    assert should_skip_path(tmp_path / "note.pages" / "index.xml", tmp_path)
+def test_live_filter_uses_same_exclusion_and_depth_rules(tmp_path):
+    """实时监听与全量扫描必须使用同一套排除/深度规则。"""
+    assert should_skip_path(
+        tmp_path / "node_modules" / "pkg" / "README.md", tmp_path
+    )
     deep = tmp_path
-    for i in range(12):
+    for i in range(scanner.MAX_DEPTH):
         deep /= f"d{i}"
     assert should_skip_path(deep / "too-deep.txt", tmp_path)
 
@@ -327,38 +328,129 @@ def test_content_change_detected(db, source, tmp_path):
     assert stats.content_updated == 1
 
 
-def test_excluded_dirs_not_descended(db, source, tmp_path):
-    """node_modules 等目录必须不下钻（PLAN §7.7 ①）。
-
-    开发者的 ~/Documents 里一个 node_modules 就是几万个文件，
-    没有这道闸，文件库会被彻底淹没。
-    """
-    nm = tmp_path / "node_modules" / "pkg"
-    nm.mkdir(parents=True)
-    for i in range(30):
-        (nm / f"m{i}.txt").write_text("x")
+def test_common_dir_names_are_not_blanket_excluded(db, source, tmp_path):
+    """通用名目录不能仅凭名称误杀；真正代码项目由项目标记识别。"""
+    for dirname in ("build", "vendor", "dist", "target", "tmp"):
+        d = tmp_path / dirname
+        d.mkdir()
+        (d / f"{dirname}.txt").write_text(dirname + " 里的文件")
     (tmp_path / "real.txt").write_text("真实文件")
 
     scan_source(db, source, tmp_path)
-    leaked = db.execute(
-        "SELECT count(*) c FROM files WHERE path LIKE '%node_modules%'"
-    ).fetchone()["c"]
-    assert leaked == 0, "node_modules 泄漏进库"
-    assert db.execute("SELECT count(*) c FROM files").fetchone()["c"] == 1
+
+    total = db.execute("SELECT count(*) c FROM files").fetchone()["c"]
+    assert total == 6
+    for dirname in ("build", "vendor", "dist", "target", "tmp"):
+        hit = db.execute(
+            "SELECT count(*) c FROM files WHERE path LIKE ?",
+            (f"%{dirname}{os.sep}{dirname}.txt%",),
+        ).fetchone()["c"]
+        assert hit == 1, f"{dirname} 目录内的文件未被收录"
+
+
+def test_node_modules_not_descended(db, source, tmp_path):
+    """依赖目录里的 README 也不是用户资料，整棵树必须剪掉。"""
+    nm = tmp_path / "node_modules" / "pkg"
+    nm.mkdir(parents=True)
+    (nm / "index.js").write_text("module.exports = 1")
+    (nm / "package.json").write_text("{}")
+    (nm / "README.md").write_text("# 这是一个包")
+    (tmp_path / "real.txt").write_text("真实文件")
+
+    scan_source(db, source, tmp_path)
+
+    rows = db.execute("SELECT path FROM files").fetchall()
+    assert [r["path"] for r in rows] == [str(tmp_path / "real.txt")]
+
+
+def test_hidden_dirs_are_not_descended(db, source, tmp_path):
+    """隐藏目录整棵跳过，不能让其中恰好带文档后缀的文件泄漏。"""
+    gitdir = tmp_path / ".git" / "objects"
+    gitdir.mkdir(parents=True)
+    (gitdir / "leaked.txt").write_text("不应出现")
+    (tmp_path / "note.txt").write_text("正常文件")
+
+    scan_source(db, source, tmp_path)
+
+    total = db.execute("SELECT count(*) c FROM files").fetchone()["c"]
+    assert total == 1, f"应只收录 note.txt，实际 {total}"
 
 
 def test_package_dirs_not_descended(db, source, tmp_path):
-    """.app / .pages 等 package 目录整体当作一个文件（PLAN §7.7 ②）。"""
+    """.app / .pages 等 package 目录不能泄漏内部资源。"""
     pkg = tmp_path / "note.pages"
     pkg.mkdir()
     (pkg / "index.xml").write_text("<xml/>")
+    (pkg / "preview.png").write_bytes(b"png")
     (pkg / "data.bin").write_bytes(b"\x00")
 
     scan_source(db, source, tmp_path)
     inside = db.execute(
-        "SELECT count(*) c FROM files WHERE path LIKE '%note.pages/%'"
+        "SELECT count(*) c FROM files WHERE path LIKE ?",
+        (f"%note.pages{os.sep}%",),
     ).fetchone()["c"]
-    assert inside == 0, "package 内部文件泄漏，用户会看到一堆 XML 碎片"
+    assert inside == 0, "package 内部资源不应入库"
+
+
+def test_code_project_tree_is_pruned_but_explicit_root_is_allowed(db, source, tmp_path):
+    """整盘来源排除代码项目；显式选择项目根时仍可收项目文档。"""
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "pyproject.toml").write_text("[project]")
+    (project / "README.md").write_text("# 包说明")
+    (tmp_path / "personal.txt").write_text("个人资料")
+
+    scan_source(db, source, tmp_path)
+    assert db.execute("SELECT count(*) c FROM files").fetchone()["c"] == 1
+
+    explicit = db.execute(
+        "INSERT INTO sources (name, path, kind, discovered_by, enabled, created_at) "
+        "VALUES ('project', ?, 'manual', 'manual', 1, ?)",
+        (str(project), time.time()),
+    ).lastrowid
+    db.commit()
+    scan_source(db, explicit, project)
+    row = db.execute(
+        "SELECT source_id FROM files WHERE path = ?", (str(project / "README.md"),)
+    ).fetchone()
+    assert row["source_id"] == explicit
+
+
+def test_broad_source_never_steals_nested_source_files(db, tmp_path):
+    """嵌套来源采用最长路径归属，广域补扫不能把文件抢回去。"""
+    broad_root = tmp_path / "drive"
+    nested_root = broad_root / "QQ profiles"
+    nested_root.mkdir(parents=True)
+    outside = broad_root / "outside.txt"
+    inside = nested_root / "lesson.pdf"
+    outside.write_text("盘根资料")
+    inside.write_bytes(b"%PDF-1.4 lesson")
+
+    broad_id = db.execute(
+        "INSERT INTO sources (name, path, kind, discovered_by, enabled, created_at) "
+        "VALUES ('drive', ?, 'manual', 'manual', 1, ?)",
+        (str(broad_root), time.time()),
+    ).lastrowid
+    nested_id = db.execute(
+        "INSERT INTO sources (name, path, kind, discovered_by, enabled, created_at) "
+        "VALUES ('QQ', ?, 'im', 'manual', 1, ?)",
+        (str(nested_root), time.time()),
+    ).lastrowid
+    db.commit()
+
+    scan_source(db, nested_id, nested_root)
+    scan_source(db, broad_id, broad_root)
+    assert db.execute(
+        "SELECT source_id FROM files WHERE path = ?", (str(inside),)
+    ).fetchone()["source_id"] == nested_id
+
+    # 模拟旧版本已把它错归到广域来源；下一次广域补扫也必须主动修正。
+    db.execute("UPDATE files SET source_id = ? WHERE path = ?", (broad_id, str(inside)))
+    db.commit()
+    scan_source(db, broad_id, broad_root)
+    assert db.execute(
+        "SELECT source_id FROM files WHERE path = ?", (str(inside),)
+    ).fetchone()["source_id"] == nested_id
 
 
 def test_scan_never_modifies_files(db, source, tmp_path):

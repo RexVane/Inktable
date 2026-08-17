@@ -22,6 +22,7 @@ import ctypes
 import os
 import plistlib
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -41,7 +42,8 @@ class _Statfs(ctypes.Structure):
     ]
 
 
-_libc = ctypes.CDLL("libc.dylib")
+# libc/statfs 仅 macOS 可用；其它平台走 volume_uuid 里的平台分支
+_libc = ctypes.CDLL("libc.dylib") if sys.platform == "darwin" else None
 
 # st_dev → volume_uuid。进程内缓存，避免每个文件都调 diskutil（208ms）
 _volume_cache: dict[int, str] = {}
@@ -51,6 +53,8 @@ SF_DATALESS = 0x40000000
 
 
 def _mount_point(path: Path) -> str | None:
+    if _libc is None:
+        return None
     sfs = _Statfs()
     if _libc.statfs(str(path).encode(), ctypes.byref(sfs)) != 0:
         return None
@@ -67,6 +71,13 @@ def volume_uuid(path: Path, st_dev: int | None = None) -> str:
         st_dev = os.stat(path).st_dev
     if st_dev in _volume_cache:
         return _volume_cache[st_dev]
+
+    if sys.platform == "win32":
+        # Windows 的 st_dev 即卷序列号（存于卷元数据，重启/换盘符不变），
+        # 与 mac 的 VolumeUUID 语义一致，直接用作稳定标识。
+        uuid = f"winvol:{st_dev}"
+        _volume_cache[st_dev] = uuid
+        return uuid
 
     uuid = ""
     mount = _mount_point(path)

@@ -1,24 +1,34 @@
 # Inktable
 
-macOS 本地优先的个人知识库。自动发现微信、QQ、浏览器下载等目录，
-把散落全机的资料变成可检索、可问答、可回溯证据的知识空间。
+本地优先的个人知识库（macOS / Windows）。自动发现微信、QQ、浏览器下载
+等目录，把散落全机的资料变成可检索、可问答、可回溯证据的知识空间。
 
 **默认不移动、不复制、不改名任何文件** —— 组织全部发生在索引层。
 
 ## 当前状态
 
 **0.3.0**（体验重构版，见 `docs/RELEASE-0.3.0.md`；架构见 0.2.0 说明）。
+Windows 移植已完成并实测可用（发现/扫描/索引/向量/问答/实时监听全链路），
+差异与运维备忘见 `docs/WINDOWS-PORT.md`。
 
 三栏知识工作台：左栏是范围与**文件树**（真实目录逐层展开），中栏在
 文件列表（按扩展名分组）与**全文查看器**之间整页切换，右栏常驻知识问答；
 搜索与问答共用同一条检索管线。文件管理负责来源发现、解析、去重、
 增量更新、保全和治理。
 
-72 题冻结评测（bge-m3 嵌入下复测达标）：Recall@5 **95.0%**
-（exact/metadata 100%，paraphrase/synthesis 90%），检索 p50 449ms
-（含查询语义编码约 0.2 秒）；证据压缩保留率 95.0%、压缩率中位数 61.1%、
-offset 往返零错误。真实库语义向量覆盖 **100%**（5535 片全量 bge-m3 重嵌），
-重排复用库内向量，真实库单查询 0.4–2 秒。
+v8 Gold 合约共 77 题（46 answerable、7 metadata、12 corpus-missing、
+12 unanswerable），含 96 个证据要求和 691 个精确原文 span。当前生产默认
+`local-static-v3`：53 个可评估问题 Recall@5 **94.3%**、MRR@10 **88.1%**、
+nDCG@10 **91.0%**、P95 2.67 秒。正式证据压缩达到 Gold Evidence Recall
+**99.0%**、完整案例 **97.8%**、压缩率中位数 **62.0%**、P95 247.5 ms，
+offset 往返零错误。Cross-Encoder 已完成 ONNX 实装与对照，但相对 RRF 的
+MRR/nDCG 仅提升约 8%，未达到 +15% 门槛，因此未切换生产默认。
+
+正式真实模型 QA 使用 `kocode / gpt-5.6-sol` 完成 65/65：引用支持率
+**95.16%**、精确引用率 **100%**、句级引用覆盖 **100%**、无依据问题
+正确拒答率 **100%**（12/12），无 provider failure 或 degraded 运行。
+`A13`、`S17` 进入可审计 fallback；Gold evidence citation recall 68.93%
+作为诊断指标保留，不是本轮 QA 发布门槛。
 
 | 能力 | 状态 |
 |---|---|
@@ -44,8 +54,12 @@ offset 往返零错误。真实库语义向量覆盖 **100%**（5535 片全量 b
 | cc-switch 供应商导入 + 真实补全连接检测 | ✅ |
 | 实时监听（新文件自动入库，约 3.5 秒） | ✅ |
 | 保全副本 / 文件消失处理 / 文件书 | ✅ |
-| Cross-Encoder 重排（nDCG 相对提升 15% 门槛） | ⬜ 下一版本 |
-| 代码签名（需 Apple 开发者账号） | ⬜ |
+| Windows 移植（真实系统目录/微信 QQ 自定义路径发现、整盘收录、全盘发现、窗口控件叠加） | ✅ |
+| ONNX Cross-Encoder 重排 | 🧪 已实装并评测，未过 +15% 选型门槛 |
+| 级联重排（本地打分器 + CE 精排融合前 26 位） | 🧪 可选 `INKTABLE_RERANKER=cascade`：Recall@5 96.2% / Recall@20 100%，Rerank P95 超门槛约 10% |
+| 检索延迟门槛（搜索 P95 ≤2.5s、Rerank P95 ≤1.5s） | ✅ 0.98s / 0.03s，见 `docs/RETRIEVAL-PERF.md` |
+| 真实模型 65 题 QA 门槛 | ✅ `kocode / gpt-5.6-sol`，65/65，引用支持 95.16%，拒答 12/12 |
+| 代码签名（macOS / Windows） | ⬜ |
 
 ## 开发
 
@@ -56,9 +70,19 @@ uv sync
 uv run pytest                      # 全量后端测试
 uv run python tests/e2e_watch.py   # 端到端：投放文件 → 自动入库 → 搜内容
 
-# 打包
-uv run pyinstaller sidecar.spec --clean --noconfirm
-cd ../../apps/desktop && npx electron-builder --mac --arm64
+# 开发桌面端（直接运行 services/api 源码，不需要先打包 sidecar）
+cd ../../apps/desktop && npm install && npm start
+```
+
+```powershell
+# Windows 开发启动：Electron 直接拉起 services/api/.venv 中的 Python 源码
+# Ollama 端口等见 docs/WINDOWS-PORT.md
+cd services\api ; uv sync
+cd ..\..\apps\desktop ; npm install ; npm start
+
+# 最终发布前才冻结 sidecar 并生成 Windows x64 NSIS 安装包
+cd ..\..\services\api ; uv run --group dev pyinstaller sidecar.spec --clean --noconfirm
+cd ..\..\apps\desktop ; npm run dist -- --win --x64
 ```
 
 调试时用 `INKTABLE_DB=/tmp/dev.db` 指向独立库，避免污染真实数据。
@@ -74,7 +98,8 @@ Electron 主进程 ──stdin: {token}──▶ Python sidecar (FastAPI)
                                           └─ db/         SQLite + FTS5 + sqlite-vec
 ```
 
-数据目录默认在 `~/Library/Application Support/Inktable/`，可在
+数据目录默认在 `~/Library/Application Support/Inktable/`（Windows 为
+`C:\Users\<用户>\Library\Application Support\Inktable\`），可在
 设置 → 通用配置 → 数据位置整体迁移（经 `INKTABLE_DATA_DIR` 传入 sidecar）。
 不放资料库目录 —— 那里可能在 iCloud 里，多设备并发写会损坏。
 
@@ -114,9 +139,12 @@ Electron 主进程 ──stdin: {token}──▶ Python sidecar (FastAPI)
 - `docs/PLAN.md` —— 完整方案（v7，知识库优先），各里程碑执行状态在文内
 - `docs/HANDOFF.md` —— 18 条硬约束，改动前必读
 - `docs/M0-RESULTS.md` —— 实测结果与决策记录
+- `docs/RETRIEVAL-PERF.md` —— 检索延迟实测与决策（含 sqlite-vec 影子表整块读，
+  改动 `app/index/vector.py` 前必读）
 - `docs/RELEASE-0.3.0.md` —— 当前版本发布说明（体验重构）
 - `docs/RELEASE-0.2.0.md` —— 0.2.0 发布说明（检索与问答架构）
-- `docs/eval/README.md` —— 72 题评测体系与各里程碑冻结结果
+- `docs/WINDOWS-PORT.md` —— Windows 移植记录（平台差异、收录规则、并发修复、运维备忘）
+- `docs/eval/README.md` —— 77 题 Gold 合约、v8 评测口径与历史冻结结果
 
 ## AI 问答（B6）
 
@@ -133,7 +161,10 @@ Electron 主进程 ──stdin: {token}──▶ Python sidecar (FastAPI)
 ## 已知限制
 
 - 无应用图标，未代码签名（首次打开需右键→打开）
-- 扫描件 PDF 无文本层，不做 OCR（会明确告知"未提取到文本"）
+- 扫描件 PDF 无文本层使用本机系统 OCR（macOS Vision / Windows
+  Windows.Media.Ocr）；没有对应系统语言包时会明确告知"未提取到文本"
 - 单文档全文索引上限 10 MB（机器生成的日志/清单不适合自然语言搜索）
-- 源码类（`.py` `.js` `.json` 等）只登记元数据不解析正文 ——
-  搜代码该用 ripgrep / IDE，不是文件管理器的职责
+- 入库白名单：`.txt` `.docx` `.pdf` `.md` `.csv` `.html` `.htm`，
+  全部解析正文并参与检索问答；`.doc`、Excel、图片、音视频、压缩包、
+  源码、配置、安装包和日志均不入库
+- Windows 上浏览器自定义下载目录的自动发现未移植（整盘来源已兜底）

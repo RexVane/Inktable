@@ -11,15 +11,18 @@ import json
 import logging
 import multiprocessing
 import os
+import queue
 import secrets
 import sys
 import threading
 import time
 from collections import OrderedDict
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
@@ -33,7 +36,8 @@ from app.db.database import (
     quick_check,
     release_single_instance_lock,
 )
-from app.discovery.sources import discover_all
+from app.db.visibility import VISIBLE_FILES_COND
+from app.discovery.sources import discover_all, fixed_drive_roots
 from app.health import collect_health
 from app.index.confidence import assess as assess_confidence
 from app.index.pipeline import (
@@ -43,10 +47,50 @@ from app.index.pipeline import (
 )
 from app.retrieval.compress import EvidenceSource, best_span
 from app.retrieval.pipeline import run as run_retrieval
-from app.watcher.scanner import preview_source, scan_source
+from app.watcher.policy import canonical_source_path, is_drive_root, resolve_source_policy
+from app.watcher.scanner import path_is_within, preview_source, scan_source
 from app.watcher.service import WatchService
 
-app = FastAPI(title="Inktable API", version="0.3.0")
+def _warm_vector_matrix() -> None:
+    """后台预热整库向量矩阵。
+
+    语义检索主路径靠进程内矩阵（每次查询 13ms，vec0 KNN 是 780-980ms），
+    但首次重建要读满全库向量、约 1 秒起。放后台线程，别让第一个提问的人
+    付这笔钱。自带连接：矩阵缓存是模块级的，任一连接预热完对全进程生效。
+
+    纯只读，且任何异常都只是没预热到（下一次查询自己建），不能影响启动。
+    """
+    try:
+        from app.db.database import connect
+        from app.index import vector as vec
+
+        conn = connect()
+        try:
+            started = time.perf_counter()
+            if vec.warmup(conn):
+                log.info(
+                    "向量矩阵预热完成：%d 条，%.0fms",
+                    vec.count(conn), (time.perf_counter() - started) * 1000,
+                )
+        finally:
+            conn.close()
+    except Exception as e:  # noqa: BLE001 - 预热失败只是慢一点，不能拖垮启动
+        log.debug("向量矩阵预热跳过：%s", e)
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    del _app
+    threading.Thread(
+        target=_warm_vector_matrix, name="inktable-vec-warmup", daemon=True,
+    ).start()
+    try:
+        yield
+    finally:
+        _shutdown()
+
+
+app = FastAPI(title="Inktable API", version="0.3.0", lifespan=_lifespan)
 log = logging.getLogger("inktable.main")
 
 _db = None
@@ -60,6 +104,119 @@ _watch: WatchService | None = None
 _TRACE_CACHE: OrderedDict[str, dict] = OrderedDict()
 _TRACE_CACHE_CAP = 50
 _trace_lock = threading.Lock()
+
+
+def _path_within(path: str, root: str) -> bool:
+    child = os.path.normcase(os.path.normpath(path))
+    base = os.path.normcase(os.path.normpath(root))
+    try:
+        return os.path.commonpath((child, base)) == base
+    except ValueError:
+        return False
+
+
+def _drive_root_for(path: str) -> Path | None:
+    if sys.platform != "win32":
+        return None
+    drive = Path(path).drive
+    return Path(drive + os.sep) if drive else None
+
+
+def _legacy_drive_roots(conn) -> list[Path]:
+    """Find fixed drives represented by legacy non-manual child sources."""
+    if sys.platform != "win32":
+        return []
+    fixed = {
+        os.path.normcase(os.path.normpath(str(root))): root
+        for root in fixed_drive_roots()
+    }
+    rows = conn.execute(
+        "SELECT path, discovered_by FROM sources WHERE discovered_by != 'manual'"
+    ).fetchall()
+    roots: dict[str, Path] = {}
+    for row in rows:
+        if is_drive_root(row["path"]):
+            continue
+        drive = Path(row["path"]).drive
+        if not drive:
+            continue
+        candidate = os.path.normcase(os.path.normpath(drive + os.sep))
+        if candidate in fixed:
+            roots[candidate] = fixed[candidate]
+    return list(roots.values())
+
+
+def _visible_source_rows(conn):
+    """Return drive roots plus explicit manual sources, hiding child routes."""
+    rows = conn.execute(
+        """SELECT s.id, s.name, s.path, s.kind, s.discovered_by, s.volatile,
+                  s.enabled, s.auto_preserve, s.permission_ok, s.created_at
+           FROM sources s ORDER BY s.enabled DESC, s.id"""
+    ).fetchall()
+    drive_roots = [row for row in rows if is_drive_root(row["path"])]
+    visible = []
+    for row in rows:
+        if sys.platform != "win32" or is_drive_root(row["path"]):
+            visible.append(row)
+            continue
+        if row["discovered_by"] == "manual" and not any(
+            root["enabled"] and _path_within(row["path"], root["path"])
+            for root in drive_roots
+        ):
+            visible.append(row)
+    return visible
+
+
+def _normalize_drive_sources(conn) -> None:
+    """Fold legacy Windows child sources into their fixed-disk roots."""
+    roots = _legacy_drive_roots(conn)
+    if roots:
+        _ensure_drive_sources(conn, roots)
+
+
+def _ensure_drive_sources(conn, roots=None) -> dict[str, int]:
+    """Create selected fixed-disk roots and reassign old child file records."""
+    if sys.platform != "win32":
+        return {}
+    roots = list(roots or [])
+    if not roots:
+        return {}
+    existing = conn.execute(
+        "SELECT id, path, enabled, discovered_by FROM sources"
+    ).fetchall()
+    result: dict[str, int] = {}
+    for root in roots:
+        path = str(root)
+        name = f"{root.drive.rstrip(':')} 盘"
+        child_enabled = any(
+            _path_within(child["path"], path)
+            and child["path"] != path
+            and child["enabled"]
+            for child in existing
+        )
+        conn.execute(
+            """INSERT INTO sources
+               (name, path, kind, discovered_by, volatile, enabled,
+                permission_ok, permission_checked_at, created_at)
+               VALUES (?,?,?,?,0,?,1,?,?)
+               ON CONFLICT(path) DO UPDATE SET name=excluded.name,
+                 discovered_by='fixed_drive', enabled=MAX(sources.enabled, excluded.enabled),
+                 permission_ok=excluded.permission_ok,
+                 permission_checked_at=excluded.permission_checked_at""",
+            (name, path, "system", "fixed_drive", int(child_enabled),
+             time.time(), time.time()),
+        )
+        row = conn.execute("SELECT id FROM sources WHERE path = ?", (path,)).fetchone()
+        result[path] = row["id"]
+        for child in existing:
+            if (
+                child["id"] != row["id"]
+                and _path_within(child["path"], path)
+            ):
+                conn.execute("UPDATE files SET source_id = ? WHERE source_id = ?",
+                             (row["id"], child["id"]))
+                conn.execute("UPDATE sources SET enabled = 0 WHERE id = ?", (child["id"],))
+    return result
 
 
 def _remember_trace(trace: dict) -> None:
@@ -94,58 +251,113 @@ def _status_snapshot() -> dict:
     return {name: dict(value) for name, value in _database_status.items()}
 
 
+_db_local = threading.local()
+
+
+def _init_primary_connection():
+    """首个连接：启动完整性检查 + 每日备份（进程内只跑一次）。"""
+    global _database_status
+    _database_status = _empty_database_status()
+    conn = connect()
+    try:
+        # Integrity is checked before schema/default writes so a damaged
+        # database is never modified merely by launching the application.
+        checked_at = time.time()
+        check_ok = quick_check(conn)
+        _database_status["quick_check"] = {
+            "ok": check_ok, "checked_at": checked_at,
+        }
+        if not check_ok:
+            raise RuntimeError("数据库完整性检查失败")
+        init_db(conn)
+
+        # 每日首次启动备份失败（例如磁盘满/目录无权限）不应让整个文件库
+        # 不可用，但绝不能静默忽略：保留 degraded 状态，供 /db/status、
+        # /stats 与设置页明确展示，用户可修复后手动重试。
+        #
+        # 备份在**后台线程**执行：VACUUM INTO 对 GB 级库是十秒到分钟级
+        # IO，放在端口上报之前会把健康启动拖过主进程的启动超时
+        # （实测 1.17GB 库启动 15.2s，恰好撞上 15s 超时被连杀三次）。
+        # quick_check/init_db 仍然同步 —— 坏库必须 fail-closed。
+        if os.environ.get("INKTABLE_DB") == ":memory:":
+            _database_status["backup"] = {
+                "ok": None, "path": None, "error": "",
+                "checked_at": time.time(), "skipped": True,
+            }
+        else:
+            _start_daily_backup_thread()
+    except Exception:
+        conn.close()
+        raise
+    return conn
+
+
+def _start_daily_backup_thread() -> None:
+    """启动后台每日备份。用独立连接，WAL 下与正常读写并行不冲突。"""
+
+    def _worker() -> None:
+        try:
+            conn = connect()
+        except Exception as exc:
+            _database_status["backup"] = {
+                "ok": False, "path": None, "error": str(exc),
+                "checked_at": time.time(), "skipped": False,
+            }
+            log.error("备份线程无法打开数据库：%s", exc)
+            return
+        try:
+            backup = create_daily_backup(conn)
+            _database_status["backup"] = {
+                "ok": True, "path": str(backup), "error": "",
+                "checked_at": time.time(), "skipped": False,
+            }
+        except Exception as exc:  # 启动降级，状态必须对外可见
+            _database_status["backup"] = {
+                "ok": False, "path": None, "error": str(exc),
+                "checked_at": time.time(), "skipped": False,
+            }
+            log.error("每日数据库备份失败，应用以降级状态继续：%s", exc)
+        finally:
+            conn.close()
+
+    threading.Thread(target=_worker, name="inktable-backup", daemon=True).start()
+
+
 def db():
-    """单写入线程串行化（PLAN §19 R9）。"""
-    global _db, _database_status
-    if _db is not None:
+    """每线程一条连接；写入仍由 _db_lock 串行（PLAN §19 R9）。
+
+    此前所有线程共享同一条连接：API 线程的**无锁读**与 watcher 线程的
+    写入会在语句生命周期上交错，触发 sqlite3 的 SQLITE_MISUSE
+    （"bad parameter or other API misuse"，Windows 上实时入库启用后
+    稳定复现）。WAL 模式原生支持多连接并发读 + 单写者，改为线程本地
+    连接从根上消除共享；写路径依旧全部经 _db_lock 串行，单写者不变。
+
+    ``INKTABLE_DB=:memory:`` 例外 —— 内存库的每条连接都是独立空库，
+    测试环境必须维持单例连接。
+    """
+    global _db
+    if os.environ.get("INKTABLE_DB") == ":memory:":
+        if _db is None:
+            with _db_init_lock:
+                if _db is None:
+                    _db = _init_primary_connection()
         return _db
 
-    # 生产入口会在启动 HTTP 服务前先调用 db()，这里的锁仍然保留：测试、
-    # 嵌入式调用或未来改为 lifespan 后，多个首请求也不能各自创建一条连接。
-    with _db_init_lock:
-        if _db is not None:
-            return _db
+    conn = getattr(_db_local, "conn", None)
+    if conn is not None:
+        return conn
 
-        _database_status = _empty_database_status()
-        conn = connect()
-        try:
-            # Integrity is checked before schema/default writes so a damaged
-            # database is never modified merely by launching the application.
-            checked_at = time.time()
-            check_ok = quick_check(conn)
-            _database_status["quick_check"] = {
-                "ok": check_ok, "checked_at": checked_at,
-            }
-            if not check_ok:
-                raise RuntimeError("数据库完整性检查失败")
-            init_db(conn)
+    # 首个调用线程负责启动检查与每日备份；其余线程各自开普通连接。
+    if _db is None:
+        with _db_init_lock:
+            if _db is None:
+                _db = _init_primary_connection()
+                _db_local.conn = _db
+                return _db
 
-            # 每日首次启动备份失败（例如磁盘满/目录无权限）不应让整个文件库
-            # 不可用，但绝不能静默忽略：保留 degraded 状态，供 /db/status、
-            # /stats 与设置页明确展示，用户可修复后手动重试。
-            if os.environ.get("INKTABLE_DB") == ":memory:":
-                _database_status["backup"] = {
-                    "ok": None, "path": None, "error": "",
-                    "checked_at": time.time(), "skipped": True,
-                }
-            else:
-                try:
-                    backup = create_daily_backup(conn)
-                    _database_status["backup"] = {
-                        "ok": True, "path": str(backup), "error": "",
-                        "checked_at": time.time(), "skipped": False,
-                    }
-                except Exception as exc:  # 启动降级，状态必须对外可见
-                    _database_status["backup"] = {
-                        "ok": False, "path": None, "error": str(exc),
-                        "checked_at": time.time(), "skipped": False,
-                    }
-                    log.error("每日数据库备份失败，应用以降级状态继续：%s", exc)
-        except Exception:
-            conn.close()
-            raise
-        _db = conn
-    return _db
+    conn = connect()
+    _db_local.conn = conn
+    return conn
 
 
 def watch_service() -> WatchService:
@@ -155,7 +367,6 @@ def watch_service() -> WatchService:
     return _watch
 
 
-@app.on_event("shutdown")
 def _shutdown() -> None:
     global _db, _watch
     if _watch is not None:
@@ -206,18 +417,42 @@ def discover() -> dict:
     return {"sources": [s.to_dict() for s in sources]}
 
 
+@app.post("/sources/discover_deep", dependencies=[Depends(require_token)])
+def discover_deep() -> dict:
+    """Compatibility endpoint: Windows returns fixed disks, other platforms deep-scan."""
+    if sys.platform == "win32":
+        return {"sources": [s.to_dict() for s in discover_all()]}
+    from app.discovery.deepscan import deep_scan
+
+    return {"sources": [s.to_dict() for s in deep_scan()]}
+
+
 class PreviewRequest(BaseModel):
     path: str
 
 
 @app.post("/sources/preview", dependencies=[Depends(require_token)])
 def preview(req: PreviewRequest) -> dict:
-    """启用前预扫描：只计数不入库（PLAN §7.7 ⑤）。
-
-    把「这个目录有 48 万个文件」变成用户可见的决策点，
-    而不是点下去之后才发现库被淹了。
-    """
-    return preview_source(req.path)
+    """启用前预扫描，使用与实际来源相同的路径策略。"""
+    policy = resolve_source_policy(req.path)
+    prune_roots: tuple[Path, ...] = ()
+    conn = db()
+    source = conn.execute(
+        "SELECT id FROM sources WHERE path = ?", (str(policy.root),)
+    ).fetchone()
+    if source:
+        rows = conn.execute(
+            "SELECT path FROM sources WHERE enabled = 1 AND id != ?", (source["id"],)
+        ).fetchall()
+        prune_roots = tuple(
+            Path(row["path"]) for row in rows
+            if path_is_within(row["path"], str(policy.root), strict=True)
+        )
+    return preview_source(
+        policy.root,
+        prune_projects=policy.prune_projects,
+        prune_roots=prune_roots,
+    )
 
 
 class EnableRequest(BaseModel):
@@ -230,24 +465,50 @@ class EnableRequest(BaseModel):
 
 @app.post("/sources/enable", dependencies=[Depends(require_token)])
 def enable_source(req: EnableRequest) -> dict:
-    """用户确认启用一个来源，并立即扫描。"""
+    """Enable a source, mount its watcher, then scan it in the background."""
+    policy = resolve_source_policy(req.path)
+    path = str(policy.root)
     with _db_lock:
         conn = db()
+        drive_root = policy.root if is_drive_root(policy.root) else None
+        if drive_root is not None:
+            req = req.model_copy(update={
+                "name": req.name or f"{drive_root.drive.rstrip(':')} 盘",
+                "kind": "system",
+                "discovered_by": "fixed_drive",
+            })
         conn.execute(
             "INSERT INTO sources (name, path, kind, discovered_by, volatile, enabled, "
             "permission_ok, permission_checked_at, created_at) "
             "VALUES (?,?,?,?,?,1,1,?,?) "
             "ON CONFLICT(path) DO UPDATE SET enabled=1, name=excluded.name",
-            (req.name, req.path, req.kind, req.discovered_by, int(req.volatile),
+            (req.name, path, req.kind, req.discovered_by, int(req.volatile),
              time.time(), time.time()),
         )
+        if drive_root is not None:
+            _ensure_drive_sources(conn, [drive_root])
         conn.commit()
-        row = conn.execute("SELECT id FROM sources WHERE path = ?", (req.path,)).fetchone()
-        stats = scan_source(conn, row["id"], req.path)
+        row = conn.execute("SELECT id, path FROM sources WHERE path = ?", (path,)).fetchone()
 
-    # 启用后立即挂上实时监听 —— 之后进来的新文件自动入库
-    watch_service().watch(req.path)
+    watcher = watch_service()
+    watcher.sync_watched_paths()
+    watcher.watch(row["path"])
+    if sys.platform == "win32" and is_drive_root(row["path"]):
+        job_id = watcher.queue_scan(
+            row["id"], row["path"], prune_projects=policy.prune_projects,
+        )
+        return {
+            "source_id": row["id"],
+            "job_id": job_id,
+            "stats": {"scanned": 0, "registered": 0, "unchanged": 0,
+                       "duplicates": 0, "skipped_ext": 0, "errors": 0},
+        }
 
+    # 保留手动目录和非 Windows 的同步兼容语义。
+    with _db_lock:
+        conn = db()
+        stats = scan_source(conn, row["id"], row["path"])
+        conn.commit()
     return {
         "source_id": row["id"],
         "stats": {
@@ -270,22 +531,36 @@ def list_sources() -> dict:
     库里的记录不会自己失效，只有查了才知道（§8.3 重定位的前提）。
     """
     conn = db()
+    with _db_lock:
+        _normalize_drive_sources(conn)
+        conn.commit()
+    watch_service().sync_watched_paths()
     watched = set(watch_service().status["watched"])
-    rows = conn.execute(
-        """SELECT s.id, s.name, s.path, s.kind, s.volatile, s.enabled,
-                  s.auto_preserve, s.permission_ok, s.created_at,
-                  (SELECT count(*) FROM files f WHERE f.source_id = s.id) AS file_count
-           FROM sources s ORDER BY s.enabled DESC, file_count DESC"""
-    ).fetchall()
+    rows = _visible_source_rows(conn)
+    jobs = {job["source_id"]: job for job in watch_service().scan_jobs()
+            if job["state"] in {"queued", "scanning", "indexing"}}
 
     out = []
     for r in rows:
+        if sys.platform == "win32" and is_drive_root(r["path"]):
+            prefix = os.path.normcase(os.path.normpath(r["path"]))
+            file_count = conn.execute(
+                "SELECT count(*) c FROM files WHERE lower(path) LIKE lower(?) || '%'",
+                (prefix,),
+            ).fetchone()["c"]
+        else:
+            file_count = conn.execute(
+                "SELECT count(*) c FROM files WHERE source_id = ?", (r["id"],)
+            ).fetchone()["c"]
         d = dict(r)
+        d["file_count"] = file_count
         d["volatile"] = bool(r["volatile"])
         d["enabled"] = bool(r["enabled"])
         d["auto_preserve"] = bool(r["auto_preserve"])
+        d["is_drive_root"] = is_drive_root(r["path"])
         d["watching"] = r["path"] in watched
         d["exists"] = Path(r["path"]).is_dir()
+        d["scan"] = jobs.get(r["id"])
         out.append(d)
     return {"sources": out}
 
@@ -461,6 +736,17 @@ def post_ask(req: AskRequest) -> dict:
         raise HTTPException(status_code=400, detail="问题为空")
     with _db_lock:
         conn = db()
+        from app.qa.metadata import answer_metadata
+        metadata = answer_metadata(conn, q)
+        if metadata is not None:
+            return {
+                "status": "answered", "answer": metadata.answer,
+                "citations": [], "retrieved": [], "hedge": "",
+                "validation": {"route": metadata.query_kind},
+                "mode": "metadata", "trace_id": None,
+                "timings": [], "degraded": [],
+                "trace": {"route": metadata.query_kind, "stages": [], "degraded": []},
+            }
         try:
             a = ask(conn, q, req.book_id, history=req.history[-4:])
         except LLMError as e:
@@ -474,6 +760,80 @@ def post_ask(req: AskRequest) -> dict:
         "trace_id": trace.get("trace_id"), "timings": trace.get("stages", []),
         "degraded": trace.get("degraded", []), "trace": trace,
     }
+
+
+@app.post("/ask/stream", dependencies=[Depends(require_token)])
+def post_ask_stream(req: AskRequest):
+    """SSE draft/regenerate/finalize protocol; citations are emitted last."""
+    q = req.question.strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="问题为空")
+
+    def sse(event: str, payload: dict) -> str:
+        return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    def generate():
+        events: queue.Queue[tuple[str, dict]] = queue.Queue()
+        done = object()
+
+        def emit(name: str, payload: dict) -> None:
+            events.put((name, payload))
+
+        def worker() -> None:
+            try:
+                with _db_lock:
+                    conn = db()
+                    from app.qa.metadata import answer_metadata
+                    metadata = answer_metadata(conn, q)
+                    if metadata is not None:
+                        result = {
+                            "status": "answered", "answer": metadata.answer,
+                            "citations": [], "retrieved": [], "hedge": "",
+                            "validation": {"route": metadata.query_kind},
+                            "mode": "metadata", "trace_id": None,
+                            "timings": [], "degraded": [],
+                            "trace": {"route": metadata.query_kind, "stages": [], "degraded": []},
+                        }
+                    else:
+                        from app.qa.answer import ask
+                        answer = ask(
+                            conn, q, req.book_id, history=req.history[-4:],
+                            event_callback=emit,
+                        )
+                        trace = answer.trace
+                        _remember_trace(trace)
+                        result = {
+                            "status": answer.status, "answer": answer.answer,
+                            "citations": answer.citations,
+                            "retrieved": answer.retrieved, "hedge": answer.hedge,
+                            "validation": answer.validation, "mode": answer.mode,
+                            "trace_id": trace.get("trace_id"),
+                            "timings": trace.get("stages", []),
+                            "degraded": trace.get("degraded", []), "trace": trace,
+                        }
+                events.put(("__result__", result))
+            except Exception as exc:
+                events.put(("chat.error", {"message": str(exc)}))
+            finally:
+                events.put(("__done__", {}))
+
+        threading.Thread(target=worker, name="inktable-ask-stream", daemon=True).start()
+        yield sse("chat.searching", {"question": q})
+        result = None
+        while True:
+            name, payload = events.get()
+            if name == "__done__":
+                break
+            if name == "__result__":
+                result = payload
+                continue
+            yield sse(name, payload)
+        if result is not None:
+            citations = result.pop("citations", [])
+            yield sse("chat.finalize", result)
+            yield sse("chat.citations", {"citations": citations})
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 @app.get("/runs/{trace_id}", dependencies=[Depends(require_token)])
@@ -805,15 +1165,7 @@ def add_source(req: AddSourceRequest) -> dict:
     ))
 
 
-# 可见性口径：停用来源的文件**保留在库里但不进入浏览视图**（重新启用即恢复）；
-# 来源被移除后残留的孤儿文件（source_id 为 NULL，如保全副本）始终可见。
-# 磁盘上已消失的文件同样隐藏 —— 除非有保全副本（内容仍可读，这正是
-# 保全功能的价值）。文件回到原位时 scanner 会把 state 恢复，自动重新可见。
-VISIBLE_FILES_COND = (
-    "(f.source_id IS NULL OR s.enabled = 1) "
-    "AND (f.state != 'missing' OR COALESCE(f.preserved_path, '') != '')"
-)
-
+# 可见性口径由 app.db.visibility 统一提供，浏览、检索和问答共用。
 
 @app.get("/files", dependencies=[Depends(require_token)])
 def list_files(
@@ -878,8 +1230,9 @@ def list_files(
         )
     if dir_path:
         # 目录过滤（文件树点击）：前缀匹配用 substr 而不是 LIKE，
-        # 路径里的 % 和 _ 不需要转义。
-        prefix = dir_path.rstrip("/") + "/"
+        # 路径里的 % 和 _ 不需要转义。分隔符必须用 os.sep —— 库里存的
+        # 是平台原生路径，Windows 上硬编码 "/" 会让过滤永远落空。
+        prefix = dir_path.rstrip("\\/") + os.sep
         conds.append("substr(f.path, 1, ?) = ?")
         params.extend([len(prefix), prefix])
     where = ("WHERE " + " AND ".join(conds)) if conds else ""
@@ -920,16 +1273,27 @@ def files_tree(
     """
     conn = db()
     if not dir_path:
-        roots = conn.execute(
-            """SELECT s.id, s.name, s.path,
-                      (SELECT count(*) FROM files f
-                       WHERE f.source_id = s.id) AS count
-               FROM sources s WHERE s.enabled = 1
-               ORDER BY count DESC, s.name"""
-        ).fetchall()
-        return {"roots": [dict(r) for r in roots]}
+        rows = _visible_source_rows(conn)
+        roots = []
+        for s in rows:
+            if not s["enabled"]:
+                continue
+            if sys.platform == "win32" and is_drive_root(s["path"]):
+                prefix = os.path.normcase(os.path.normpath(s["path"]))
+                count = conn.execute(
+                    "SELECT count(*) c FROM files WHERE lower(path) LIKE lower(?) || '%'",
+                    (prefix,),
+                ).fetchone()["c"]
+            else:
+                count = conn.execute(
+                    "SELECT count(*) c FROM files WHERE source_id = ?", (s["id"],)
+                ).fetchone()["c"]
+            roots.append({"id": s["id"], "name": s["name"],
+                          "path": s["path"], "count": count})
+        roots.sort(key=lambda item: (-item["count"], item["name"]))
+        return {"roots": roots}
 
-    prefix = dir_path.rstrip("/") + "/"
+    prefix = dir_path.rstrip("\\/") + os.sep
     rows = conn.execute(
         f"""SELECT f.id, f.name, f.path, f.ext, f.state, f.preserved_path
             FROM files f LEFT JOIN sources s ON s.id = f.source_id
@@ -941,8 +1305,8 @@ def files_tree(
     files_out: list[dict] = []
     for r in rows:
         rest = r["path"][len(prefix):]
-        if "/" in rest:
-            head = rest.split("/", 1)[0]
+        if os.sep in rest:
+            head = rest.split(os.sep, 1)[0]
             dirs[head] = dirs.get(head, 0) + 1
         elif len(files_out) <= file_limit:
             files_out.append(dict(r))
@@ -1290,26 +1654,35 @@ def run_index(req: IndexRequest) -> dict:
     循环直到没有 pending —— 单次调用就把队列清空，避免前端需要
     反复轮询调用。每批之间 commit，中断也不丢已完成的部分。
     """
-    with _db_lock:
-        conn = db()
-        total = {"indexed": 0, "chunks": 0, "no_text": 0, "failed": 0,
-                 "unsupported": 0, "total": 0}
-        while True:
+    total = {"indexed": 0, "chunks": 0, "no_text": 0, "failed": 0,
+             "unsupported": 0, "total": 0}
+    # 分批进出锁：嵌入是分钟级慢操作，整个循环霸占写锁会饿死补扫与
+    # 实时入库（实测整盘首扫时 reconcile 线程等锁 20 分钟毫无进展）。
+    # 每批之间释放锁，扫描/监听线程得以插队。
+    while True:
+        with _db_lock:
+            conn = db()
             pending_before = count_readable_pending(conn)
-            r = index_pending(conn, limit=min(req.limit, 200))
-            if r["total"] == 0:
-                break
-            for k in total:
-                total[k] += r.get(k, 0)
+            # 批量路径不做内联嵌入：先让文件可见可搜（FTS），
+            # 向量由前端驱动的 embed_backfill 分批补齐
+            r = index_pending(conn, limit=min(req.limit, 24), embed=False)
             # ``unsupported`` 可以被 index_pending 反复选中（例如扩展名在
             # 白名单内但解析器拒绝了文件）。没有这个护栏，单次请求会把
             # 同一个文档重复尝试直到耗尽 req.limit，看起来像 sidecar 卡死。
             pending_after = count_readable_pending(conn)
-            if pending_after >= pending_before:
-                break
-            if total["total"] >= req.limit:
-                break
-        return total
+        # threading.Lock 没有公平性：紧循环"释放→立刻再抢"会让等锁的
+        # 补扫/入库线程永远抢不到（实测扫描线程被饿 20 分钟）。批间让出
+        # 一个保证窗口，等待者必然获得锁。
+        time.sleep(0.1)
+        if r["total"] == 0:
+            break
+        for k in total:
+            total[k] += r.get(k, 0)
+        if pending_after >= pending_before:
+            break
+        if total["total"] >= req.limit:
+            break
+    return total
 
 
 class QaSettingRequest(BaseModel):
@@ -1350,24 +1723,31 @@ class OcrSettingRequest(BaseModel):
 @app.get("/settings/ocr", dependencies=[Depends(require_token)])
 def get_ocr_setting() -> dict:
     from app.db.database import get_setting
-    from app.parsing import ocr_mac
+    from app.parsing import ocr
 
     conn = db()
     return {
         "enabled": get_setting(conn, "ocr_enabled", "1") == "1",
-        "available": ocr_mac.is_available(),
+        "available": ocr.is_available(),
+        "engine": ocr.engine_id(),
+        "engine_label": ocr.engine_label(),
     }
 
 
 @app.post("/settings/ocr", dependencies=[Depends(require_token)])
 def set_ocr_setting(req: OcrSettingRequest) -> dict:
     from app.db.database import set_setting
-    from app.parsing import ocr_mac
+    from app.parsing import ocr
 
     with _db_lock:
         conn = db()
         set_setting(conn, "ocr_enabled", "1" if req.enabled else "0")
-    return {"enabled": req.enabled, "available": ocr_mac.is_available()}
+    return {
+        "enabled": req.enabled,
+        "available": ocr.is_available(),
+        "engine": ocr.engine_id(),
+        "engine_label": ocr.engine_label(),
+    }
 
 
 @app.post("/index/retry_scanned", dependencies=[Depends(require_token)])
@@ -1417,24 +1797,51 @@ class RebasePreservedRequest(BaseModel):
 @app.post("/system/rebase_preserved", dependencies=[Depends(require_token)])
 def rebase_preserved(req: RebasePreservedRequest) -> dict:
     """数据目录迁移后，把库里记录的保全副本绝对路径改到新前缀。"""
-    old = req.old_prefix.rstrip("/") + "/"
-    new = req.new_prefix.rstrip("/") + "/"
-    if not req.old_prefix or old == new:
+    old = req.old_prefix.rstrip("\\/")
+    new = req.new_prefix.rstrip("\\/")
+    if not old or old == new:
         return {"preserved_updated": 0, "paths_updated": 0}
+
+    def rebased(value: str | None) -> str | None:
+        if not value:
+            return None
+        compare_value = os.path.normcase(value)
+        compare_old = os.path.normcase(old)
+        if compare_value != compare_old:
+            if not compare_value.startswith(compare_old):
+                return None
+            boundary = value[len(old):len(old) + 1]
+            if boundary not in {"/", "\\"}:
+                return None
+        suffix = value[len(old):].lstrip("\\/")
+        if not suffix:
+            return new
+        # 迁移路径可能来自另一平台；沿用请求中新前缀的分隔符风格。
+        separator = "\\" if "\\" in new and "/" not in new else "/"
+        return new + separator + suffix
+
     with _db_lock:
         conn = db()
-        preserved = conn.execute(
-            "UPDATE files SET preserved_path = ? || substr(preserved_path, ?) "
-            "WHERE substr(preserved_path, 1, ?) = ?",
-            (new, len(old) + 1, len(old), old),
-        ).rowcount
-        paths = conn.execute(
-            "UPDATE files SET path = ? || substr(path, ?) "
-            "WHERE substr(path, 1, ?) = ?",
-            (new, len(old) + 1, len(old), old),
-        ).rowcount
+        rows = conn.execute("SELECT id, path, preserved_path FROM files").fetchall()
+        preserved_updates = [
+            (updated, row["id"]) for row in rows
+            if (updated := rebased(row["preserved_path"])) is not None
+            and updated != row["preserved_path"]
+        ]
+        path_updates = [
+            (updated, row["id"]) for row in rows
+            if (updated := rebased(row["path"])) is not None
+            and updated != row["path"]
+        ]
+        conn.executemany(
+            "UPDATE files SET preserved_path = ? WHERE id = ?", preserved_updates,
+        )
+        conn.executemany("UPDATE files SET path = ? WHERE id = ?", path_updates)
         conn.commit()
-    return {"preserved_updated": preserved, "paths_updated": paths}
+    return {
+        "preserved_updated": len(preserved_updates),
+        "paths_updated": len(path_updates),
+    }
 
 
 class EmbedBackfillRequest(BaseModel):
@@ -1515,8 +1922,10 @@ def watch_stop() -> dict:
 
 @app.get("/watch/status", dependencies=[Depends(require_token)])
 def watch_status() -> dict:
-    """监听状态 + 最近自动入库的文件，供界面「实时动态」展示。"""
-    return watch_service().status
+    """监听状态、后台来源扫描进度与最近自动入库文件。"""
+    status = watch_service().status
+    status["source_scans"] = watch_service().scan_jobs()
+    return status
 
 
 @app.get("/db/status", dependencies=[Depends(require_token)])

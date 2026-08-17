@@ -3,7 +3,7 @@
 **必须在向量检索实现之前标注完成**（方案 §20：M6 先于 B3）。
 否则出题会不自觉地贴合已有实现，指标失去意义 —— 这是评测集最常见的失效方式。
 
-72 题构成：
+77 题构成：
   · 20 题单文档事实定位
   · 10 题同义改写或无关键词重合
   · 10 题同文档跨片综合
@@ -232,6 +232,32 @@ V7_METADATA = [
              "揭阳校区本科生综合素质测评实施细则", [], "metadata", category="metadata"),
 ]
 
+# ---------------------------------------------------------------- 语料漂移后新增的可回答题
+#
+# 这些题最初标为无依据，但当前内容哈希语料后来收录了直接答案。保留题号
+# 并显式重分类，避免为了拒答指标把真实存在的证据错误标成“应拒答”。
+
+CORPUS_DRIFT_ANSWERABLE = [
+    EvalCase("U02", "宿舍热水器的使用时间限制",
+             "广工大一攻略2.0", ["下午七点", "二十四点"], "exact",
+             "当前攻略明确写明热水供应时段", category="single_fact"),
+    EvalCase("U04", "SMTP 协议的握手流程",
+             "计算机网络第8版_题目答案", ["220", "HELO", "250 OK"],
+             "paraphrase", "当前教材答案包含 SMTP 三阶段",
+             category="paraphrase"),
+    EvalCase("U06", "图书馆借书最多能借几本",
+             "广东工业大学2024年学生手册", ["30册"], "exact",
+             "当前学生手册明确给出校内读者借阅上限", category="single_fact"),
+    EvalCase("U09", "毕业论文查重率要求低于多少",
+             "广东工业大学2025届毕业设计（论文）手册", ["20%"],
+             "paraphrase", "当前毕业论文手册明确给出相似性阈值",
+             category="paraphrase"),
+    EvalCase("U10", "杭州地铁到浙江音乐学院怎么换乘",
+             "杭州决赛区）选手参赛手册", ["地铁6 号线", "音乐学院站C 口"],
+             "paraphrase", "当前参赛手册包含多出发地地铁路线",
+             category="paraphrase"),
+]
+
 # ---------------------------------------------------------------- 无依据（12 题）
 #
 # 这些问题的答案确实不在库中。检索应当返回低分，系统应当拒答而不是硬编。
@@ -240,31 +266,32 @@ V7_METADATA = [
 UNANSWERABLE = [
     EvalCase("U01", "钨钢刀具的最佳切削速度是多少", None, [], "exact",
              "材料学领域但库里只有钎料，无切削加工内容"),
-    EvalCase("U02", "宿舍热水器的使用时间限制", None, [], "exact",
-             "同为宿舍主题，但原通知只讲电费"),
     EvalCase("U03", "研究生复试分数线是多少", None, [], "exact",
              "同为学校文件风格，但库里无研招内容"),
-    EvalCase("U04", "SMTP 协议的握手流程", None, [], "paraphrase",
-             "库里有 FTP 协议实现，无 SMTP"),
     EvalCase("U05", "食堂档口的营业时间", None, [], "exact"),
-    EvalCase("U06", "图书馆借书最多能借几本", None, [], "exact"),
     EvalCase("U07", "Redis 集群的分片策略", None, [], "exact",
              "库里有技术文档但不涉及 Redis"),
     EvalCase("U08", "汝窑天青釉的烧成温度", None, [], "exact",
              "陶瓷主题在库中完全不存在"),
-    EvalCase("U09", "毕业论文查重率要求低于多少", None, [], "paraphrase",
-             "库里有毕业论文正文，但无查重规定"),
-    EvalCase("U10", "杭州地铁到浙江音乐学院怎么换乘", None, [], "paraphrase",
-             "手册提到浙音但无交通指引"),
     EvalCase("U11", "内存条的时序参数怎么调", None, [], "exact",
              "库里有计算机组成原理但不涉及超频"),
     EvalCase("U12", "社团经费报销的审批流程", None, [], "paraphrase",
              "同为社团文件，但只讲加分不讲经费"),
+    EvalCase("U13", "图书馆图书逾期每本每天收取多少超期占用费",
+             None, [], "exact", "手册要求缴费但未给出具体金额"),
+    EvalCase("U14", "浙江音乐学院南区食堂早餐几点开始供应",
+             None, [], "exact", "参赛手册只给出比赛期间午餐和晚餐安排"),
+    EvalCase("U15", "毕业论文查重使用哪个检测系统品牌",
+             None, [], "paraphrase", "手册只写学校指定检测系统，未写品牌"),
+    EvalCase("U16", "SMTP 发送失败后默认间隔多少分钟重试",
+             None, [], "exact", "教材说明通信过程但未给出重试间隔"),
+    EvalCase("U17", "宿舍热水每立方米收费多少",
+             None, [], "exact", "攻略给出供应时间但未给出热水单价"),
 ]
 
 ANSWERABLE = (
     ANSWERABLE + V7_FACT + V7_PARAPHRASE + V7_SYNTHESIS
-    + V7_CROSS_DOCUMENT + V7_METADATA
+    + V7_CROSS_DOCUMENT + V7_METADATA + CORPUS_DRIFT_ANSWERABLE
 )
 ALL_CASES = ANSWERABLE + UNANSWERABLE
 

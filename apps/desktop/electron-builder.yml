@@ -14,8 +14,26 @@ files:
 # PyInstaller 产物作为额外资源打进 Contents/Resources/sidecar/
 # 嵌入模型不再随包分发：语义检索用本机 Ollama bge-m3（未装自动降级）
 extraResources:
-  - from: ../../services/api/dist/inktable-sidecar
-    to: sidecar/inktable-sidecar
+  - from: ../../services/api/dist
+    to: sidecar
+    filter:
+      - inktable-sidecar
+      - inktable-sidecar.exe
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: ${productName}-${version}-Setup-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  deleteAppDataOnUninstall: false
+  runAfterFinish: false
 
 mac:
   category: public.app-category.productivity

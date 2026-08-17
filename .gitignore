@@ -1,7 +1,11 @@
 node_modules/
 dist/
 build/
+output/
 .venv/
 __pycache__/
 *.pyc
 .DS_Store
+
+# 运行时验收产物：内含活的 SQLite 库、.lock、WAL 与截图，每次跑都不同
+runtime-smoke-final-*/

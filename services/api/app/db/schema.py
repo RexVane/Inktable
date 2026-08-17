@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS contents (
     id                 INTEGER PRIMARY KEY,
     sha256             TEXT NOT NULL UNIQUE,
     size               INTEGER NOT NULL,
-    parse_state        TEXT NOT NULL DEFAULT 'pending',  -- pending/parsing/indexed/parse_failed/unsupported
+    parse_state        TEXT NOT NULL DEFAULT 'D',  -- B / C / D
     chunk_count        INTEGER NOT NULL DEFAULT 0,
     embedding_model_id TEXT,
     indexed_at         REAL,
@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS files (
     ext               TEXT,
     mime              TEXT,
     size              INTEGER NOT NULL,
-    state             TEXT NOT NULL,      -- 见 §10 状态机
+    state             TEXT NOT NULL DEFAULT 'D',  -- B / C / D
     error_code        TEXT,
     retry_count       INTEGER NOT NULL DEFAULT 0,
     category_id       INTEGER REFERENCES categories(id) ON DELETE SET NULL,

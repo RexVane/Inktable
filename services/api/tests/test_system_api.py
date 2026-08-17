@@ -38,6 +38,69 @@ def api_client(tmp_path, monkeypatch):
         yield client, main_mod
 
 
+def test_metadata_ask_uses_sql_without_rag(api_client, monkeypatch):
+    client, main_mod = api_client
+    conn = main_mod.db()
+    conn.execute(
+        "INSERT INTO sources(name,path,kind,discovered_by,enabled,created_at) VALUES('B盘','B:\\\\','system','fixed_drive',1,?)",
+        (time.time(),),
+    )
+    conn.execute(
+        """INSERT INTO files(volume_uuid,inode,path,name,source_id,ext,size,state,detected_at)
+           VALUES('v',1,'B:\\\\a.pdf','a.pdf',1,'.pdf',1,'registered',?)""",
+        (time.time(),),
+    )
+    conn.commit()
+    import app.qa.answer as answer_module
+    monkeypatch.setattr(
+        answer_module, "ask",
+        lambda *_args, **_kwargs: pytest.fail("metadata route called RAG/LLM"),
+    )
+
+    response = client.post(
+        "/ask", headers=H, json={"question": "我的 PDF 文件有多少个？"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["mode"] == "metadata"
+    assert "1 个" in body["answer"]
+    assert body["citations"] == []
+
+
+def test_streaming_ask_finalizes_before_citations(api_client, monkeypatch):
+    client, _main = api_client
+    import app.qa.answer as answer_module
+
+    def fake_ask(_conn, _question, _book_id=None, history=None, event_callback=None):
+        assert event_callback is not None
+        event_callback("chat.draft", {"text": "错误草稿", "attempt": 1})
+        event_callback("chat.regenerating", {"attempt": 2})
+        event_callback("chat.draft", {"text": "最终答案 [C1]", "attempt": 2})
+        return answer_module.Answer(
+            status="answered", answer="最终答案 [C1]",
+            citations=[{"tag": "C1", "file_name": "a.md"}],
+            validation={"attempts": 2}, trace={"trace_id": "trace", "stages": [], "degraded": []},
+        )
+
+    monkeypatch.setattr(answer_module, "ask", fake_ask)
+    response = client.post(
+        "/ask/stream", headers=H, json={"question": "解释实验结论"},
+    )
+    assert response.status_code == 200
+    text = response.text
+    order = [
+        text.index("event: chat.searching"),
+        text.index("event: chat.draft"),
+        text.index("event: chat.regenerating"),
+        text.rindex("event: chat.draft"),
+        text.index("event: chat.finalize"),
+        text.index("event: chat.citations"),
+    ]
+    assert order == sorted(order)
+    assert '"citations"' not in text[text.index("event: chat.finalize"):text.index("event: chat.citations")]
+
+
 def test_runs_endpoint_replays_recent_trace(api_client):
     """/runs/{trace_id}：检索后可回读同一 trace；未知 id 是 404；必须带鉴权。"""
     client, _main = api_client

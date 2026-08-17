@@ -16,6 +16,7 @@ import pytest
 
 from app.db.database import connect, init_db
 from app.index.pipeline import index_pending
+from app.qa import answer as answer_module
 from app.qa import llm
 from app.qa.answer import REFUSAL, ask
 from app.watcher.scanner import scan_source
@@ -53,6 +54,7 @@ class _StatusLLM(BaseHTTPRequestHandler):
 
     def do_POST(self):
         self.send_response(self.status_code)
+        self.send_header("Content-Length", "0")
         self.end_headers()
 
     def log_message(self, *a):
@@ -83,11 +85,15 @@ def fake_server():
 
 
 @pytest.fixture
-def scripted(fake_server):
+def scripted(fake_server, monkeypatch):
     """配置 llm 指向假服务器；返回设定脚本的函数。"""
     llm.configure(fake_server, "sk-test-fake", "fake-model")
     _FakeLLM.scripts = []
     _FakeLLM.seen = []
+    monkeypatch.setattr(
+        answer_module, "_verify_claim_support",
+        lambda _question, claims: ([True] * len(claims), True, ""),
+    )
 
     def set_scripts(*texts):
         _FakeLLM.scripts = list(texts)
@@ -101,8 +107,8 @@ def db(tmp_path):
     conn = connect(":memory:")
     init_db(conn)
     conn.execute(
-        "INSERT INTO sources (name, path, kind, discovered_by, created_at) "
-        "VALUES ('S', ?, 'manual', 'manual', ?)", (str(tmp_path), time.time()),
+        "INSERT INTO sources (name, path, kind, discovered_by, enabled, created_at) "
+        "VALUES ('S', ?, 'manual', 'manual', 1, ?)", (str(tmp_path), time.time()),
     )
     (tmp_path / "瓷器.txt").write_text(
         "汝窑天青釉的烧成温度在一千二百度上下，还原气氛决定呈色。" * 6, encoding="utf-8")
@@ -161,6 +167,8 @@ def test_model_probe_maps_http_failure(status_code, code):
     finally:
         llm.configure("", "", "")
         srv.shutdown()
+        srv.server_close()
+        thread.join(timeout=2)
 
     assert result["available"] is False
     assert result["code"] == code
@@ -224,9 +232,29 @@ def test_answered_with_citations(db, scripted):
     assert a.validation["attempts"] == 1
     assert a.trace["trace_id"]
     assert [stage["name"] for stage in a.trace["stages"]] == [
-        "hierarchy_routing", "deep_retrieval", "decompose", "scope", "rrf",
+        "hierarchy_routing", "lexical_retrieval", "embed_query",
+        "deep_retrieval", "decompose", "scope", "rrf",
         "rerank", "diversify", "expand", "compress", "assemble",
     ]
+
+
+def test_short_cited_numeric_fact_reaches_support_verifier(
+    db, scripted, monkeypatch,
+):
+    seen = []
+
+    def verify(_question, claims):
+        seen.extend(claims)
+        return [True] * len(claims), True, ""
+
+    monkeypatch.setattr(answer_module, "_verify_claim_support", verify)
+    scripted("32 字节 [C1]。")
+
+    answer = ask(db, "汝窑的烧成温度是多少")
+
+    assert answer.status == "answered"
+    assert len(seen) == 1
+    assert seen[0][1].startswith("32 字节")
 
 
 def test_fabricated_citation_stripped(db, scripted):
@@ -270,7 +298,117 @@ def test_zero_citation_regenerates(db, scripted):
     assert len(_FakeLLM.seen) == 2
     # 重试请求里带了纠正指令
     retry_msgs = _FakeLLM.seen[1]["messages"]
-    assert any("没有任何 [Cn] 引用" in m["content"] for m in retry_msgs)
+    assert any("未逐条引用" in m["content"] for m in retry_msgs)
+
+
+def test_partial_citation_regenerates(db, scripted):
+    scripted(
+        "烧成温度在一千二百度上下 [C1]。这一结论还需要行业经验补充。",
+        "烧成温度在一千二百度上下 [C1]。",
+    )
+
+    answer = ask(db, "汝窑的烧成温度是多少")
+
+    assert answer.status == "answered"
+    assert answer.validation["attempts"] == 2
+    assert answer.validation["uncited_claims"] == 1
+    assert "行业经验" not in answer.answer
+
+
+def test_semantically_unsupported_citations_retry_then_refuse(
+    db, scripted, monkeypatch,
+):
+    monkeypatch.setattr(
+        answer_module, "_verify_claim_support",
+        lambda _question, claims: ([False] * len(claims), False, ""),
+    )
+    monkeypatch.setattr(answer_module, "_rewrite_for_retrieval", lambda _query: None)
+    scripted(
+        "SMTP 握手流程与 FTP 相同 [C1]。",
+        "SMTP 握手流程与 FTP 相同 [C1]。",
+        "SMTP 握手流程与 FTP 相同 [C1]。",
+    )
+
+    answer = ask(db, "SMTP 协议的握手流程")
+
+    assert answer.status == "refused"
+    assert answer.answer == REFUSAL
+    assert answer.validation["attempts"] == 3
+    assert answer.validation["unsupported_claims"] == 1
+
+
+def test_explicit_scope_verifier_rejects_generic_policy(monkeypatch):
+    def unexpected_call(*_args, **_kwargs):
+        pytest.fail("scope mismatch should be rejected before the LLM verifier")
+
+    monkeypatch.setattr(llm, "chat", unexpected_call)
+    claims = [(
+        "按审批权限签批 [C1]。",
+        "按审批权限签批。",
+        ["文件名：学校财务报销办法.pdf\n学校经费按审批权限审查签批。"],
+    )]
+
+    judgments, answerable, note = answer_module._verify_claim_support(
+        "请仅根据我的文件库回答：社团经费报销的审批流程",
+        claims,
+    )
+
+    assert judgments == [True]
+    assert answerable is False
+    assert note == "scope_mismatch"
+
+
+def test_incomplete_supported_answer_gets_final_strict_retry(
+    db, scripted, monkeypatch,
+):
+    verdicts = iter((False, False, True))
+
+    def verify(_question, claims):
+        return [True] * len(claims), next(verdicts), ""
+
+    monkeypatch.setattr(answer_module, "_verify_claim_support", verify)
+    scripted(
+        "socket 负责网络通信 [C1]。",
+        "socket 负责网络通信 [C1]。",
+        "socket 负责网络通信 [C1]。\nssl 负责加密连接 [C1]。",
+    )
+
+    answer = ask(db, "项目使用了哪些标准库，各自负责什么")
+
+    assert answer.status == "answered"
+    assert answer.validation["attempts"] == 3
+    assert "ssl 负责加密连接" in answer.answer
+    retry_messages = _FakeLLM.seen[2]["messages"]
+    assert any("全部必要事实" in message["content"] for message in retry_messages)
+
+
+def test_answerable_with_unsupported_claim_gets_final_strict_retry(
+    db, scripted, monkeypatch,
+):
+    calls = 0
+
+    def verify(_question, claims):
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            return [True, False], True, ""
+        return [True] * len(claims), True, ""
+
+    monkeypatch.setattr(answer_module, "_verify_claim_support", verify)
+    scripted(
+        "socket 负责网络通信 [C1]。\nssl 一定使用第三方库 [C1]。",
+        "socket 负责网络通信 [C1]。\nssl 一定使用第三方库 [C1]。",
+        "socket 负责网络通信 [C1]。\nssl 负责加密连接 [C1]。",
+    )
+
+    answer = ask(db, "项目使用了哪些标准库，各自负责什么")
+
+    assert answer.status == "answered"
+    assert answer.validation["attempts"] == 3
+    assert "ssl 负责加密连接" in answer.answer
+    retry_messages = _FakeLLM.seen[2]["messages"]
+    assert any("不能由引用直接支持" in message["content"]
+               for message in retry_messages)
 
 
 def test_persistent_zero_citation_falls_back(db, scripted):
@@ -314,6 +452,21 @@ def test_general_question_routes_past_kb(db, scripted):
     assert "你好" in a.answer
     assert "【通用】" not in a.answer, "路由标记不能泄漏到答案里"
     assert a.validation["mode"] == "general"
+
+
+def test_explicit_knowledge_scope_rejects_general_route(db, scripted):
+    scripted(
+        "【通用】热水通常按当地水价收费。",
+        "【通用】可以咨询宿管获取价格。",
+    )
+
+    answer = ask(db, "请仅根据我的文件库回答：宿舍热水每立方米收费多少")
+
+    assert answer.status == "refused"
+    assert answer.answer == REFUSAL
+    assert answer.mode == "knowledge"
+    assert answer.validation["attempts"] == 2
+    assert answer.validation["invalid_general_route"] is True
 
 
 def test_general_answer_strips_stray_citations(db, scripted):
@@ -360,6 +513,52 @@ def test_refusal_triggers_retrieval_rewrite(db, scripted):
     assert a.citations
 
 
+def test_high_confidence_refusal_gets_same_context_retry(db, scripted, monkeypatch):
+    from app.index import confidence
+
+    monkeypatch.setattr(
+        confidence, "assess",
+        lambda _conn, _query, _top: confidence.Confidence("high", 0.9, []),
+    )
+    monkeypatch.setattr(answer_module, "_rewrite_for_retrieval", lambda _query: None)
+    scripted(
+        REFUSAL,
+        "烧成温度在一千二百度上下 [C1]。",
+    )
+
+    answer = ask(db, "汝窑的烧成温度是多少")
+
+    assert answer.status == "answered"
+    assert answer.validation["same_context_retry"] is True
+
+
+def test_explicit_knowledge_scope_keeps_high_confidence_refusal(
+    db, scripted, monkeypatch,
+):
+    from app.index import confidence
+
+    monkeypatch.setattr(
+        confidence, "assess",
+        lambda _conn, _query, _top: confidence.Confidence("high", 0.9, []),
+    )
+    monkeypatch.setattr(
+        answer_module, "_rewrite_for_retrieval",
+        lambda _query: pytest.fail("explicit-scope refusal must not be rewritten"),
+    )
+    scripted(REFUSAL)
+
+    answer = ask(
+        db,
+        "请仅根据我的文件库回答：社团经费报销的审批流程",
+    )
+
+    assert answer.status == "refused"
+    assert answer.answer == REFUSAL
+    assert "same_context_retry" not in answer.validation
+    assert answer.validation["knowledge_scope_refusal_preserved"] is True
+    assert len(_FakeLLM.seen) == 1
+
+
 def test_llm_error_degrades_to_snippets(db, scripted, monkeypatch):
     """模型调用失败（限流/断网/中转不兼容）不炸接口 → 降级为片段并说明原因。"""
     def boom(*_args, **_kwargs):
@@ -372,6 +571,7 @@ def test_llm_error_degrades_to_snippets(db, scripted, monkeypatch):
     assert a.retrieved, "降级必须带出检索到的原文片段"
     assert "模型调用失败" in a.hedge
     assert a.validation["error"]
+    assert a.validation["error_type"] == "LLMHTTPError"
 
 
 def test_refusal_passthrough(db, scripted):

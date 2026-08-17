@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 
 import pytest
@@ -76,10 +78,17 @@ def test_single_instance_lock_blocks_second_holder(tmp_path, monkeypatch) -> Non
 
     contender = open(lock_path, "a+")
     try:
-        import fcntl
+        if os.name == "nt":
+            import msvcrt
 
-        with pytest.raises(OSError):
-            fcntl.flock(contender.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            contender.seek(0)
+            with pytest.raises(OSError):
+                msvcrt.locking(contender.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            with pytest.raises(OSError):
+                fcntl.flock(contender.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     finally:
         contender.close()
         database.release_single_instance_lock()
@@ -145,6 +154,33 @@ def test_daily_backup_is_created_once_and_does_not_capture_later_writes(tmp_path
     finally:
         snap.close()
         conn.close()
+
+
+def test_concurrent_daily_backup_reuses_one_restorable_snapshot(tmp_path) -> None:
+    db_path = tmp_path / "library.db"
+    seed = _file_db(db_path)
+    seed.execute(
+        "INSERT INTO categories (name, sort_order) VALUES ('并发备份标记', 0)"
+    )
+    seed.commit()
+    seed.close()
+
+    backup_dir = tmp_path / "backups"
+
+    def create() -> Path:
+        conn = database.connect(db_path)
+        try:
+            return database.create_daily_backup(
+                conn, backup_dir=backup_dir, today=date(2026, 8, 12),
+            )
+        finally:
+            conn.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        backups = list(executor.map(lambda _item: create(), range(2)))
+
+    assert backups[0] == backups[1]
+    assert database.backup_is_restorable(backups[0])
 
 
 def test_backup_rotation_keeps_latest_seven(tmp_path) -> None:

@@ -2,13 +2,54 @@
 
 **版本**：v7
 
-**日期**：2026-08-12
+**日期**：2026-08-16（v8 验收收口）
 
-**平台**：macOS 优先
+**平台**：macOS 优先，Windows x64 已完成移植与打包验证
 
 **状态**：本文件取代 v6，作为后续产品、架构、实现和验收的唯一计划依据。
 
 > Inktable 是一个本地优先的个人知识库。文件管理负责让知识来源可靠、可追踪、可治理；分层索引、混合检索、Rerank、上下文压缩和带引用问答负责让知识可查、可问、可复用。
+
+## 0.1 当前验收快照（2026-08-16，检索延迟一节更新至 2026-08-18）
+
+本节覆盖并取代下方历史执行日志中的旧数量和旧模型描述；历史段落保留
+用于追溯，不应作为当前发布状态引用。
+
+> **2026-08-18 更新**：§10.4 的两条延迟门槛已通过（非生成搜索 P95
+> 4121ms → **977ms**、Rerank P95 878ms → **29ms**），检索质量指标不变，
+> 已用强制回退原 vec0 KNN 路径复跑评测确认两条路径结果一致。同轮新增
+> 可选的级联重排（`INKTABLE_RERANKER=cascade`）把 Content Recall@5 提到
+> 96.2%、Recall@20 提到 100%，但 §10.3 的「相对 RRF 提升 ≥15%」两种配置
+> 都未达到。全部实测数据、根因、退化路径与对该门槛可达性的讨论见
+> `docs/RETRIEVAL-PERF.md`。改动 `app/index/vector.py` 前必读该文档
+> ——向量矩阵走的是 sqlite-vec 影子表的内部布局。
+> 后端回归 259 → **276 passed**，桌面 15 → **16 passed**。
+
+- Gold 合约：77 题（46 answerable、7 metadata、12 corpus-missing、12
+  unanswerable），96 个证据要求、691 个精确 span。
+- 检索生产默认：`local-static-v3`；53 个可评估问题 Recall@5 94.34%、
+  MRR@10 88.11%、nDCG@10 91.04%、P95 2.669 秒。RRF 控制为
+  96.23%/86.45%/88.69%。
+- Cross-Encoder 已可冻结运行，但相对 RRF 的 MRR/nDCG 提升约
+  7.95%/7.85%，未达到 +15% 选型门槛，且 P95 约 16.5 秒；生产继续用
+  `local-static-v3`。
+- 压缩门槛已通过：Gold Evidence Recall 98.96%、完整案例 97.83%、中位
+  压缩 61.98%、P95 247.5 ms、offset 往返错误 0；唯一漏例为上游 X10。
+- 正式真实模型 QA：`kocode / gpt-5.6-sol` 完成 65/65；引用支持率
+  95.16%、精确引用率 100%、句级引用覆盖 100%、正确拒答率 100%
+  （12/12），无 provider failure 或 degraded；A13、S17 为 fallback。
+- 工程回归：后端 `259 passed`，桌面 `15 passed`，`compileall` 与
+  `git diff --check` 通过。
+- Windows x64 PyInstaller sidecar SHA-256 为
+  `2670F7BFFA026E8FCBB82D0D30010DEFE0EF634FC0932D3DF647D046AE77B986`；
+  NSIS 安装包 `dist/Inktable-0.3.0-Setup-x64.exe` 为 194,761,734 bytes，
+  SHA-256 `E24D5588968B85B380A3A9DC6A407EAEF88FF8973F1C776F47CBF08CB53006E8`。
+- Windows 冻结 sidecar 已端到端识别真实无文本层 PDF（`Windows.Media.Ocr`），
+  识别正文可进入索引与搜索；同次 trace 使用 `local-static-v3` 且未降级。
+- 新目录静默安装退出码 0；安装版 Electron 首次引导、搜索空态、设置页、
+  sidecar ready 与退出生命周期均通过，退出后 Electron/sidecar 无残留。
+  真实库只读审计 `quick_check=ok`、外键错误 0，chunks 与两套 FTS、
+  Document/Section FTS、sqlite-vec rowid 均双向一致且无关系孤儿。
 
 ## 0. v7 决策摘要
 
@@ -691,6 +732,13 @@ ExpandedEvidence
 **执行状态（2026-08-14 追加）**：嵌入模型换代 —— 移除内置 model2vec 静态嵌入（potion 裁剪版 256 维，含仓库约 770 MB 模型文件与 tokenizers/safetensors 依赖），改为本机 **Ollama + bge-m3**（1024 维上下文编码；`GET /api/tags` 探测 30 秒缓存，`POST /api/embed` 批量编码，未检测到自动降级纯 FTS5）。向量表维度迁移自动化（`_init_vec_table` 检测不符即重建 + 清 `embedding_model_id` 触发回填），真实库 5535 片全量重嵌完成。随后修复换代引出的性能坑：重排现场编码 80 候选耗时 6–14 秒 → 改为批量复用 `chunks_vec` 已入库向量（真实库单查询 13.9s → 0.4s / 8.1s → 2.0s），查询变体合并批量编码，问答生成超时 60s → 180s；72 题评测复测达标（Recall@5 95.0%）。引用标签支持三位数（`[C100+]` 此前前后端正则均漏）。可见性口径扩展：磁盘上已消失且无保全副本的文件从全部视图隐藏（有保全副本的继续可见，文件回归自动恢复）。回归规模：后端 209 项、桌面 15 项全绿。
 
 **执行状态（2026-08-13）**：已完成，随 0.3.0 交付（`docs/RELEASE-0.3.0.md`）。本里程碑不在 v7 原始计划内，来源于用户实际使用反馈的连续迭代。要点：① 信息架构 v3——左栏收敛为"范围 + 文件树"（`GET /files/tree` 从库内路径推导，目录点击经 `/files?dir=` 前缀过滤），中栏在"扩展名分组列表（`group=ext` 服务端窗口函数排序）⇄ 全文查看器（`GET /files/{id}/content` 分页续载）"之间整页切换；② 可见性口径统一（`VISIBLE_FILES_COND`）——停用来源的文件在列表/统计/搜索/分类计数中全部隐藏，记录与索引保留，重新启用即恢复；③ 默认自动分类（`POST /classify/auto_ext`，规则化、不覆盖手动、可关闭）；④ **语义向量存量补齐**（`POST /index/embed_backfill`）——修复"模型晚于内容入库导致 95% 分片无向量"的长期缺口，真实库从 194/3627 补齐至 3627/3627；⑤ 设置三栏（通用/来源/模型），数据目录可迁移（`INKTABLE_DATA_DIR` + 停库搬迁 + `POST /system/rebase_preserved` 路径重写）；⑥ cc-switch 供应商导入（`GET /integrations/ccswitch` 只读解析，分组展示、选中高亮），"检测连接"升级为真实补全测试（返回实际回复与耗时，512 token 防推理模型假阴性）；⑦ 来源发现扩展——QQ NT 接收目录（存在即显示）、飞书/Lark/钉钉/企业微信规则、浏览器自定义下载目录（默认 ~/Downloads 归"下载"系统来源，Chrome/Edge/Brave/Arc/Vivaldi/Safari/Firefox）。回归规模：后端 179 项、桌面 15 项全绿；72 题检索评测与压缩评测未受影响（检索管线本轮无行为变更，除 /search 增加可见性过滤）。遗留与 0.2.0 相同：Cross-Encoder 门槛、两项真实模型 QA 指标、代码签名；新增注意项：Anthropic 中转的 OpenAI 协议兼容性以"检测连接"实测为准，办公应用路径规则未在真机验证。
+
+**最终发布验收（2026-08-16）**：0.3.0 的 65 题正式 QA、259 项后端测试、
+15 项桌面测试、Windows sidecar/NSIS 构建、隔离安装版 Electron 冒烟、
+退出进程树清理和真实库只读一致性审计全部完成。Cross-Encoder 的 +15%
+相对提升门槛仍只用于是否切换生产 reranker；因未达到，生产继续使用已通过
+绝对质量门槛的 `local-static-v3`。剩余发布限制为代码未签名及文档列出的
+平台能力差异，不再有真实模型 QA 阻塞项。
 
 ## 14. 风险登记
 

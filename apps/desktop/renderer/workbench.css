@@ -122,7 +122,7 @@ body {
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "PingFang SC", "Hiragino Sans GB", "Segoe UI", "Microsoft YaHei", "Helvetica Neue", sans-serif;
   font-size: 13px;
   line-height: 1.5;
   letter-spacing: -0.006em;
@@ -160,6 +160,14 @@ textarea:focus-visible,
 .hit:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+/* 已有容器级聚焦样式（focus-within 描边 + 柔光）的输入框，
+   豁免上面的方形 outline —— 否则圆角胶囊里会叠出一个蓝色矩形。 */
+.query-controls .search:focus-visible,
+.composer-box textarea:focus-visible,
+.llm-form input:focus-visible {
+  outline: none;
 }
 
 /* 精致 macOS 风格细滚动条 */
@@ -1825,6 +1833,51 @@ body.resizing * {
   font-size: 10px;
 }
 
+/* 设置：文件来源列表 */
+.srow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.srow:last-child {
+  border-bottom: 0;
+}
+
+.srow .info {
+  flex: 1;
+  min-width: 0;
+}
+
+.srow .nm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 550;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.srow .pth {
+  margin-top: 2px;
+  color: var(--text-3);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.srow .acts {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
 /* 分段选择器 (Segmented Control) */
 .seg {
   display: inline-flex;
@@ -1955,12 +2008,20 @@ body.resizing * {
 }
 
 /* 首次设置引导 (Setup) */
+.setup {
+  /* 基类是横向 flex（.sheet 只有单个子元素无所谓），这里必须纵向：
+     拖拽条在顶、卡片居中、页脚按钮在卡片下方 —— 不设的话页脚会
+     横着排到卡片右侧。 */
+  flex-direction: column;
+}
+
 .setup .body {
-  width: 520px;
+  width: 560px;
   max-width: 90vw;
-  padding: 24px;
+  padding: 24px 24px 18px;
   border: 1px solid var(--line-soft);
-  border-radius: 14px;
+  border-bottom: 0;
+  border-radius: 14px 14px 0 0;
   background: var(--surface);
   box-shadow: var(--shadow-pop);
 }
@@ -1981,15 +2042,66 @@ body.resizing * {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 18px;
-  padding-top: 14px;
-  border-top: 1px solid var(--line-soft);
+  width: 560px;
+  max-width: 90vw;
+  padding: 12px 20px;
+  border: 1px solid var(--line-soft);
+  border-radius: 0 0 14px 14px;
+  background: var(--surface-2);
+  box-shadow: var(--shadow-pop);
 }
 
-.src-row {
+.setup .foot button {
+  min-height: 30px;
+  padding: 0 14px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all .12s ease;
+}
+
+.setup .foot .hint {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.4;
+}
+
+#btnEnable {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+#btnEnable:not(:disabled):hover {
+  background: var(--accent-strong);
+}
+
+#btnEnable:disabled {
+  opacity: .45;
+  cursor: default;
+}
+
+.setup .foot .ghost {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text-2);
+}
+
+.setup .foot .ghost:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.setup #srcList {
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+/* 发现结果条目（renderSetup 生成 .src / .info / .nm / .pth / .meta / .cnt） */
+.src {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   padding: 10px 12px;
   margin-bottom: 6px;
@@ -1998,22 +2110,43 @@ body.resizing * {
   background: var(--surface-2);
 }
 
-.src-name {
+.src input[type="checkbox"] {
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+}
+
+.src .info {
+  flex: 1;
+  min-width: 0;
+}
+
+.src .nm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12.5px;
   font-weight: 600;
 }
 
-.src-path {
+.src .pth {
   margin-top: 2px;
   color: var(--text-3);
   font-size: 10.5px;
   overflow-wrap: anywhere;
 }
 
-.src-acts {
-  display: flex;
-  gap: 6px;
+.src .meta {
   flex-shrink: 0;
+  color: var(--text-3);
+  font-size: 11px;
+  text-align: right;
+}
+
+.src .cnt {
+  color: var(--text);
+  font-weight: 700;
 }
 
 /* 弹层提示 (Toast) */
@@ -2079,4 +2212,23 @@ body.resizing * {
   height: 1px;
   margin: 4px 2px;
   background: var(--line-soft);
+}
+
+/* ---------- 平台适配 ----------
+   Windows 用「窗口控件叠加」对齐 macOS 的一体化顶栏（见 main.js）：
+   左侧没有红绿灯，不预留 86px；右侧要给系统叠加的窗口按钮让位 ——
+   env(titlebar-area-*) 由叠加层提供，不可用时回退为普通 16px 边距。
+   Linux 是系统原生标题栏，仅去掉左侧预留。 */
+.is-win32 .topbar {
+  padding-left: 16px;
+  padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100vw - 16px)));
+}
+
+.is-linux .topbar {
+  padding-left: 16px;
+}
+
+.is-win32 .drag,
+.is-linux .drag {
+  height: 12px;
 }

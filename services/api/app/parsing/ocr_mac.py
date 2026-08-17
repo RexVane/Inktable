@@ -21,6 +21,9 @@ from pathlib import Path
 
 log = logging.getLogger("inktable.ocr")
 
+ENGINE_ID = "macos-vision"
+ENGINE_LABEL = "macOS Vision"
+
 OCR_MAX_PAGES = 25
 OCR_TOTAL_BUDGET = 150.0   # 秒
 OCR_PAGE_TIMEOUT = 30.0    # 秒/页

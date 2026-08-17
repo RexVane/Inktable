@@ -19,6 +19,7 @@ import pytest
 from app.db.database import connect, init_db
 from app.watcher import stability
 from app.watcher.service import WatchService
+from app.watcher.service import INITIAL_RECONCILE_DELAY, RECONCILE_INTERVAL
 from app.watcher.stability import looks_like_temp, stabilize
 from app.watcher.watcher import Watcher, _Handler
 
@@ -86,7 +87,8 @@ class TestStability:
 
         with open(f, "ab") as writer:
             # 句柄仍开着，但普通 writer 没主动 flock，另一个 fd 仍可取锁。
-            assert stability._has_exclusive_lock(str(f))
+            if os.name != "nt":
+                assert stability._has_exclusive_lock(str(f))
             sampled = False
 
             def not_stable(_path):
@@ -227,11 +229,43 @@ def test_reconcile_recovers_files_created_while_app_was_off(tmp_path, monkeypatc
             return None
 
     service._watcher = FakeWatcher()
-    monkeypatch.setattr("app.watcher.service.index_pending", lambda _c, limit: {"total": 0})
+    monkeypatch.setattr(
+        "app.watcher.service.index_pending",
+        lambda _c, limit, embed=True: {"total": 0},
+    )
 
     result = service._reconcile_once()
     row = conn.execute("SELECT name, path FROM files").fetchone()
     assert result["registered"] == 1
     assert row["name"] == late.name
     assert row["path"] == str(late)
+    conn.close()
+
+
+def test_source_enabled_before_start_does_not_delay_initial_reconcile(tmp_path, monkeypatch):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    conn = connect(":memory:")
+    init_db(conn)
+    conn.execute(
+        """INSERT INTO sources
+           (name, path, kind, discovered_by, enabled, created_at)
+           VALUES ('S', ?, 'manual', 'manual', 1, ?)""",
+        (str(inbox), time.time()),
+    )
+    conn.commit()
+    service = WatchService(lambda: conn, threading.Lock())
+    service._watcher = SimpleNamespace(
+        watched_paths=[],
+        watch=lambda _path: True,
+    )
+    scheduled = []
+    monkeypatch.setattr(service, "_start_reconciler", scheduled.append)
+
+    assert service.watch(str(inbox))
+    assert scheduled == []
+    service.start()
+    assert scheduled == [INITIAL_RECONCILE_DELAY]
+    assert service.watch(str(inbox))
+    assert scheduled == [INITIAL_RECONCILE_DELAY, RECONCILE_INTERVAL]
     conn.close()

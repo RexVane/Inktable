@@ -169,20 +169,39 @@
 
 ## 测试与工具
 
-- 后端 208 项、桌面 15 项测试全绿；新增覆盖：文件树/目录过滤、
+- 后端 259 项、桌面 15 项测试全绿；新增覆盖：文件树/目录过滤、
   停用隐藏与恢复、自动分类、全文分页、扩展名分组排序、向量补齐、
   cc-switch 解析、保全路径重写、真实补全探测、Ollama 嵌入
-  （假服务器测探测/编码/降级/维度迁移）、三位数引用标签。
+  （假服务器测探测/编码/降级/维度迁移）、三位数引用标签、正式 QA
+  evaluator、Windows 系统 OCR 真机识别与 PyInstaller 进程树清理。
 - 增量嵌入复用测试改用决定论假编码器，不再依赖本机模型，
   在任何环境都可运行。
 - 预览截图工具扩展：纯列表页、详情往返、设置双页等状态；
   启动前清空 localStorage，避免旧会话污染截图。
 
+## 发布验收（2026-08-16）
+
+- `kocode / gpt-5.6-sol` 正式 QA 完成 65/65：引用支持率 95.16%、
+  精确引用率 100%、句级引用覆盖 100%、正确拒答率 100%（12/12），
+  无 provider failure 或 degraded；A13、S17 为显式 fallback。
+- Windows sidecar SHA-256：
+  `2670F7BFFA026E8FCBB82D0D30010DEFE0EF634FC0932D3DF647D046AE77B986`。
+- Windows NSIS：`dist/Inktable-0.3.0-Setup-x64.exe`，194,761,734 bytes，
+  SHA-256 `E24D5588968B85B380A3A9DC6A407EAEF88FF8973F1C776F47CBF08CB53006E8`。
+- 冻结 sidecar 使用独立数据库收录真实无文本层 PDF，系统 OCR 识别出
+  `INKTABLE OCR 2048` 并可全文搜索；检索 trace 为 `local-static-v3`，
+  `degraded=false`。安装目录 sidecar 与该验收二进制 SHA-256 一致。
+- 全新目录静默安装退出码 0；安装版首次引导、搜索、设置页、暗色主题、
+  sidecar ready 均通过截图和 DOM 检查，无布局越界。关闭后 Electron 与
+  PyInstaller 两层 sidecar 全部退出，无数据库锁残留。
+- 真实库只读审计通过：`quick_check=ok`、外键错误 0；29,434 个 chunks
+  与两套 chunk FTS、29,434 个 sqlite-vec rowid 双向一致；2,510 个
+  Document 和 15,071 个 Section 的 FTS rowid 双向一致，关系孤儿为 0。
+
 ## 已知限制
 
-- Cross-Encoder 选型门槛（nDCG 相对 +15%）仍未过，本地静态重排 +8.7%；
-  引入 onnxruntime 依赖待批准。
-- 「引用支持率/正确拒答率」两项 LLM 指标待真实模型跑批。
+- ONNX Cross-Encoder 已实装并冻结评测，但相对 RRF 的 MRR/nDCG 提升仅
+  约 7.95%/7.85%，未达到 +15% 选型门槛，因此不切换生产默认。
 - Anthropic 中转是否兼容 OpenAI 协议因站而异，以「检测连接」实测为准。
 - 飞书/钉钉/企业微信路径规则未在真机验证（本机未安装），
   探测失败会静默跳过，不影响其余来源。

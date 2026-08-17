@@ -97,7 +97,7 @@ def _has_exclusive_lock(path: str) -> bool:
         import fcntl
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         return True
-    except OSError:
+    except (ImportError, OSError):  # Windows 无 fcntl：诊断探测视为不持锁
         return False
     finally:
         os.close(fd)

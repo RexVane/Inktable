@@ -67,12 +67,12 @@ def parse_pdf(path: Path) -> ParsedDoc:
     finally:
         doc.close()
 
-    # 扫描件（纯图片 PDF）没有文本层 → 走 macOS Vision OCR（零依赖，可在设置关闭）
+    # 扫描件（纯图片 PDF）没有文本层 → 走当前平台系统 OCR（可在设置关闭）
     if not blocks:
-        from app.parsing import ocr_mac
+        from app.parsing import ocr
 
-        if ocr_mac.runtime_enabled() and ocr_mac.is_available():
-            pages, ocr_warnings = ocr_mac.ocr_pdf(path)
+        if ocr.runtime_enabled() and ocr.is_available():
+            pages, ocr_warnings = ocr.ocr_pdf(path)
             warnings.extend(ocr_warnings)
             for page_no, text in pages:
                 for para in _split_paragraphs(text):

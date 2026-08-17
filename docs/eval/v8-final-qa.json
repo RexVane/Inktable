@@ -1,0 +1,5360 @@
+{
+  "schema_version": 2,
+  "provider": "kocode",
+  "model": "gpt-5.6-sol",
+  "gold": "docs/eval/gold-evidence-spans.json",
+  "probe": {
+    "available": true,
+    "code": "ready",
+    "latency_ms": 2202
+  },
+  "summary": {
+    "complete": true,
+    "completed": 65,
+    "expected": 65,
+    "answer_success_rate": 0.9622641509433962,
+    "citation_support_rate": 0.9516129032258065,
+    "supported_claims": 118,
+    "claims": 124,
+    "gold_evidence_citation_recall": 0.6893203883495146,
+    "gold_evidence_citation_hit": 71,
+    "gold_evidence_citation_total": 103,
+    "exact_citation_rate": 1.0,
+    "statement_citation_coverage": 1.0,
+    "correct_refusal_rate": 1.0,
+    "correct_refusals": 12,
+    "unanswerable": 12
+  },
+  "results": [
+    {
+      "qid": "A01",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "dbe143b2dc9c127687236a4a3a30459a114e24c7666d43d830a9a43eb80d99e4",
+      "answer_chars": 123,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 2,
+      "exact_citations": 2,
+      "citation_tags_resolved": true,
+      "supported_claims": 3,
+      "claims": 3,
+      "citation_judge_error": "",
+      "gold_support_hit": 2,
+      "gold_support_total": 3,
+      "cited_statements": 3,
+      "statements": 3,
+      "validation": {
+        "attempts": 2,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 3,
+        "unsupported_claims": 0,
+        "answerable": true,
+        "uncited_claims": 1,
+        "retrieval_retry": "银行家算法中的数据结构、资源分配矩阵、最大需求矩阵、已分配资源矩阵、需求矩阵、可用资源向量、安全性算法、资源请求向量、Available、Max、Allocation、Need，Need = Max - Allocation，Banker’s Algorithm data structures and matrices"
+      },
+      "degraded": [],
+      "latency_ms": 72821.3,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 3.682
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1480.325,
+          "route_limit": 120,
+          "candidate_count": 279
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.009,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.003,
+          "candidate_count": 279
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.193,
+          "candidate_count": 243
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 415.817,
+          "candidate_count": 243,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.304
+        },
+        {
+          "name": "expand",
+          "duration_ms": 10.118
+        },
+        {
+          "name": "compress",
+          "duration_ms": 157.154
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 18.814
+        }
+      ]
+    },
+    {
+      "qid": "A02",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "f20b6d3437bb502ec9ecc145bfa0264f8d32261a2c3303153e32892f40657f69",
+      "answer_chars": 14,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 1,
+      "claims": 1,
+      "citation_judge_error": "",
+      "gold_support_hit": 2,
+      "gold_support_total": 2,
+      "cited_statements": 1,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 1,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 8202.0,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 3.039
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1022.502,
+          "route_limit": 120,
+          "candidate_count": 173
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.009,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.002,
+          "candidate_count": 220
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.137,
+          "candidate_count": 124
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 285.749,
+          "candidate_count": 124,
+          "reranked_count": 49,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.185
+        },
+        {
+          "name": "expand",
+          "duration_ms": 6.623
+        },
+        {
+          "name": "compress",
+          "duration_ms": 201.168
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 10.471
+        }
+      ]
+    },
+    {
+      "qid": "A03",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "10edc479b441526765d5f3c38f0d75c7ad398fef6ad8386d209589f23f76509e",
+      "answer_chars": 68,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 3,
+      "claims": 3,
+      "citation_judge_error": "",
+      "gold_support_hit": 3,
+      "gold_support_total": 3,
+      "cited_statements": 3,
+      "statements": 3,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 3,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 10307.5,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 6.917
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1129.123,
+          "route_limit": 120,
+          "candidate_count": 129
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.008,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.003,
+          "candidate_count": 161
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.154,
+          "candidate_count": 140
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 246.242,
+          "candidate_count": 140,
+          "reranked_count": 43,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.234
+        },
+        {
+          "name": "expand",
+          "duration_ms": 7.823
+        },
+        {
+          "name": "compress",
+          "duration_ms": 73.387
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 23.122
+        }
+      ]
+    },
+    {
+      "qid": "A04",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "e08798ea24d6e3e66db9fe8210009177aabd02ddba380f1b76ddf1b091acccf9",
+      "answer_chars": 8,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 1,
+      "claims": 1,
+      "citation_judge_error": "",
+      "gold_support_hit": 1,
+      "gold_support_total": 1,
+      "cited_statements": 1,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 1,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 9568.0,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 13.953
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1185.181,
+          "route_limit": 120,
+          "candidate_count": 414
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.007,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.002,
+          "candidate_count": 555
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.354,
+          "candidate_count": 354
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 482.528,
+          "candidate_count": 354,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.245
+        },
+        {
+          "name": "expand",
+          "duration_ms": 10.062
+        },
+        {
+          "name": "compress",
+          "duration_ms": 79.216
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 16.215
+        }
+      ]
+    },
+    {
+      "qid": "A05",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "b9c9c109094e48b4c73190a412ebe6a5a81298930b342025a3cc8e71df001c72",
+      "answer_chars": 18,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 1,
+      "claims": 1,
+      "citation_judge_error": "",
+      "gold_support_hit": 2,
+      "gold_support_total": 2,
+      "cited_statements": 1,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 1,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 9776.7,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 37.486
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1066.468,
+          "route_limit": 120,
+          "candidate_count": 258
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.011,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.004,
+          "candidate_count": 343
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.518,
+          "candidate_count": 292
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 561.283,
+          "candidate_count": 292,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.452
+        },
+        {
+          "name": "expand",
+          "duration_ms": 13.56
+        },
+        {
+          "name": "compress",
+          "duration_ms": 145.564
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 24.08
+        }
+      ]
+    },
+    {
+      "qid": "A06",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "0c37b344a91817a64c04395bcd0ee1016d1c6681132330d5e1df85f2f6c0d4c3",
+      "answer_chars": 117,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 3,
+      "exact_citations": 3,
+      "citation_tags_resolved": true,
+      "supported_claims": 4,
+      "claims": 4,
+      "citation_judge_error": "",
+      "gold_support_hit": 2,
+      "gold_support_total": 2,
+      "cited_statements": 4,
+      "statements": 4,
+      "validation": {
+        "attempts": 2,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "uncited_claims": 1,
+        "support_claims": 4,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 25318.7,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 2.765
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1011.08,
+          "route_limit": 120,
+          "candidate_count": 227
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.006,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.002,
+          "candidate_count": 326
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.195,
+          "candidate_count": 212
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 406.133,
+          "candidate_count": 212,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.307
+        },
+        {
+          "name": "expand",
+          "duration_ms": 10.885
+        },
+        {
+          "name": "compress",
+          "duration_ms": 89.454
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 19.269
+        }
+      ]
+    },
+    {
+      "qid": "A07",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "f5b59b8f405c2b7395321bf716546cc875d67e02a86dda81469fcba69e696711",
+      "answer_chars": 141,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 3,
+      "exact_citations": 3,
+      "citation_tags_resolved": true,
+      "supported_claims": 3,
+      "claims": 3,
+      "citation_judge_error": "",
+      "gold_support_hit": 1,
+      "gold_support_total": 3,
+      "cited_statements": 3,
+      "statements": 3,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 3,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 12492.1,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 5.186
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1144.974,
+          "route_limit": 120,
+          "candidate_count": 240
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.011,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.004,
+          "candidate_count": 323
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.367,
+          "candidate_count": 214
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 622.189,
+          "candidate_count": 214,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.306
+        },
+        {
+          "name": "expand",
+          "duration_ms": 17.861
+        },
+        {
+          "name": "compress",
+          "duration_ms": 272.547
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 24.163
+        }
+      ]
+    },
+    {
+      "qid": "A08",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "fe5c573486c5389b700c9ffe32751b3a9d7d74da176d7a320e6f2a1455293f9b",
+      "answer_chars": 156,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 3,
+      "exact_citations": 3,
+      "citation_tags_resolved": true,
+      "supported_claims": 4,
+      "claims": 4,
+      "citation_judge_error": "",
+      "gold_support_hit": 2,
+      "gold_support_total": 2,
+      "cited_statements": 4,
+      "statements": 4,
+      "validation": {
+        "attempts": 2,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "uncited_claims": 1,
+        "support_claims": 4,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 26431.1,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 41.273
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1038.694,
+          "route_limit": 120,
+          "candidate_count": 244
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.006,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.002,
+          "candidate_count": 374
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.226,
+          "candidate_count": 214
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 505.814,
+          "candidate_count": 214,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.262
+        },
+        {
+          "name": "expand",
+          "duration_ms": 8.726
+        },
+        {
+          "name": "compress",
+          "duration_ms": 79.044
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 27.618
+        }
+      ]
+    },
+    {
+      "qid": "A09",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "9376c1d72cb37c214a8bc416cee74a7e1862f93e3ca59ceab904c6fa64b353c6",
+      "answer_chars": 23,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 1,
+      "claims": 1,
+      "citation_judge_error": "",
+      "gold_support_hit": 0,
+      "gold_support_total": 2,
+      "cited_statements": 1,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "retrieval_retry": "决赛举办城市、承办学校、决赛地点、比赛举办地、决赛在哪座城市举行、由哪所学校承办、决赛场地、承办单位",
+        "support_claims": 1,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 21905.9,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 25.371
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1101.108,
+          "route_limit": 120,
+          "candidate_count": 269
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.011,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.003,
+          "candidate_count": 375
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.404,
+          "candidate_count": 250
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 477.453,
+          "candidate_count": 250,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.263
+        },
+        {
+          "name": "expand",
+          "duration_ms": 7.021
+        },
+        {
+          "name": "compress",
+          "duration_ms": 73.825
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 13.478
+        }
+      ]
+    },
+    {
+      "qid": "A10",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "81458ef6b63af06fa83cc19261e215fdfe9d66522ed60147144d3636cdc6540b",
+      "answer_chars": 330,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 8,
+      "exact_citations": 8,
+      "citation_tags_resolved": true,
+      "supported_claims": 6,
+      "claims": 6,
+      "citation_judge_error": "",
+      "gold_support_hit": 2,
+      "gold_support_total": 2,
+      "cited_statements": 6,
+      "statements": 6,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 6,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 21309.5,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 10.221
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1040.118,
+          "route_limit": 120,
+          "candidate_count": 243
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.01,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.004,
+          "candidate_count": 315
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.458,
+          "candidate_count": 261
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 360.421,
+          "candidate_count": 261,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.282
+        },
+        {
+          "name": "expand",
+          "duration_ms": 7.311
+        },
+        {
+          "name": "compress",
+          "duration_ms": 87.894
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 20.124
+        }
+      ]
+    },
+    {
+      "qid": "A11",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "82eb77a384b85020a1964c72c0f7bad2492413d0f961582d92fb441ec4c2f3b0",
+      "answer_chars": 60,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 3,
+      "claims": 3,
+      "citation_judge_error": "",
+      "gold_support_hit": 2,
+      "gold_support_total": 2,
+      "cited_statements": 3,
+      "statements": 3,
+      "validation": {
+        "attempts": 2,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 3,
+        "unsupported_claims": 0,
+        "answerable": true,
+        "uncited_claims": 0
+      },
+      "degraded": [],
+      "latency_ms": 29261.0,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 3.24
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1077.734,
+          "route_limit": 120,
+          "candidate_count": 154
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.014,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.006,
+          "candidate_count": 162
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.369,
+          "candidate_count": 156
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 212.455,
+          "candidate_count": 156,
+          "reranked_count": 46,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.276
+        },
+        {
+          "name": "expand",
+          "duration_ms": 8.157
+        },
+        {
+          "name": "compress",
+          "duration_ms": 57.104
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 12.691
+        }
+      ]
+    },
+    {
+      "qid": "A12",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "91dc782195a191b123ad1a5df646f75d7bea0adfca4e95a5121ffc830671ea73",
+      "answer_chars": 147,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 5,
+      "claims": 5,
+      "citation_judge_error": "",
+      "gold_support_hit": 2,
+      "gold_support_total": 2,
+      "cited_statements": 5,
+      "statements": 5,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 5,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 13030.9,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 6.104
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1331.614,
+          "route_limit": 120,
+          "candidate_count": 240
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.007,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.002,
+          "candidate_count": 240
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.198,
+          "candidate_count": 234
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 543.575,
+          "candidate_count": 234,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.295
+        },
+        {
+          "name": "expand",
+          "duration_ms": 12.892
+        },
+        {
+          "name": "compress",
+          "duration_ms": 418.801
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 34.663
+        }
+      ]
+    },
+    {
+      "qid": "A13",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "fallback",
+      "mode": "knowledge",
+      "answer_sha256": null,
+      "answer_chars": 0,
+      "answer_success": false,
+      "correct_refusal": false,
+      "citation_count": 0,
+      "exact_citations": 0,
+      "citation_tags_resolved": true,
+      "supported_claims": 0,
+      "claims": 1,
+      "citation_judge_error": "no_substantive_claim",
+      "gold_support_hit": 0,
+      "gold_support_total": 2,
+      "cited_statements": 0,
+      "statements": 0,
+      "validation": {
+        "attempts": 2,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "uncited_claims": 1,
+        "fallback": true
+      },
+      "degraded": [],
+      "latency_ms": 19358.1,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 21.334
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1093.873,
+          "route_limit": 120,
+          "candidate_count": 245
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.009,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.003,
+          "candidate_count": 375
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.442,
+          "candidate_count": 309
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 471.199,
+          "candidate_count": 309,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.349
+        },
+        {
+          "name": "expand",
+          "duration_ms": 12.303
+        },
+        {
+          "name": "compress",
+          "duration_ms": 131.99
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 21.958
+        }
+      ]
+    },
+    {
+      "qid": "A14",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "2f1d7544f1e24704a93e1b43c28b4a6c1ce019b47b4fcf02e902df34353062ca",
+      "answer_chars": 92,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 2,
+      "exact_citations": 2,
+      "citation_tags_resolved": true,
+      "supported_claims": 2,
+      "claims": 2,
+      "citation_judge_error": "",
+      "gold_support_hit": 1,
+      "gold_support_total": 1,
+      "cited_statements": 2,
+      "statements": 2,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 2,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 14474.9,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 10.474
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 982.963,
+          "route_limit": 120,
+          "candidate_count": 249
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.008,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.003,
+          "candidate_count": 307
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.274,
+          "candidate_count": 219
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 419.446,
+          "candidate_count": 219,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.239
+        },
+        {
+          "name": "expand",
+          "duration_ms": 7.507
+        },
+        {
+          "name": "compress",
+          "duration_ms": 81.401
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 14.011
+        }
+      ]
+    },
+    {
+      "qid": "A17",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "fd56bf7d0d4fb811a20eeedead626a8b3faffe08ffcc0f7ae9b268671e63bd73",
+      "answer_chars": 18,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 1,
+      "claims": 1,
+      "citation_judge_error": "",
+      "gold_support_hit": 1,
+      "gold_support_total": 1,
+      "cited_statements": 1,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 1,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 11720.8,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 494.716
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1115.129,
+          "route_limit": 120,
+          "candidate_count": 240
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.01,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.009,
+          "candidate_count": 348
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.246,
+          "candidate_count": 266
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 669.751,
+          "candidate_count": 266,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.28
+        },
+        {
+          "name": "expand",
+          "duration_ms": 11.532
+        },
+        {
+          "name": "compress",
+          "duration_ms": 194.545
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 33.427
+        }
+      ]
+    },
+    {
+      "qid": "A18",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "ba9f900c2cab4fda5ad49ee74ef32bbb741389caa566e49d88a589bfc0e0fc8c",
+      "answer_chars": 237,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 6,
+      "claims": 6,
+      "citation_judge_error": "",
+      "gold_support_hit": 2,
+      "gold_support_total": 2,
+      "cited_statements": 6,
+      "statements": 6,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 6,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 11682.3,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 17.316
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1015.837,
+          "route_limit": 120,
+          "candidate_count": 244
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.013,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.004,
+          "candidate_count": 318
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.474,
+          "candidate_count": 249
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 257.699,
+          "candidate_count": 249,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.235
+        },
+        {
+          "name": "expand",
+          "duration_ms": 8.086
+        },
+        {
+          "name": "compress",
+          "duration_ms": 68.941
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 15.08
+        }
+      ]
+    },
+    {
+      "qid": "F19",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "c5ba5e33aa6a08ee4e0143b6cc11fc1814c1835a7308ee30627b92ba3f563b62",
+      "answer_chars": 26,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 1,
+      "claims": 1,
+      "citation_judge_error": "",
+      "gold_support_hit": 0,
+      "gold_support_total": 1,
+      "cited_statements": 1,
+      "statements": 1,
+      "validation": {
+        "attempts": 2,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 1,
+        "unsupported_claims": 0,
+        "answerable": true,
+        "uncited_claims": 0
+      },
+      "degraded": [],
+      "latency_ms": 16480.2,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 5.681
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 966.161,
+          "route_limit": 120,
+          "candidate_count": 373
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.007,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.003,
+          "candidate_count": 439
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.274,
+          "candidate_count": 227
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 220.569,
+          "candidate_count": 227,
+          "reranked_count": 62,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.176
+        },
+        {
+          "name": "expand",
+          "duration_ms": 5.839
+        },
+        {
+          "name": "compress",
+          "duration_ms": 34.629
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 8.203
+        }
+      ]
+    },
+    {
+      "qid": "F20",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "d73854eaf61cb1b2daee60d6148a75f6b21d3c3d9a4fd8c81bfc59939b9a4cf5",
+      "answer_chars": 29,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 1,
+      "claims": 1,
+      "citation_judge_error": "",
+      "gold_support_hit": 1,
+      "gold_support_total": 1,
+      "cited_statements": 1,
+      "statements": 1,
+      "validation": {
+        "attempts": 3,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 1,
+        "unsupported_claims": 0,
+        "answerable": true,
+        "uncited_claims": 0
+      },
+      "degraded": [],
+      "latency_ms": 29184.8,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 1.265
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1274.113,
+          "route_limit": 120,
+          "candidate_count": 255
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.008,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.002,
+          "candidate_count": 255
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.172,
+          "candidate_count": 217
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 350.619,
+          "candidate_count": 217,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.567
+        },
+        {
+          "name": "expand",
+          "duration_ms": 19.743
+        },
+        {
+          "name": "compress",
+          "duration_ms": 156.776
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 23.294
+        }
+      ]
+    },
+    {
+      "qid": "F21",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "0b05bc39c91c06c61f4e92c5fa1b9a6b5239d1b16d836791506962914ef35b51",
+      "answer_chars": 31,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 2,
+      "claims": 2,
+      "citation_judge_error": "",
+      "gold_support_hit": 2,
+      "gold_support_total": 2,
+      "cited_statements": 2,
+      "statements": 2,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 2,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 9107.5,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 3.688
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1016.755,
+          "route_limit": 120,
+          "candidate_count": 264
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.008,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.004,
+          "candidate_count": 327
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.253,
+          "candidate_count": 201
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 200.829,
+          "candidate_count": 201,
+          "reranked_count": 65,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.198
+        },
+        {
+          "name": "expand",
+          "duration_ms": 5.303
+        },
+        {
+          "name": "compress",
+          "duration_ms": 24.67
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 6.772
+        }
+      ]
+    },
+    {
+      "qid": "F22",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "0a54dc1879be5655259ebd1666bca999052d05bc8ef15184546960b16d0f7929",
+      "answer_chars": 26,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 1,
+      "claims": 1,
+      "citation_judge_error": "",
+      "gold_support_hit": 1,
+      "gold_support_total": 1,
+      "cited_statements": 1,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 1,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 8731.1,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 4.325
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1045.458,
+          "route_limit": 120,
+          "candidate_count": 245
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.008,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.003,
+          "candidate_count": 305
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.264,
+          "candidate_count": 189
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 266.865,
+          "candidate_count": 189,
+          "reranked_count": 51,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.188
+        },
+        {
+          "name": "expand",
+          "duration_ms": 5.277
+        },
+        {
+          "name": "compress",
+          "duration_ms": 38.018
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 13.811
+        }
+      ]
+    },
+    {
+      "qid": "F23",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "94df4d7cf55547eebe89dfdf3c20d220f5b081c0fde39ce94062882308c81ac8",
+      "answer_chars": 24,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 1,
+      "claims": 1,
+      "citation_judge_error": "",
+      "gold_support_hit": 0,
+      "gold_support_total": 1,
+      "cited_statements": 1,
+      "statements": 1,
+      "validation": {
+        "attempts": 2,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 1,
+        "unsupported_claims": 0,
+        "answerable": true,
+        "uncited_claims": 0
+      },
+      "degraded": [],
+      "latency_ms": 17003.4,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 1.589
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 983.552,
+          "route_limit": 120,
+          "candidate_count": 137
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.006,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.002,
+          "candidate_count": 160
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.121,
+          "candidate_count": 125
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 270.212,
+          "candidate_count": 125,
+          "reranked_count": 76,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.258
+        },
+        {
+          "name": "expand",
+          "duration_ms": 8.351
+        },
+        {
+          "name": "compress",
+          "duration_ms": 68.829
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 12.737
+        }
+      ]
+    },
+    {
+      "qid": "F24",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "5e883e0a5121310abd7485f3be03472bf81ad19572c5348a73f114130b35077e",
+      "answer_chars": 26,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 1,
+      "claims": 1,
+      "citation_judge_error": "",
+      "gold_support_hit": 1,
+      "gold_support_total": 1,
+      "cited_statements": 1,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 1,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 9909.0,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 1.487
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1125.624,
+          "route_limit": 120,
+          "candidate_count": 240
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.007,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.002,
+          "candidate_count": 240
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.167,
+          "candidate_count": 205
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 191.033,
+          "candidate_count": 205,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.365
+        },
+        {
+          "name": "expand",
+          "duration_ms": 10.139
+        },
+        {
+          "name": "compress",
+          "duration_ms": 114.589
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 18.577
+        }
+      ]
+    },
+    {
+      "qid": "F25",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "352b156a1862b38be10f694bcccf3e512fd434be85ec52c6edb019f8fdec71d7",
+      "answer_chars": 72,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 0,
+      "claims": 1,
+      "citation_judge_error": "",
+      "gold_support_hit": 2,
+      "gold_support_total": 2,
+      "cited_statements": 1,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 1,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 11033.3,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 47.86
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1282.173,
+          "route_limit": 120,
+          "candidate_count": 307
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.02,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.004,
+          "candidate_count": 404
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.384,
+          "candidate_count": 219
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 596.86,
+          "candidate_count": 219,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.423
+        },
+        {
+          "name": "expand",
+          "duration_ms": 11.912
+        },
+        {
+          "name": "compress",
+          "duration_ms": 86.82
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 13.183
+        }
+      ]
+    },
+    {
+      "qid": "F26",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "28a282227514cf17ef3794dcde253a91dc2a7e5124c127ad56e2c97e6a4175f4",
+      "answer_chars": 9,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 1,
+      "claims": 1,
+      "citation_judge_error": "",
+      "gold_support_hit": 1,
+      "gold_support_total": 1,
+      "cited_statements": 1,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 1,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 10044.3,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 2.2
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 996.882,
+          "route_limit": 120,
+          "candidate_count": 202
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.007,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.002,
+          "candidate_count": 254
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.165,
+          "candidate_count": 170
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 156.319,
+          "candidate_count": 170,
+          "reranked_count": 43,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.19
+        },
+        {
+          "name": "expand",
+          "duration_ms": 5.099
+        },
+        {
+          "name": "compress",
+          "duration_ms": 40.063
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 11.493
+        }
+      ]
+    },
+    {
+      "qid": "F27",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "05187db826e1cfbd64f3e6a958ceaadca7e65ee6f68c74f042c731416e3fdcbf",
+      "answer_chars": 17,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 1,
+      "claims": 1,
+      "citation_judge_error": "",
+      "gold_support_hit": 0,
+      "gold_support_total": 1,
+      "cited_statements": 1,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 1,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 9368.9,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 7.184
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1044.178,
+          "route_limit": 120,
+          "candidate_count": 134
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.014,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.003,
+          "candidate_count": 162
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.132,
+          "candidate_count": 141
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 234.639,
+          "candidate_count": 141,
+          "reranked_count": 51,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.275
+        },
+        {
+          "name": "expand",
+          "duration_ms": 9.755
+        },
+        {
+          "name": "compress",
+          "duration_ms": 94.408
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 14.603
+        }
+      ]
+    },
+    {
+      "qid": "F28",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "24b0e50d1a71677ad1a46bed713631354f030b3891aafbe6b1a3a7044da6511d",
+      "answer_chars": 24,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 1,
+      "claims": 1,
+      "citation_judge_error": "",
+      "gold_support_hit": 1,
+      "gold_support_total": 1,
+      "cited_statements": 1,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 1,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 8326.6,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 1.64
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1086.462,
+          "route_limit": 120,
+          "candidate_count": 129
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.006,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.003,
+          "candidate_count": 168
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.13,
+          "candidate_count": 131
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 107.524,
+          "candidate_count": 131,
+          "reranked_count": 39,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.166
+        },
+        {
+          "name": "expand",
+          "duration_ms": 4.57
+        },
+        {
+          "name": "compress",
+          "duration_ms": 31.419
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 5.882
+        }
+      ]
+    },
+    {
+      "qid": "F29",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "c44bf8acab8e0d959f1d14e6d2a48cf428545f62918b29b160775228c9b40aa8",
+      "answer_chars": 35,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 3,
+      "exact_citations": 3,
+      "citation_tags_resolved": true,
+      "supported_claims": 0,
+      "claims": 1,
+      "citation_judge_error": "",
+      "gold_support_hit": 1,
+      "gold_support_total": 1,
+      "cited_statements": 1,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 1,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 8258.6,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 3.755
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1498.332,
+          "route_limit": 120,
+          "candidate_count": 262
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.007,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.002,
+          "candidate_count": 262
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.207,
+          "candidate_count": 248
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 218.264,
+          "candidate_count": 248,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.253
+        },
+        {
+          "name": "expand",
+          "duration_ms": 9.374
+        },
+        {
+          "name": "compress",
+          "duration_ms": 113.149
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 26.368
+        }
+      ]
+    },
+    {
+      "qid": "F30",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "c076768c44e447b6a3c0efe2e5451dbb1471d63fcdd95850bcad5db11ea57dc9",
+      "answer_chars": 30,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 1,
+      "claims": 1,
+      "citation_judge_error": "",
+      "gold_support_hit": 0,
+      "gold_support_total": 1,
+      "cited_statements": 1,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 1,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 8839.6,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 5.815
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1101.514,
+          "route_limit": 120,
+          "candidate_count": 241
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.007,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.003,
+          "candidate_count": 301
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.19,
+          "candidate_count": 188
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 174.332,
+          "candidate_count": 188,
+          "reranked_count": 39,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.184
+        },
+        {
+          "name": "expand",
+          "duration_ms": 5.036
+        },
+        {
+          "name": "compress",
+          "duration_ms": 27.133
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 14.908
+        }
+      ]
+    },
+    {
+      "qid": "F31",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "e01f49b1d381bc8e0831998e5add44807b78744771c2a10e9a59a19a82fa50d9",
+      "answer_chars": 24,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 1,
+      "claims": 1,
+      "citation_judge_error": "",
+      "gold_support_hit": 1,
+      "gold_support_total": 1,
+      "cited_statements": 1,
+      "statements": 1,
+      "validation": {
+        "attempts": 2,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 1,
+        "unsupported_claims": 0,
+        "answerable": true,
+        "uncited_claims": 0
+      },
+      "degraded": [],
+      "latency_ms": 17905.3,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 3.745
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1485.455,
+          "route_limit": 120,
+          "candidate_count": 245
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.011,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.004,
+          "candidate_count": 265
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.332,
+          "candidate_count": 229
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 117.665,
+          "candidate_count": 229,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.335
+        },
+        {
+          "name": "expand",
+          "duration_ms": 9.952
+        },
+        {
+          "name": "compress",
+          "duration_ms": 90.556
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 17.257
+        }
+      ]
+    },
+    {
+      "qid": "P19",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "c735cecb214bd05475831597cda62b8c73bc14f4338e03b7a0011158854ba03d",
+      "answer_chars": 72,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 2,
+      "exact_citations": 2,
+      "citation_tags_resolved": true,
+      "supported_claims": 2,
+      "claims": 2,
+      "citation_judge_error": "",
+      "gold_support_hit": 1,
+      "gold_support_total": 2,
+      "cited_statements": 2,
+      "statements": 2,
+      "validation": {
+        "attempts": 2,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 2,
+        "unsupported_claims": 0,
+        "answerable": true,
+        "uncited_claims": 0
+      },
+      "degraded": [],
+      "latency_ms": 33085.7,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 63.706
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1219.76,
+          "route_limit": 120,
+          "candidate_count": 250
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.008,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.003,
+          "candidate_count": 335
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.334,
+          "candidate_count": 280
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 440.125,
+          "candidate_count": 280,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.245
+        },
+        {
+          "name": "expand",
+          "duration_ms": 7.91
+        },
+        {
+          "name": "compress",
+          "duration_ms": 135.727
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 45.612
+        }
+      ]
+    },
+    {
+      "qid": "P20",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "bbb6dfeee23eb7e1b9142b659c6bfbd57de72a1d58ac1a113d5d73c9d0896581",
+      "answer_chars": 151,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 3,
+      "exact_citations": 3,
+      "citation_tags_resolved": true,
+      "supported_claims": 3,
+      "claims": 3,
+      "citation_judge_error": "",
+      "gold_support_hit": 2,
+      "gold_support_total": 2,
+      "cited_statements": 3,
+      "statements": 3,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 3,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 13512.1,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 84.938
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1258.756,
+          "route_limit": 120,
+          "candidate_count": 278
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.015,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.006,
+          "candidate_count": 349
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.61,
+          "candidate_count": 255
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 355.601,
+          "candidate_count": 255,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.495
+        },
+        {
+          "name": "expand",
+          "duration_ms": 24.908
+        },
+        {
+          "name": "compress",
+          "duration_ms": 79.437
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 17.029
+        }
+      ]
+    },
+    {
+      "qid": "S14",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "ac30adfbcbe11ccbdb64058e8356096805856ec3c0c17b914a737cb98d90ea01",
+      "answer_chars": 159,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 3,
+      "exact_citations": 3,
+      "citation_tags_resolved": true,
+      "supported_claims": 3,
+      "claims": 3,
+      "citation_judge_error": "",
+      "gold_support_hit": 1,
+      "gold_support_total": 2,
+      "cited_statements": 3,
+      "statements": 3,
+      "validation": {
+        "attempts": 2,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 3,
+        "unsupported_claims": 0,
+        "answerable": true,
+        "uncited_claims": 0
+      },
+      "degraded": [],
+      "latency_ms": 34541.7,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 18.469
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1223.151,
+          "route_limit": 120,
+          "candidate_count": 327
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.013,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.004,
+          "candidate_count": 389
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.423,
+          "candidate_count": 199
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 343.666,
+          "candidate_count": 199,
+          "reranked_count": 60,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.315
+        },
+        {
+          "name": "expand",
+          "duration_ms": 10.285
+        },
+        {
+          "name": "compress",
+          "duration_ms": 49.583
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 14.445
+        }
+      ]
+    },
+    {
+      "qid": "S15",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "1864a9716eb36a6e859df99602c1608d6485dd407e5ef21e71af63869a90af95",
+      "answer_chars": 148,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 4,
+      "claims": 4,
+      "citation_judge_error": "",
+      "gold_support_hit": 4,
+      "gold_support_total": 4,
+      "cited_statements": 4,
+      "statements": 4,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 4,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 15930.1,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 25.022
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1010.951,
+          "route_limit": 120,
+          "candidate_count": 194
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.016,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.002,
+          "candidate_count": 258
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.172,
+          "candidate_count": 173
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 171.726,
+          "candidate_count": 173,
+          "reranked_count": 49,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.216
+        },
+        {
+          "name": "expand",
+          "duration_ms": 7.526
+        },
+        {
+          "name": "compress",
+          "duration_ms": 32.016
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 9.32
+        }
+      ]
+    },
+    {
+      "qid": "S16",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "414a3c6f745fbbcdfd44c749a4c93eb65c399c6df0b003909b7bd5019b56e1be",
+      "answer_chars": 162,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 4,
+      "exact_citations": 4,
+      "citation_tags_resolved": true,
+      "supported_claims": 5,
+      "claims": 5,
+      "citation_judge_error": "",
+      "gold_support_hit": 4,
+      "gold_support_total": 4,
+      "cited_statements": 5,
+      "statements": 5,
+      "validation": {
+        "attempts": 2,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 5,
+        "unsupported_claims": 0,
+        "answerable": true,
+        "uncited_claims": 0
+      },
+      "degraded": [],
+      "latency_ms": 38236.5,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 16.819
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1171.122,
+          "route_limit": 120,
+          "candidate_count": 155
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.007,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.002,
+          "candidate_count": 178
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.128,
+          "candidate_count": 134
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 311.701,
+          "candidate_count": 134,
+          "reranked_count": 74,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.327
+        },
+        {
+          "name": "expand",
+          "duration_ms": 15.765
+        },
+        {
+          "name": "compress",
+          "duration_ms": 99.401
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 20.629
+        }
+      ]
+    },
+    {
+      "qid": "S17",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "fallback",
+      "mode": "knowledge",
+      "answer_sha256": null,
+      "answer_chars": 0,
+      "answer_success": false,
+      "correct_refusal": false,
+      "citation_count": 0,
+      "exact_citations": 0,
+      "citation_tags_resolved": true,
+      "supported_claims": 0,
+      "claims": 1,
+      "citation_judge_error": "no_substantive_claim",
+      "gold_support_hit": 0,
+      "gold_support_total": 4,
+      "cited_statements": 0,
+      "statements": 0,
+      "validation": {
+        "attempts": 3,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "uncited_claims": 3,
+        "support_claims": 6,
+        "unsupported_claims": 1,
+        "answerable": true,
+        "fallback": true
+      },
+      "degraded": [],
+      "latency_ms": 36991.8,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 280.823
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1871.423,
+          "route_limit": 120,
+          "candidate_count": 319
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.013,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.004,
+          "candidate_count": 435
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.439,
+          "candidate_count": 238
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 755.272,
+          "candidate_count": 238,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.728
+        },
+        {
+          "name": "expand",
+          "duration_ms": 33.274
+        },
+        {
+          "name": "compress",
+          "duration_ms": 164.584
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 27.306
+        }
+      ]
+    },
+    {
+      "qid": "S18",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "de5689b358fa26780c9e4e061d165b24a52ce738778e7c1b8f7ee1bb77e28352",
+      "answer_chars": 194,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 2,
+      "exact_citations": 2,
+      "citation_tags_resolved": true,
+      "supported_claims": 2,
+      "claims": 2,
+      "citation_judge_error": "",
+      "gold_support_hit": 1,
+      "gold_support_total": 4,
+      "cited_statements": 2,
+      "statements": 2,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 2,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 16745.5,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 26.241
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1250.02,
+          "route_limit": 120,
+          "candidate_count": 213
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 3076.094,
+          "subquery_count": 2
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.005,
+          "candidate_count": 324
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.428,
+          "candidate_count": 203
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 594.484,
+          "candidate_count": 203,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.466
+        },
+        {
+          "name": "expand",
+          "duration_ms": 16.413
+        },
+        {
+          "name": "compress",
+          "duration_ms": 104.708
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 24.981
+        }
+      ]
+    },
+    {
+      "qid": "S19",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "b486c2e706bf81853b2c4eeaf649ef1cf47f6bd20db33557b277aebaec02e550",
+      "answer_chars": 246,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 4,
+      "claims": 4,
+      "citation_judge_error": "",
+      "gold_support_hit": 1,
+      "gold_support_total": 3,
+      "cited_statements": 4,
+      "statements": 4,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 4,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 11907.5,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 6.974
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1096.514,
+          "route_limit": 120,
+          "candidate_count": 190
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.008,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.003,
+          "candidate_count": 207
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.197,
+          "candidate_count": 199
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 311.975,
+          "candidate_count": 199,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.369
+        },
+        {
+          "name": "expand",
+          "duration_ms": 5.721
+        },
+        {
+          "name": "compress",
+          "duration_ms": 77.977
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 18.757
+        }
+      ]
+    },
+    {
+      "qid": "S20",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "0ab0e07fbbbb2f75d276c73a8c5d9ecadd99104b5a108cb4cb6a846ffe37e6d4",
+      "answer_chars": 177,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 6,
+      "claims": 6,
+      "citation_judge_error": "",
+      "gold_support_hit": 3,
+      "gold_support_total": 4,
+      "cited_statements": 6,
+      "statements": 6,
+      "validation": {
+        "attempts": 2,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 6,
+        "unsupported_claims": 0,
+        "answerable": true,
+        "uncited_claims": 0
+      },
+      "degraded": [],
+      "latency_ms": 36781.2,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 18.938
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1759.305,
+          "route_limit": 120,
+          "candidate_count": 253
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.043,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.005,
+          "candidate_count": 253
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.424,
+          "candidate_count": 245
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 309.586,
+          "candidate_count": 245,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.471
+        },
+        {
+          "name": "expand",
+          "duration_ms": 12.708
+        },
+        {
+          "name": "compress",
+          "duration_ms": 120.336
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 33.248
+        }
+      ]
+    },
+    {
+      "qid": "X03",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "00f91b2f92a0aab047f00f7e4b35f9e9caf4a28e3ebde0e222bfc7f93f91e536",
+      "answer_chars": 136,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 5,
+      "exact_citations": 5,
+      "citation_tags_resolved": true,
+      "supported_claims": 2,
+      "claims": 2,
+      "citation_judge_error": "",
+      "gold_support_hit": 1,
+      "gold_support_total": 4,
+      "cited_statements": 2,
+      "statements": 2,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 2,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 14195.1,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 28.628
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1360.651,
+          "route_limit": 120,
+          "candidate_count": 291
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 2584.769,
+          "subquery_count": 2
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.004,
+          "candidate_count": 403
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.476,
+          "candidate_count": 253
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 653.924,
+          "candidate_count": 253,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.365
+        },
+        {
+          "name": "expand",
+          "duration_ms": 24.964
+        },
+        {
+          "name": "compress",
+          "duration_ms": 132.551
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 25.982
+        }
+      ]
+    },
+    {
+      "qid": "X07",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "f9084d9f0f8c9c745c2771c626d52682c89853e2229598451e6567d9c92a09df",
+      "answer_chars": 92,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 2,
+      "exact_citations": 2,
+      "citation_tags_resolved": true,
+      "supported_claims": 2,
+      "claims": 2,
+      "citation_judge_error": "",
+      "gold_support_hit": 0,
+      "gold_support_total": 3,
+      "cited_statements": 2,
+      "statements": 2,
+      "validation": {
+        "attempts": 3,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "uncited_claims": 1,
+        "support_claims": 2,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 35250.0,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 18.497
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1767.111,
+          "route_limit": 120,
+          "candidate_count": 261
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 2657.066,
+          "subquery_count": 2
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.003,
+          "candidate_count": 321
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.319,
+          "candidate_count": 213
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 416.139,
+          "candidate_count": 213,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.491
+        },
+        {
+          "name": "expand",
+          "duration_ms": 15.213
+        },
+        {
+          "name": "compress",
+          "duration_ms": 102.544
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 17.371
+        }
+      ]
+    },
+    {
+      "qid": "X10",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "e0a792e875a89fc061fa8d5935a9a2495737a7a3198605b15e1f514b9ee134ec",
+      "answer_chars": 277,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 4,
+      "exact_citations": 4,
+      "citation_tags_resolved": true,
+      "supported_claims": 6,
+      "claims": 6,
+      "citation_judge_error": "",
+      "gold_support_hit": 1,
+      "gold_support_total": 4,
+      "cited_statements": 6,
+      "statements": 6,
+      "validation": {
+        "attempts": 3,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 6,
+        "unsupported_claims": 0,
+        "answerable": true,
+        "uncited_claims": 0
+      },
+      "degraded": [],
+      "latency_ms": 63041.2,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 124.282
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1165.058,
+          "route_limit": 120,
+          "candidate_count": 464
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 2230.591,
+          "subquery_count": 2
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.004,
+          "candidate_count": 603
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.501,
+          "candidate_count": 360
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 299.404,
+          "candidate_count": 360,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.255
+        },
+        {
+          "name": "expand",
+          "duration_ms": 7.853
+        },
+        {
+          "name": "compress",
+          "duration_ms": 68.11
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 13.682
+        }
+      ]
+    },
+    {
+      "qid": "M01",
+      "kind": "metadata",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "aeb65bc16428b48db649eafb8475b11be457d209b53d9952998ce93319c34dc6",
+      "answer_chars": 20,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 1,
+      "claims": 1,
+      "citation_judge_error": "",
+      "gold_support_hit": 1,
+      "gold_support_total": 1,
+      "cited_statements": 1,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 1,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 9733.1,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 12.144
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 941.841,
+          "route_limit": 120,
+          "candidate_count": 299
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.009,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.003,
+          "candidate_count": 357
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.283,
+          "candidate_count": 253
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 345.259,
+          "candidate_count": 253,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.387
+        },
+        {
+          "name": "expand",
+          "duration_ms": 9.732
+        },
+        {
+          "name": "compress",
+          "duration_ms": 86.846
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 16.307
+        }
+      ]
+    },
+    {
+      "qid": "M03",
+      "kind": "metadata",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "b897bc7a71b5c81cdff2d627ea9d2300a85f3947b86479fcf2a68f8c16c8e5d8",
+      "answer_chars": 55,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 2,
+      "exact_citations": 2,
+      "citation_tags_resolved": true,
+      "supported_claims": 1,
+      "claims": 1,
+      "citation_judge_error": "",
+      "gold_support_hit": 1,
+      "gold_support_total": 1,
+      "cited_statements": 1,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 1,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 11983.7,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 10.293
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1194.037,
+          "route_limit": 120,
+          "candidate_count": 295
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.008,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.003,
+          "candidate_count": 295
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.247,
+          "candidate_count": 230
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 340.222,
+          "candidate_count": 230,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.281
+        },
+        {
+          "name": "expand",
+          "duration_ms": 8.296
+        },
+        {
+          "name": "compress",
+          "duration_ms": 85.009
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 13.961
+        }
+      ]
+    },
+    {
+      "qid": "M04",
+      "kind": "metadata",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "b2c7c032e537ed2fb68113d13b46dc79cb27c0b24134a2ce36463e3ff5e1e2eb",
+      "answer_chars": 24,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 1,
+      "claims": 1,
+      "citation_judge_error": "",
+      "gold_support_hit": 1,
+      "gold_support_total": 1,
+      "cited_statements": 1,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 1,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 10492.0,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 12.681
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1307.335,
+          "route_limit": 120,
+          "candidate_count": 250
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.011,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.002,
+          "candidate_count": 250
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.168,
+          "candidate_count": 204
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 380.286,
+          "candidate_count": 204,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.293
+        },
+        {
+          "name": "expand",
+          "duration_ms": 8.545
+        },
+        {
+          "name": "compress",
+          "duration_ms": 115.32
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 18.624
+        }
+      ]
+    },
+    {
+      "qid": "M05",
+      "kind": "metadata",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "f47ce74788b8fe0da24e453f3885ee817182f3e80a6e336658675dadd94c4d99",
+      "answer_chars": 43,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 1,
+      "claims": 1,
+      "citation_judge_error": "",
+      "gold_support_hit": 1,
+      "gold_support_total": 1,
+      "cited_statements": 1,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 1,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 10974.0,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 14.615
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1744.887,
+          "route_limit": 120,
+          "candidate_count": 360
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.011,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.004,
+          "candidate_count": 360
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.544,
+          "candidate_count": 323
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 672.657,
+          "candidate_count": 323,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.53
+        },
+        {
+          "name": "expand",
+          "duration_ms": 10.262
+        },
+        {
+          "name": "compress",
+          "duration_ms": 69.966
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 16.165
+        }
+      ]
+    },
+    {
+      "qid": "M08",
+      "kind": "metadata",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "6fbee2c5baa40c2b0123533c49d9fe89faff67c5b925cbb27c37f8d482b863ce",
+      "answer_chars": 101,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 10,
+      "exact_citations": 10,
+      "citation_tags_resolved": true,
+      "supported_claims": 1,
+      "claims": 2,
+      "citation_judge_error": "",
+      "gold_support_hit": 1,
+      "gold_support_total": 1,
+      "cited_statements": 2,
+      "statements": 2,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 2,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 11738.8,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 10.848
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 981.447,
+          "route_limit": 120,
+          "candidate_count": 205
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.007,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.003,
+          "candidate_count": 294
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.222,
+          "candidate_count": 234
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 324.364,
+          "candidate_count": 234,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.282
+        },
+        {
+          "name": "expand",
+          "duration_ms": 6.389
+        },
+        {
+          "name": "compress",
+          "duration_ms": 167.57
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 14.404
+        }
+      ]
+    },
+    {
+      "qid": "M09",
+      "kind": "metadata",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "3da3e5520ff4505c378c5f6d343b05ffc3f4f67d4f5cbcb953e65cca0c0b2dd8",
+      "answer_chars": 26,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 2,
+      "exact_citations": 2,
+      "citation_tags_resolved": true,
+      "supported_claims": 1,
+      "claims": 1,
+      "citation_judge_error": "",
+      "gold_support_hit": 1,
+      "gold_support_total": 1,
+      "cited_statements": 1,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 1,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 14900.4,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 10.744
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 2200.065,
+          "route_limit": 120,
+          "candidate_count": 248
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.015,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.006,
+          "candidate_count": 248
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.609,
+          "candidate_count": 244
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 1132.623,
+          "candidate_count": 244,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.955
+        },
+        {
+          "name": "expand",
+          "duration_ms": 32.687
+        },
+        {
+          "name": "compress",
+          "duration_ms": 281.454
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 68.183
+        }
+      ]
+    },
+    {
+      "qid": "M10",
+      "kind": "metadata",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "c6fb455dc2cb560456e5f344c091d7da68b2c2c914ebb23e77b777c8621a010e",
+      "answer_chars": 83,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 2,
+      "exact_citations": 2,
+      "citation_tags_resolved": true,
+      "supported_claims": 2,
+      "claims": 2,
+      "citation_judge_error": "",
+      "gold_support_hit": 1,
+      "gold_support_total": 1,
+      "cited_statements": 2,
+      "statements": 2,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 2,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 12633.4,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 47.636
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1193.283,
+          "route_limit": 120,
+          "candidate_count": 403
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.011,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.004,
+          "candidate_count": 524
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.553,
+          "candidate_count": 324
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 686.31,
+          "candidate_count": 324,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.295
+        },
+        {
+          "name": "expand",
+          "duration_ms": 8.561
+        },
+        {
+          "name": "compress",
+          "duration_ms": 110.099
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 12.065
+        }
+      ]
+    },
+    {
+      "qid": "U02",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "9051e8c46abfec0e69db55736e51f2bafd54895b897a9c64689eee51325077f7",
+      "answer_chars": 25,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 1,
+      "claims": 1,
+      "citation_judge_error": "",
+      "gold_support_hit": 2,
+      "gold_support_total": 2,
+      "cited_statements": 1,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 1,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 11858.9,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 27.76
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1096.69,
+          "route_limit": 120,
+          "candidate_count": 251
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.021,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.004,
+          "candidate_count": 353
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.533,
+          "candidate_count": 270
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 499.013,
+          "candidate_count": 270,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.294
+        },
+        {
+          "name": "expand",
+          "duration_ms": 8.702
+        },
+        {
+          "name": "compress",
+          "duration_ms": 146.395
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 29.9
+        }
+      ]
+    },
+    {
+      "qid": "U04",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "21c4c31330f75b1ebca33a3e2c527ff8f1cb0c6f0ef6e692fc932c5d904e60c7",
+      "answer_chars": 219,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 6,
+      "claims": 6,
+      "citation_judge_error": "",
+      "gold_support_hit": 3,
+      "gold_support_total": 3,
+      "cited_statements": 6,
+      "statements": 6,
+      "validation": {
+        "attempts": 2,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 6,
+        "unsupported_claims": 0,
+        "answerable": true,
+        "uncited_claims": 0
+      },
+      "degraded": [],
+      "latency_ms": 27821.1,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 3.54
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1078.715,
+          "route_limit": 120,
+          "candidate_count": 136
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.011,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.004,
+          "candidate_count": 157
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.219,
+          "candidate_count": 142
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 322.067,
+          "candidate_count": 142,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.48
+        },
+        {
+          "name": "expand",
+          "duration_ms": 15.331
+        },
+        {
+          "name": "compress",
+          "duration_ms": 96.122
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 25.454
+        }
+      ]
+    },
+    {
+      "qid": "U06",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "7f6a343b4e9e609558d99edd4dfa56077bdf808de428e51fee9ec35bd95483a9",
+      "answer_chars": 83,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 3,
+      "claims": 3,
+      "citation_judge_error": "",
+      "gold_support_hit": 1,
+      "gold_support_total": 1,
+      "cited_statements": 3,
+      "statements": 3,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 3,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 13439.2,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 3.059
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1053.803,
+          "route_limit": 120,
+          "candidate_count": 282
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.01,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.004,
+          "candidate_count": 350
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.337,
+          "candidate_count": 232
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 377.529,
+          "candidate_count": 232,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.264
+        },
+        {
+          "name": "expand",
+          "duration_ms": 7.797
+        },
+        {
+          "name": "compress",
+          "duration_ms": 110.872
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 20.641
+        }
+      ]
+    },
+    {
+      "qid": "U09",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "df605cfcf70307446254e1687021bf5449188500c7a8a8297dc479a4b96d6f90",
+      "answer_chars": 20,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 1,
+      "exact_citations": 1,
+      "citation_tags_resolved": true,
+      "supported_claims": 0,
+      "claims": 1,
+      "citation_judge_error": "",
+      "gold_support_hit": 1,
+      "gold_support_total": 1,
+      "cited_statements": 1,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 1,
+        "unsupported_claims": 0,
+        "answerable": true
+      },
+      "degraded": [],
+      "latency_ms": 12192.3,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 13.322
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1103.372,
+          "route_limit": 120,
+          "candidate_count": 262
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.007,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.003,
+          "candidate_count": 356
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.315,
+          "candidate_count": 276
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 493.385,
+          "candidate_count": 276,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.253
+        },
+        {
+          "name": "expand",
+          "duration_ms": 8.298
+        },
+        {
+          "name": "compress",
+          "duration_ms": 401.751
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 19.316
+        }
+      ]
+    },
+    {
+      "qid": "U10",
+      "kind": "answerable",
+      "knowledge_scope_prompted": false,
+      "status": "answered",
+      "mode": "knowledge",
+      "answer_sha256": "e4bf658e37a4f754614dbfc3301b19edfd9122e5e1d08688811cfb7c06051c6a",
+      "answer_chars": 311,
+      "answer_success": true,
+      "correct_refusal": false,
+      "citation_count": 3,
+      "exact_citations": 3,
+      "citation_tags_resolved": true,
+      "supported_claims": 5,
+      "claims": 5,
+      "citation_judge_error": "",
+      "gold_support_hit": 2,
+      "gold_support_total": 2,
+      "cited_statements": 5,
+      "statements": 5,
+      "validation": {
+        "attempts": 3,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "support_claims": 5,
+        "unsupported_claims": 0,
+        "answerable": true,
+        "uncited_claims": 0
+      },
+      "degraded": [],
+      "latency_ms": 54547.9,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 11.861
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1113.147,
+          "route_limit": 120,
+          "candidate_count": 289
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.008,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.002,
+          "candidate_count": 400
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.354,
+          "candidate_count": 276
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 385.845,
+          "candidate_count": 276,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.428
+        },
+        {
+          "name": "expand",
+          "duration_ms": 8.215
+        },
+        {
+          "name": "compress",
+          "duration_ms": 95.886
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 18.466
+        }
+      ]
+    },
+    {
+      "qid": "U01",
+      "kind": "unanswerable",
+      "knowledge_scope_prompted": true,
+      "status": "refused",
+      "mode": "knowledge",
+      "answer_sha256": "96e77b9bb9593ae70954c0b7c66f8b2214ad609f5263741d6929351e43e83f3e",
+      "answer_chars": 12,
+      "answer_success": false,
+      "correct_refusal": true,
+      "citation_count": 0,
+      "exact_citations": 0,
+      "citation_tags_resolved": true,
+      "supported_claims": 0,
+      "claims": 0,
+      "citation_judge_error": "",
+      "gold_support_hit": 0,
+      "gold_support_total": 0,
+      "cited_statements": 0,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "knowledge_scope_refusal_preserved": true
+      },
+      "degraded": [],
+      "latency_ms": 7322.9,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 22.838
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1147.536,
+          "route_limit": 120,
+          "candidate_count": 262
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.008,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.002,
+          "candidate_count": 347
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.416,
+          "candidate_count": 315
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 464.721,
+          "candidate_count": 315,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.273
+        },
+        {
+          "name": "expand",
+          "duration_ms": 10.744
+        },
+        {
+          "name": "compress",
+          "duration_ms": 325.345
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 30.104
+        }
+      ]
+    },
+    {
+      "qid": "U03",
+      "kind": "unanswerable",
+      "knowledge_scope_prompted": true,
+      "status": "refused",
+      "mode": "knowledge",
+      "answer_sha256": "96e77b9bb9593ae70954c0b7c66f8b2214ad609f5263741d6929351e43e83f3e",
+      "answer_chars": 12,
+      "answer_success": false,
+      "correct_refusal": true,
+      "citation_count": 0,
+      "exact_citations": 0,
+      "citation_tags_resolved": true,
+      "supported_claims": 0,
+      "claims": 0,
+      "citation_judge_error": "",
+      "gold_support_hit": 0,
+      "gold_support_total": 0,
+      "cited_statements": 0,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "knowledge_scope_refusal_preserved": true
+      },
+      "degraded": [],
+      "latency_ms": 6461.9,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 32.742
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1108.032,
+          "route_limit": 120,
+          "candidate_count": 388
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.007,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.003,
+          "candidate_count": 507
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.395,
+          "candidate_count": 364
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 450.311,
+          "candidate_count": 364,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.356
+        },
+        {
+          "name": "expand",
+          "duration_ms": 11.132
+        },
+        {
+          "name": "compress",
+          "duration_ms": 289.341
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 22.099
+        }
+      ]
+    },
+    {
+      "qid": "U05",
+      "kind": "unanswerable",
+      "knowledge_scope_prompted": true,
+      "status": "refused",
+      "mode": "knowledge",
+      "answer_sha256": "96e77b9bb9593ae70954c0b7c66f8b2214ad609f5263741d6929351e43e83f3e",
+      "answer_chars": 12,
+      "answer_success": false,
+      "correct_refusal": true,
+      "citation_count": 0,
+      "exact_citations": 0,
+      "citation_tags_resolved": true,
+      "supported_claims": 0,
+      "claims": 0,
+      "citation_judge_error": "",
+      "gold_support_hit": 0,
+      "gold_support_total": 0,
+      "cited_statements": 0,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "knowledge_scope_refusal_preserved": true
+      },
+      "degraded": [],
+      "latency_ms": 7550.4,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 40.016
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1208.854,
+          "route_limit": 120,
+          "candidate_count": 266
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.007,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.004,
+          "candidate_count": 371
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.425,
+          "candidate_count": 315
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 742.262,
+          "candidate_count": 315,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.923
+        },
+        {
+          "name": "expand",
+          "duration_ms": 21.323
+        },
+        {
+          "name": "compress",
+          "duration_ms": 211.481
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 36.373
+        }
+      ]
+    },
+    {
+      "qid": "U07",
+      "kind": "unanswerable",
+      "knowledge_scope_prompted": true,
+      "status": "refused",
+      "mode": "knowledge",
+      "answer_sha256": "96e77b9bb9593ae70954c0b7c66f8b2214ad609f5263741d6929351e43e83f3e",
+      "answer_chars": 12,
+      "answer_success": false,
+      "correct_refusal": true,
+      "citation_count": 0,
+      "exact_citations": 0,
+      "citation_tags_resolved": true,
+      "supported_claims": 0,
+      "claims": 0,
+      "citation_judge_error": "",
+      "gold_support_hit": 0,
+      "gold_support_total": 0,
+      "cited_statements": 0,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "knowledge_scope_refusal_preserved": true
+      },
+      "degraded": [],
+      "latency_ms": 7010.2,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 2.428
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1089.532,
+          "route_limit": 120,
+          "candidate_count": 173
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.01,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.004,
+          "candidate_count": 240
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.33,
+          "candidate_count": 217
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 536.531,
+          "candidate_count": 217,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.262
+        },
+        {
+          "name": "expand",
+          "duration_ms": 10.191
+        },
+        {
+          "name": "compress",
+          "duration_ms": 152.35
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 25.043
+        }
+      ]
+    },
+    {
+      "qid": "U08",
+      "kind": "unanswerable",
+      "knowledge_scope_prompted": true,
+      "status": "refused",
+      "mode": "knowledge",
+      "answer_sha256": "96e77b9bb9593ae70954c0b7c66f8b2214ad609f5263741d6929351e43e83f3e",
+      "answer_chars": 12,
+      "answer_success": false,
+      "correct_refusal": true,
+      "citation_count": 0,
+      "exact_citations": 0,
+      "citation_tags_resolved": true,
+      "supported_claims": 0,
+      "claims": 0,
+      "citation_judge_error": "",
+      "gold_support_hit": 0,
+      "gold_support_total": 0,
+      "cited_statements": 0,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "knowledge_scope_refusal_preserved": true
+      },
+      "degraded": [],
+      "latency_ms": 9459.0,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 42.774
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1619.801,
+          "route_limit": 120,
+          "candidate_count": 262
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.016,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.006,
+          "candidate_count": 350
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.747,
+          "candidate_count": 307
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 1083.129,
+          "candidate_count": 307,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.871
+        },
+        {
+          "name": "expand",
+          "duration_ms": 28.019
+        },
+        {
+          "name": "compress",
+          "duration_ms": 891.948
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 69.613
+        }
+      ]
+    },
+    {
+      "qid": "U11",
+      "kind": "unanswerable",
+      "knowledge_scope_prompted": true,
+      "status": "refused",
+      "mode": "knowledge",
+      "answer_sha256": "96e77b9bb9593ae70954c0b7c66f8b2214ad609f5263741d6929351e43e83f3e",
+      "answer_chars": 12,
+      "answer_success": false,
+      "correct_refusal": true,
+      "citation_count": 0,
+      "exact_citations": 0,
+      "citation_tags_resolved": true,
+      "supported_claims": 0,
+      "claims": 0,
+      "citation_judge_error": "",
+      "gold_support_hit": 0,
+      "gold_support_total": 0,
+      "cited_statements": 0,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "knowledge_scope_refusal_preserved": true
+      },
+      "degraded": [],
+      "latency_ms": 8808.1,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 49.065
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1612.021,
+          "route_limit": 120,
+          "candidate_count": 263
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.02,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.007,
+          "candidate_count": 370
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 1.044,
+          "candidate_count": 319
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 1228.426,
+          "candidate_count": 319,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.838
+        },
+        {
+          "name": "expand",
+          "duration_ms": 27.1
+        },
+        {
+          "name": "compress",
+          "duration_ms": 279.982
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 53.478
+        }
+      ]
+    },
+    {
+      "qid": "U12",
+      "kind": "unanswerable",
+      "knowledge_scope_prompted": true,
+      "status": "refused",
+      "mode": "knowledge",
+      "answer_sha256": "96e77b9bb9593ae70954c0b7c66f8b2214ad609f5263741d6929351e43e83f3e",
+      "answer_chars": 12,
+      "answer_success": false,
+      "correct_refusal": true,
+      "citation_count": 0,
+      "exact_citations": 0,
+      "citation_tags_resolved": true,
+      "supported_claims": 0,
+      "claims": 0,
+      "citation_judge_error": "",
+      "gold_support_hit": 0,
+      "gold_support_total": 0,
+      "cited_statements": 0,
+      "statements": 1,
+      "validation": {
+        "attempts": 2,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "scope_mismatch": true,
+        "support_claims": 1,
+        "unsupported_claims": 0,
+        "answerable": false,
+        "uncited_claims": 0,
+        "knowledge_scope_refusal_preserved": true
+      },
+      "degraded": [],
+      "latency_ms": 20803.3,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 52.804
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1606.974,
+          "route_limit": 120,
+          "candidate_count": 271
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.022,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.007,
+          "candidate_count": 391
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 1.222,
+          "candidate_count": 298
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 1286.972,
+          "candidate_count": 298,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.858
+        },
+        {
+          "name": "expand",
+          "duration_ms": 32.975
+        },
+        {
+          "name": "compress",
+          "duration_ms": 225.394
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 51.45
+        }
+      ]
+    },
+    {
+      "qid": "U13",
+      "kind": "unanswerable",
+      "knowledge_scope_prompted": true,
+      "status": "refused",
+      "mode": "knowledge",
+      "answer_sha256": "96e77b9bb9593ae70954c0b7c66f8b2214ad609f5263741d6929351e43e83f3e",
+      "answer_chars": 12,
+      "answer_success": false,
+      "correct_refusal": true,
+      "citation_count": 0,
+      "exact_citations": 0,
+      "citation_tags_resolved": true,
+      "supported_claims": 0,
+      "claims": 0,
+      "citation_judge_error": "",
+      "gold_support_hit": 0,
+      "gold_support_total": 0,
+      "cited_statements": 0,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "knowledge_scope_refusal_preserved": true
+      },
+      "degraded": [],
+      "latency_ms": 10649.9,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 52.045
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1705.129,
+          "route_limit": 120,
+          "candidate_count": 313
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.02,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.007,
+          "candidate_count": 380
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.805,
+          "candidate_count": 267
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 1078.866,
+          "candidate_count": 267,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.838
+        },
+        {
+          "name": "expand",
+          "duration_ms": 31.592
+        },
+        {
+          "name": "compress",
+          "duration_ms": 394.476
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 59.359
+        }
+      ]
+    },
+    {
+      "qid": "U14",
+      "kind": "unanswerable",
+      "knowledge_scope_prompted": true,
+      "status": "refused",
+      "mode": "knowledge",
+      "answer_sha256": "96e77b9bb9593ae70954c0b7c66f8b2214ad609f5263741d6929351e43e83f3e",
+      "answer_chars": 12,
+      "answer_success": false,
+      "correct_refusal": true,
+      "citation_count": 0,
+      "exact_citations": 0,
+      "citation_tags_resolved": true,
+      "supported_claims": 0,
+      "claims": 0,
+      "citation_judge_error": "",
+      "gold_support_hit": 0,
+      "gold_support_total": 0,
+      "cited_statements": 0,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "knowledge_scope_refusal_preserved": true
+      },
+      "degraded": [],
+      "latency_ms": 7598.9,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 67.262
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1689.6,
+          "route_limit": 120,
+          "candidate_count": 309
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.016,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.006,
+          "candidate_count": 425
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 1.008,
+          "candidate_count": 324
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 1078.943,
+          "candidate_count": 324,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.865
+        },
+        {
+          "name": "expand",
+          "duration_ms": 27.356
+        },
+        {
+          "name": "compress",
+          "duration_ms": 281.051
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 43.546
+        }
+      ]
+    },
+    {
+      "qid": "U15",
+      "kind": "unanswerable",
+      "knowledge_scope_prompted": true,
+      "status": "refused",
+      "mode": "knowledge",
+      "answer_sha256": "96e77b9bb9593ae70954c0b7c66f8b2214ad609f5263741d6929351e43e83f3e",
+      "answer_chars": 12,
+      "answer_success": false,
+      "correct_refusal": true,
+      "citation_count": 0,
+      "exact_citations": 0,
+      "citation_tags_resolved": true,
+      "supported_claims": 0,
+      "claims": 0,
+      "citation_judge_error": "",
+      "gold_support_hit": 0,
+      "gold_support_total": 0,
+      "cited_statements": 0,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "knowledge_scope_refusal_preserved": true
+      },
+      "degraded": [],
+      "latency_ms": 7968.6,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 48.432
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1205.284,
+          "route_limit": 120,
+          "candidate_count": 290
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.007,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.003,
+          "candidate_count": 391
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.349,
+          "candidate_count": 331
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 446.886,
+          "candidate_count": 331,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.285
+        },
+        {
+          "name": "expand",
+          "duration_ms": 8.25
+        },
+        {
+          "name": "compress",
+          "duration_ms": 457.365
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 32.449
+        }
+      ]
+    },
+    {
+      "qid": "U16",
+      "kind": "unanswerable",
+      "knowledge_scope_prompted": true,
+      "status": "refused",
+      "mode": "knowledge",
+      "answer_sha256": "96e77b9bb9593ae70954c0b7c66f8b2214ad609f5263741d6929351e43e83f3e",
+      "answer_chars": 12,
+      "answer_success": false,
+      "correct_refusal": true,
+      "citation_count": 0,
+      "exact_citations": 0,
+      "citation_tags_resolved": true,
+      "supported_claims": 0,
+      "claims": 0,
+      "citation_judge_error": "",
+      "gold_support_hit": 0,
+      "gold_support_total": 0,
+      "cited_statements": 0,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "knowledge_scope_refusal_preserved": true
+      },
+      "degraded": [],
+      "latency_ms": 6809.0,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 4.987
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1121.54,
+          "route_limit": 120,
+          "candidate_count": 262
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.009,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.003,
+          "candidate_count": 349
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.457,
+          "candidate_count": 296
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 465.717,
+          "candidate_count": 296,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.861
+        },
+        {
+          "name": "expand",
+          "duration_ms": 34.544
+        },
+        {
+          "name": "compress",
+          "duration_ms": 120.34
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 30.326
+        }
+      ]
+    },
+    {
+      "qid": "U17",
+      "kind": "unanswerable",
+      "knowledge_scope_prompted": true,
+      "status": "refused",
+      "mode": "knowledge",
+      "answer_sha256": "96e77b9bb9593ae70954c0b7c66f8b2214ad609f5263741d6929351e43e83f3e",
+      "answer_chars": 12,
+      "answer_success": false,
+      "correct_refusal": true,
+      "citation_count": 0,
+      "exact_citations": 0,
+      "citation_tags_resolved": true,
+      "supported_claims": 0,
+      "claims": 0,
+      "citation_judge_error": "",
+      "gold_support_hit": 0,
+      "gold_support_total": 0,
+      "cited_statements": 0,
+      "statements": 1,
+      "validation": {
+        "attempts": 1,
+        "fabricated_removed": 0,
+        "truncated_refusal": false,
+        "knowledge_scope_refusal_preserved": true
+      },
+      "degraded": [],
+      "latency_ms": 6414.4,
+      "timings": [
+        {
+          "name": "hierarchy_routing",
+          "duration_ms": 31.855
+        },
+        {
+          "name": "deep_retrieval",
+          "duration_ms": 1023.517,
+          "route_limit": 120,
+          "candidate_count": 277
+        },
+        {
+          "name": "decompose",
+          "duration_ms": 0.007,
+          "subquery_count": 0
+        },
+        {
+          "name": "scope",
+          "duration_ms": 0.003,
+          "candidate_count": 387
+        },
+        {
+          "name": "rrf",
+          "duration_ms": 0.637,
+          "candidate_count": 289
+        },
+        {
+          "name": "rerank",
+          "duration_ms": 406.223,
+          "candidate_count": 289,
+          "reranked_count": 80,
+          "model_id": "local-static-v3",
+          "degraded": false
+        },
+        {
+          "name": "diversify",
+          "duration_ms": 0.359
+        },
+        {
+          "name": "expand",
+          "duration_ms": 11.69
+        },
+        {
+          "name": "compress",
+          "duration_ms": 231.991
+        },
+        {
+          "name": "assemble",
+          "duration_ms": 33.679
+        }
+      ]
+    }
+  ]
+}

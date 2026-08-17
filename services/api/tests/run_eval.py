@@ -1,23 +1,18 @@
-"""跑检索评测 —— PLAN §18.2。
+"""Run the frozen, content-addressed retrieval evaluation.
 
-用法：
-    uv run python tests/run_eval.py            # 跑全部
-    uv run python tests/run_eval.py --verbose  # 逐题细节
-
-指标（方案定的验收线）：
-    Recall@5      ≥ 0.80   有依据题的答案是否出现在前 5 个文件里
-    正确拒答率     ≥ 0.80   无依据题是否被判为"无依据"
-    误拒率        ≤ 0.05   有依据题被误判为无依据的比例
-
-**这个脚本的基线值必须在向量检索实现之前记录下来** —— 否则无法判断
-向量检索到底带来了增益还是只是增加了复杂度（方案 §12.9 的前置条件）。
+Document metrics use content SHA-256 groups rather than filenames. Exact
+evidence metrics use the same reviewed source spans as compression evaluation.
+Cases whose required source is absent from the current corpus are reported but
+excluded from ranking gates.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
+import statistics
 import sys
 import time
 from pathlib import Path
@@ -26,142 +21,289 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.db.database import connect, init_db
 from app.retrieval.pipeline import run as run_retrieval
+from tests.eval_gold import (
+    DEFAULT_GOLD_PATH,
+    GoldCase,
+    load_gold,
+    matching_group,
+    packed_span_matches,
+)
 from tests.evalset import ALL_CASES, summary
+
 
 TOP_K = 5
 DEEP_K = 50
 RERANK_K = 20
-
-# 拒答门限（§12.3c）。
-#
-# **纯词法阶段无法标定这个值** —— 实测有依据组与无依据组的词法信号
-# 大量重叠：词覆盖率在有依据组最低 29%、无依据组最高 100%，BM25 亦然。
-# 典型反例：「杭州地铁到浙江音乐学院怎么换乘」，"杭州""浙江音乐学院"
-# 都在参赛手册里，但手册根本没讲地铁 —— 词法只能判断"词出现了没有"，
-# 判断不了"这些词是否在回答这个问题"。
-#
-# 这正是向量检索的必要性所在：语义相似度能区分"提到了"和"回答了"。
-# 所以基线阶段设为 0（永不拒答，宁可多召回也不误拒），
-# 待向量路上线后按 §12.3c 用余弦绝对分标定。
 ABSTAIN_THRESHOLD = 0.0
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
-def retrieve(conn, query: str, limit: int = 40) -> tuple[list[dict], float]:
-    """检索并按文件聚合，返回 (文件列表, 最高融合分)。"""
+def _portable_path(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _percentile(values: list[float], fraction: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    index = max(0, min(len(ordered) - 1, math.ceil(len(ordered) * fraction) - 1))
+    return ordered[index]
+
+
+def retrieve(
+    conn, query: str, limit: int = 200,
+) -> tuple[list[dict], list[dict], float, dict]:
+    """Retrieve ranked documents plus the exact top-50 Child evidence pool."""
     retrieval = run_retrieval(
         conn, query, route_limit=limit, candidate_limit=limit,
     )
-    fused = {candidate.chunk_id: candidate.final_score
-             for candidate in retrieval.candidates}
+    fused = {
+        candidate.chunk_id: candidate.final_score
+        for candidate in retrieval.candidates
+    }
+    trace = retrieval.trace.to_dict()
     if not fused:
-        return [], 0.0
+        return [], [], 0.0, trace
 
-    top = sorted(fused.items(), key=lambda kv: -kv[1])[:limit]
-    ids = [cid for cid, _ in top]
-    marks = ",".join("?" * len(ids))
+    ranked_ids = [
+        chunk_id for chunk_id, _score in
+        sorted(fused.items(), key=lambda item: item[1], reverse=True)[:limit]
+    ]
+    marks = ",".join("?" * len(ranked_ids))
     rows = conn.execute(
-        f"""SELECT ch.id, ch.text, ch.section_path, ch.page, f.name
-            FROM chunks ch JOIN files f ON f.content_id = ch.content_id
-            WHERE ch.id IN ({marks})""",
-        ids,
+        f"""SELECT ch.id, ch.content_id, ch.text, ch.text_hash,
+                   ch.start_offset, ch.end_offset, c.sha256
+            FROM chunks ch JOIN contents c ON c.id = ch.content_id
+            WHERE ch.id IN ({marks})
+              AND ch.index_version = c.active_index_version""",
+        ranked_ids,
     ).fetchall()
+    row_by_id = {row["id"]: row for row in rows}
+    deep_evidence = []
+    for chunk_id in trace.get("deep_candidates", [])[:DEEP_K]:
+        row = row_by_id.get(chunk_id)
+        if row is None:
+            continue
+        deep_evidence.append({
+            "sha256": row["sha256"],
+            "chunks": [{
+                "chunk_id": row["id"],
+                "text_hash": row["text_hash"],
+                "text_length": len(row["text"]),
+                "document_start_offset": row["start_offset"],
+                "document_end_offset": row["end_offset"],
+            }],
+        })
 
-    by_file: dict[str, dict] = {}
-    for r in rows:
-        sc = fused.get(r["id"], 0.0)
-        e = by_file.setdefault(
-            r["name"], {"name": r["name"], "score": 0.0, "ranked_texts": []},
-        )
-        e["score"] = max(e["score"], sc)
-        e["ranked_texts"].append((sc, r["text"]))
+    content_ids = sorted({row["content_id"] for row in rows})
+    name_map: dict[int, list[str]] = {content_id: [] for content_id in content_ids}
+    if content_ids:
+        content_marks = ",".join("?" * len(content_ids))
+        for row in conn.execute(
+            f"SELECT content_id, name FROM files WHERE content_id IN ({content_marks})",
+            content_ids,
+        ):
+            name_map[row["content_id"]].append(row["name"])
 
-    files = sorted(by_file.values(), key=lambda e: -e["score"])
-    for entry in files:
-        entry["texts"] = [
-            text for _score, text in sorted(
-                entry.pop("ranked_texts"), key=lambda item: item[0], reverse=True,
+    by_content: dict[str, dict] = {}
+    for row in rows:
+        score = fused.get(row["id"], 0.0)
+        entry = by_content.setdefault(row["sha256"], {
+            "content_id": row["content_id"],
+            "sha256": row["sha256"],
+            "names": sorted(set(name_map.get(row["content_id"], []))),
+            "score": 0.0,
+            "ranked_chunks": [],
+        })
+        entry["score"] = max(entry["score"], score)
+        entry["ranked_chunks"].append((score, {
+            "chunk_id": row["id"],
+            "text_hash": row["text_hash"],
+            "text_length": len(row["text"]),
+            "document_start_offset": row["start_offset"],
+            "document_end_offset": row["end_offset"],
+        }))
+
+    documents = sorted(by_content.values(), key=lambda item: item["score"], reverse=True)
+    for document in documents:
+        document["chunks"] = [
+            chunk for _score, chunk in sorted(
+                document.pop("ranked_chunks"),
+                key=lambda item: item[0],
+                reverse=True,
             )[:3]
         ]
-    return files, max(fused.values())
+    return documents, deep_evidence, max(fused.values()), trace
 
 
-def judge(case, files: list[dict], top_score: float) -> dict:
-    """判定单题。
+def _groups_hit(documents: list[dict], gold: GoldCase) -> bool:
+    return all(
+        any(document["sha256"] in group.content_sha256 for document in documents)
+        for group in gold.content_groups
+    )
 
-    有依据题：期望文档出现在 top-K，且命中的文本包含答案关键词。
-    无依据题：期望最高分低于拒答门限。
-    """
-    abstained = top_score < ABSTAIN_THRESHOLD or not files
 
-    if not case.answerable:
-        return {"qid": case.qid, "kind": "unanswerable",
-                "pass": abstained, "abstained": abstained,
-                "top_score": top_score,
-                "top": files[0]["name"] if files else None}
+def _evidence_requirement_hit(requirement, documents: list[dict]) -> bool:
+    for document in documents:
+        for chunk in document["chunks"]:
+            if any(
+                packed_span_matches(
+                    alternative,
+                    content_sha256=document["sha256"],
+                    chunk_text_hash=chunk["text_hash"],
+                    chunk_start_offset=0,
+                    chunk_end_offset=chunk["text_length"],
+                    document_start_offset=chunk["document_start_offset"],
+                    document_end_offset=chunk["document_end_offset"],
+                )
+                for alternative in requirement.alternatives
+            ):
+                return True
+    return False
 
-    topk = files[:TOP_K]
-    deep = files[:DEEP_K]
-    rerank_top = files[:RERANK_K]
-    hints = case.doc_hints
-    doc_hit = all(any(hint in f["name"] for f in topk) for hint in hints)
-    doc_hit_50 = all(any(hint in f["name"] for f in deep) for hint in hints)
-    doc_hit_20 = all(any(hint in f["name"] for f in rerank_top) for hint in hints)
-    ranks = [
-        next((i + 1 for i, f in enumerate(topk) if hint in f["name"]), None)
-        for hint in hints
-    ]
-    rank = max((r for r in ranks if r is not None), default=None)
-    deep_ranks = [
-        next((i + 1 for i, f in enumerate(deep) if hint in f["name"]), None)
-        for hint in hints
-    ]
-    rank_50 = max((r for r in deep_ranks if r is not None), default=None)
 
-    matched_hints: set[str] = set()
-    gains: list[int] = []
-    reciprocal_rank = 0.0
-    for index, file in enumerate(files[:10], start=1):
-        match = next(
-            (hint for hint in hints
-             if hint not in matched_hints and hint in file["name"]),
+def judge(
+    case, gold: GoldCase, documents: list[dict],
+    deep_evidence: list[dict], top_score: float,
+) -> dict:
+    abstained = top_score < ABSTAIN_THRESHOLD or not documents
+    if gold.status == "corpus_missing":
+        return {
+            "qid": case.qid,
+            "kind": "corpus_missing",
+            "excluded": True,
+            "reason": gold.reason,
+            "pass": None,
+        }
+    if gold.status == "unanswerable":
+        return {
+            "qid": case.qid,
+            "kind": "unanswerable",
+            "excluded": ABSTAIN_THRESHOLD == 0.0,
+            "pass": abstained if ABSTAIN_THRESHOLD > 0.0 else None,
+            "abstained": abstained,
+            "top_score": top_score,
+            "top": documents[0]["names"][0] if documents and documents[0]["names"] else None,
+        }
+
+    topk = documents[:TOP_K]
+    deep = documents[:DEEP_K]
+    rerank_top = documents[:RERANK_K]
+    doc_hit = _groups_hit(topk, gold)
+    doc_hit_20 = _groups_hit(rerank_top, gold)
+    doc_hit_50 = _groups_hit(deep, gold)
+
+    group_ranks = [
+        next(
+            (
+                index for index, document in enumerate(documents, start=1)
+                if document["sha256"] in group.content_sha256
+            ),
             None,
         )
-        gains.append(1 if match else 0)
-        if match:
-            matched_hints.add(match)
+        for group in gold.content_groups
+    ]
+    rank = max(group_ranks) if all(value is not None for value in group_ranks) else None
+    rank_50 = rank if rank is not None and rank <= DEEP_K else None
+
+    used_groups: set[str] = set()
+    gains: list[int] = []
+    reciprocal_rank = 0.0
+    for index, document in enumerate(documents[:10], start=1):
+        group = matching_group(document["sha256"], gold.content_groups, used_groups)
+        gain = int(group is not None)
+        gains.append(gain)
+        if group is not None:
+            used_groups.add(group.group_id)
             if reciprocal_rank == 0.0:
                 reciprocal_rank = 1.0 / index
     dcg = sum(gain / math.log2(index + 2) for index, gain in enumerate(gains))
-    ideal = min(len(hints), 10)
+    ideal = min(len(gold.content_groups), 10)
     idcg = sum(1.0 / math.log2(index + 2) for index in range(ideal))
     ndcg_10 = dcg / idcg if idcg else 0.0
 
-    # 关键词检查：答案 chunk 是否真的含有答案（防止"文档对了但片段不对"）
-    kw_hit = True
-    if case.answer_keywords and doc_hit:
-        matched = [
-            f for f in topk if any(hint in f["name"] for hint in hints)
-        ]
-        blob = " ".join(text for f in matched for text in f["texts"])
-        kw_hit = any(kw in blob for kw in case.answer_keywords)
-
-    return {"qid": case.qid, "kind": "answerable", "difficulty": case.difficulty,
-            "pass": doc_hit and kw_hit and not abstained,
-            "doc_hit": doc_hit, "doc_hit_20": doc_hit_20,
-            "doc_hit_50": doc_hit_50,
-            "kw_hit": kw_hit, "rank": rank, "rank_50": rank_50,
-            "mrr_10": reciprocal_rank, "ndcg_10": ndcg_10,
-            "abstained": abstained, "top_score": top_score,
-            "top": topk[0]["name"] if topk else None}
+    requirement_hits = [
+        _evidence_requirement_hit(requirement, topk)
+        for requirement in gold.evidence_requirements
+    ]
+    deep_requirement_hits = [
+        _evidence_requirement_hit(requirement, deep_evidence)
+        for requirement in gold.evidence_requirements
+    ]
+    evidence_hit = all(requirement_hits) if requirement_hits else True
+    evidence_recall = (
+        sum(requirement_hits) / len(requirement_hits) if requirement_hits else 1.0
+    )
+    deep_evidence_recall = (
+        sum(deep_requirement_hits) / len(deep_requirement_hits)
+        if deep_requirement_hits else 1.0
+    )
+    top_name = None
+    if topk and topk[0]["names"]:
+        top_name = topk[0]["names"][0]
+    return {
+        "qid": case.qid,
+        "kind": gold.status,
+        "difficulty": case.difficulty,
+        "pass": doc_hit and evidence_hit and not abstained,
+        "doc_hit": doc_hit,
+        "doc_hit_20": doc_hit_20,
+        "doc_hit_50": doc_hit_50,
+        "evidence_hit": evidence_hit,
+        "evidence_recall": evidence_recall,
+        "evidence_hits_50": sum(deep_requirement_hits),
+        "evidence_recall_50": deep_evidence_recall,
+        "evidence_requirements": len(requirement_hits),
+        "rank": rank,
+        "rank_50": rank_50,
+        "mrr_10": reciprocal_rank,
+        "ndcg_10": ndcg_10,
+        "abstained": abstained,
+        "top_score": top_score,
+        "top": top_name,
+    }
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--verbose", "-v", action="store_true")
-    ap.add_argument("--json", type=str, help="结果写入 JSON 文件")
-    ap.add_argument("--label", default="baseline-fts5",
-                    help="本次评测的标签，写入结果便于跨版本对比")
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--verbose", "-v", action="store_true")
+    parser.add_argument("--json", type=Path, help="write result JSON")
+    parser.add_argument("--gold", type=Path, default=DEFAULT_GOLD_PATH)
+    parser.add_argument("--label", default="content-sha-baseline")
+    parser.add_argument(
+        "--route-limit", type=int, default=200,
+        help="retrieval depth; production search/QA uses 120",
+    )
+    parser.add_argument(
+        "--enforce-latency", action="store_true",
+        help="fail when search P95 >2.5s or rerank P95 >1.5s",
+    )
+    parser.add_argument(
+        "--fingerprint", type=Path,
+        help="release fingerprint JSON bound to this evaluation artifact",
+    )
+    parser.add_argument("--qids", help="comma-separated diagnostic subset")
+    args = parser.parse_args()
+
+    gold = load_gold(args.gold)
+    expected_ids = {case.qid for case in ALL_CASES}
+    if set(gold) != expected_ids:
+        missing = sorted(expected_ids - set(gold))
+        extra = sorted(set(gold) - expected_ids)
+        raise RuntimeError(f"gold/evalset qid mismatch: missing={missing}, extra={extra}")
+
+    selected_cases = list(ALL_CASES)
+    if args.qids:
+        requested = {item.strip() for item in args.qids.split(",") if item.strip()}
+        selected_cases = [case for case in ALL_CASES if case.qid in requested]
+        missing = requested - {case.qid for case in selected_cases}
+        if missing:
+            parser.error(f"unknown qids: {sorted(missing)}")
+        if not selected_cases:
+            parser.error("--qids selected no cases")
 
     conn = connect()
     init_db(conn)
@@ -171,98 +313,207 @@ def main() -> int:
         return 1
 
     info = summary()
-    print(f"评测集 {info['total']} 题（有依据 {info['answerable']} / 无依据 "
-          f"{info['unanswerable']}）· 库中 {n_chunks} 个分片")
-    print(f"拒答门限 {ABSTAIN_THRESHOLD}\n")
+    statuses: dict[str, int] = {}
+    for case in selected_cases:
+        item = gold[case.qid]
+        statuses[item.status] = statuses.get(item.status, 0) + 1
+    print(
+        f"评测集 {len(selected_cases)}/{info['total']} 题 · 状态 {statuses} · "
+        f"库中 {n_chunks} 个分片"
+    )
+    print(f"gold={args.gold}\n")
 
     results = []
-    t0 = time.perf_counter()
-    for case in ALL_CASES:
-        t = time.perf_counter()
-        files, top_score = retrieve(conn, case.query, limit=200)
-        latency = (time.perf_counter() - t) * 1000
-        r = judge(case, files, top_score)
-        r["latency_ms"] = latency
-        r["query"] = case.query
-        results.append(r)
+    total_started = time.perf_counter()
+    for case in selected_cases:
+        annotation = gold[case.qid]
+        if annotation.status == "corpus_missing":
+            result = judge(case, annotation, [], [], 0.0)
+            result["latency_ms"] = 0.0
+            result["query"] = case.query
+            results.append(result)
+            if args.verbose:
+                print(f"  - [{case.qid}] corpus_missing: {annotation.reason}")
+            continue
 
-        if args.verbose or not r["pass"]:
-            mark = "✓" if r["pass"] else "✗"
-            extra = ""
-            if r["kind"] == "answerable":
-                extra = f"rank={r['rank']} doc={r['doc_hit']} kw={r['kw_hit']}"
-            print(f"  {mark} [{r['qid']}] {case.query[:30]:<32} "
-                  f"score={top_score:.4f} {extra}")
-            if not r["pass"] and r["top"]:
-                print(f"      实际首位: {r['top'][:52]}")
+        started = time.perf_counter()
+        documents, deep_evidence, top_score, trace = retrieve(
+            conn, case.query, limit=max(50, args.route_limit),
+        )
+        latency = (time.perf_counter() - started) * 1000
+        result = judge(case, annotation, documents, deep_evidence, top_score)
+        result["latency_ms"] = latency
+        result["query"] = case.query
+        rerank_stage = next(
+            (stage for stage in trace.get("stages", []) if stage.get("name") == "rerank"),
+            {},
+        )
+        result["rerank_ms"] = float(rerank_stage.get("duration_ms") or 0.0)
+        result["rerank_model"] = rerank_stage.get("model_id")
+        result["degraded"] = list(trace.get("degraded", []))
+        results.append(result)
 
-    total_ms = (time.perf_counter() - t0) * 1000
+        if args.verbose or result.get("pass") is False:
+            if result["kind"] in {"answerable", "metadata"}:
+                print(
+                    f"  {'OK' if result['pass'] else 'MISS':<4} [{result['qid']}] "
+                    f"rank={result['rank']} doc={result['doc_hit']} "
+                    f"evidence={result['evidence_recall']:.0%} "
+                    f"latency={latency:.0f}ms"
+                )
+            elif args.verbose:
+                print(
+                    f"  - [{result['qid']}] unanswerable "
+                    f"score={top_score:.4f} latency={latency:.0f}ms"
+                )
 
-    ans = [r for r in results if r["kind"] == "answerable"]
-    una = [r for r in results if r["kind"] == "unanswerable"]
+    total_ms = (time.perf_counter() - total_started) * 1000
+    conn.close()
 
-    recall = sum(r["doc_hit"] for r in ans) / len(ans)
-    recall_50 = sum(r["doc_hit_50"] for r in ans) / len(ans)
-    recall_20 = sum(r["doc_hit_20"] for r in ans) / len(ans)
-    mrr_10 = sum(r["mrr_10"] for r in ans) / len(ans)
-    ndcg_10 = sum(r["ndcg_10"] for r in ans) / len(ans)
-    strict = sum(r["pass"] for r in ans) / len(ans)
-    abstain_ok = sum(r["pass"] for r in una) / len(una)
-    false_abstain = sum(r["abstained"] for r in ans) / len(ans)
-    p50 = sorted(r["latency_ms"] for r in results)[len(results) // 2]
-
-    print(f"\n{'指标':<26}{'实测':>9}  {'验收线':>8}  结果")
-    print("-" * 58)
-    rows = [
-        ("Recall@5（文档命中）", recall, 0.80, True),
-        ("Recall@50（文档深召回）", recall_50, 0.90, True),
-        ("Recall@20（精排保真）", recall_20, None, None),
-        ("MRR@10", mrr_10, None, None),
-        ("nDCG@10", ndcg_10, None, None),
-        ("严格通过率（含关键词）", strict, None, None),
-        ("正确拒答率", abstain_ok, 0.80, True),
-        ("误拒率（越低越好）", false_abstain, 0.05, False),
+    evaluable = [
+        result for result in results
+        if result["kind"] in {"answerable", "metadata"}
     ]
+    evidence_cases = [result for result in results if result["kind"] == "answerable"]
+    unanswerable = [result for result in results if result["kind"] == "unanswerable"]
+    corpus_missing = [result for result in results if result["kind"] == "corpus_missing"]
+    runtime_results = [result for result in results if result["kind"] != "corpus_missing"]
+
+    recall = statistics.fmean(result["doc_hit"] for result in evaluable)
+    recall_20 = statistics.fmean(result["doc_hit_20"] for result in evaluable)
+    recall_50 = statistics.fmean(result["doc_hit_50"] for result in evaluable)
+    mrr_10 = statistics.fmean(result["mrr_10"] for result in evaluable)
+    ndcg_10 = statistics.fmean(result["ndcg_10"] for result in evaluable)
+    strict = statistics.fmean(result["pass"] for result in evaluable)
+    evidence_recall = (
+        statistics.fmean(result["evidence_recall"] for result in evidence_cases)
+        if evidence_cases else 1.0
+    )
+    evidence_requirements = sum(
+        result["evidence_requirements"] for result in evidence_cases
+    )
+    evidence_hits_50 = sum(result["evidence_hits_50"] for result in evidence_cases)
+    gold_evidence_recall_50 = (
+        evidence_hits_50 / evidence_requirements if evidence_requirements else 1.0
+    )
+    latency_values = [result["latency_ms"] for result in runtime_results]
+    rerank_values = [result["rerank_ms"] for result in runtime_results]
+    p50 = _percentile(latency_values, 0.50)
+    p95 = _percentile(latency_values, 0.95)
+    rerank_p50 = _percentile(rerank_values, 0.50)
+    rerank_p95 = _percentile(rerank_values, 0.95)
+    degraded_count = sum(bool(result.get("degraded")) for result in runtime_results)
+    rerank_models = sorted({
+        result["rerank_model"] for result in runtime_results
+        if result.get("rerank_model")
+    })
+
+    rows = [
+        ("Content Recall@5", recall, 0.80),
+        ("Content Recall@50", recall_50, None),
+        ("Gold Evidence Recall@50", gold_evidence_recall_50, 0.90),
+        ("Content Recall@20", recall_20, None),
+        ("MRR@10", mrr_10, None),
+        ("nDCG@10", ndcg_10, None),
+        ("严格通过率", strict, None),
+        ("Top-5 evidence requirement recall", evidence_recall, None),
+    ]
+    print(f"\n{'指标':<38}{'实测':>9}  {'验收线':>8}  结果")
+    print("-" * 70)
     all_pass = True
-    for name, val, line, higher in rows:
-        if line is None:
-            print(f"{name:<26}{val:>8.1%}  {'—':>8}")
+    for name, value, gate in rows:
+        if gate is None:
+            print(f"{name:<38}{value:>8.1%}  {'-':>8}")
             continue
-        # 门限为 0 意味着拒答功能未启用，报告为"待实现"而不是失败 ——
-        # 把"还没做"和"做了但不达标"混为一谈会掩盖真实进度
-        if name == "正确拒答率" and ABSTAIN_THRESHOLD == 0.0:
-            print(f"{name:<26}{'未启用':>8}  {line:>7.0%}   ⊘ 待向量路标定")
-            continue
-        ok = val >= line if higher else val <= line
-        all_pass &= ok
-        print(f"{name:<26}{val:>8.1%}  {line:>7.0%}   {'✓' if ok else '✗'}")
+        passed = value >= gate
+        all_pass &= passed
+        print(
+            f"{name:<38}{value:>8.1%}  {gate:>7.0%}   "
+            f"{'PASS' if passed else 'FAIL'}"
+        )
+    latency_pass = p95 <= 2500.0 and rerank_p95 <= 1500.0
+    if args.enforce_latency:
+        all_pass &= latency_pass
+    print(
+        f"\n查询延迟 p50={p50:.1f}ms p95={p95:.1f}ms · "
+        f"rerank p50={rerank_p50:.1f}ms p95={rerank_p95:.1f}ms · "
+        f"{'PASS' if latency_pass else 'FAIL'}"
+    )
+    print(
+        f"模型={rerank_models} · degraded={degraded_count}/{len(runtime_results)} · "
+        f"全量={total_ms:.0f}ms"
+    )
+    print(
+        f"语料缺失排除={len(corpus_missing)} · 无依据题={len(unanswerable)} "
+        f"（拒答由真实 QA 评测，不由融合分伪判）"
+    )
 
-    print(f"\n延迟 p50 {p50:.1f}ms · 全量 {total_ms:.0f}ms")
+    by_difficulty: dict[str, list[bool]] = {}
+    for result in evaluable:
+        by_difficulty.setdefault(result["difficulty"], []).append(result["doc_hit"])
+    print("\n按难度分解 Content Recall@5:")
+    for difficulty, values in sorted(by_difficulty.items()):
+        print(
+            f"  {difficulty:<12} {sum(values)}/{len(values)} = "
+            f"{sum(values) / len(values):.0%}"
+        )
 
-    by_diff: dict[str, list] = {}
-    for r in ans:
-        by_diff.setdefault(r["difficulty"], []).append(r["doc_hit"])
-    print("\n按难度分解 Recall:")
-    for d, v in sorted(by_diff.items()):
-        print(f"  {d:<12} {sum(v)}/{len(v)} = {sum(v)/len(v):.0%}")
+    fingerprint = None
+    if args.fingerprint:
+        raw_fingerprint = args.fingerprint.read_bytes()
+        fingerprint = {
+            "path": _portable_path(args.fingerprint),
+            "sha256": hashlib.sha256(raw_fingerprint).hexdigest(),
+            "manifest": json.loads(raw_fingerprint),
+        }
 
+    output = {
+        "schema_version": 3,
+        "label": args.label,
+        "gold": _portable_path(args.gold),
+        "fingerprint": fingerprint,
+        "summary": {
+            "evaluated": len(evaluable),
+            "corpus_missing": len(corpus_missing),
+            "unanswerable": len(unanswerable),
+            "recall_at_5": recall,
+            "recall_at_20": recall_20,
+            "recall_at_50": recall_50,
+            "mrr_at_10": mrr_10,
+            "ndcg_at_10": ndcg_10,
+            "strict": strict,
+            "top5_evidence_requirement_recall": evidence_recall,
+            "gold_evidence_hits_at_50": evidence_hits_50,
+            "gold_evidence_requirements": evidence_requirements,
+            "gold_evidence_recall_at_50": gold_evidence_recall_50,
+            "p50_ms": p50,
+            "p95_ms": p95,
+            "rerank_p50_ms": rerank_p50,
+            "rerank_p95_ms": rerank_p95,
+            "rerank_models": rerank_models,
+            "degraded_queries": degraded_count,
+            "route_limit": args.route_limit,
+            "latency_enforced": args.enforce_latency,
+            "latency_pass": latency_pass,
+            "chunks": n_chunks,
+            "by_difficulty": {
+                difficulty: sum(values) / len(values)
+                for difficulty, values in by_difficulty.items()
+            },
+        },
+        "results": results,
+    }
     if args.json:
-        Path(args.json).write_text(json.dumps({
-            "label": args.label,
-            "summary": {"recall_at_5": recall, "recall_at_20": recall_20,
-                        "recall_at_50": recall_50, "mrr_at_10": mrr_10,
-                        "ndcg_at_10": ndcg_10,
-                        "strict": strict,
-                        "abstain_ok": abstain_ok, "false_abstain": false_abstain,
-                        "p50_ms": p50, "chunks": n_chunks,
-                        "by_difficulty": {d: sum(v) / len(v) for d, v in by_diff.items()}},
-            "results": results,
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        args.json.parent.mkdir(parents=True, exist_ok=True)
+        args.json.write_text(
+            json.dumps(output, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
         print(f"\n结果已写入 {args.json}")
 
-    print(f"\n{'✓ 达标' if all_pass else '✗ 未达标'}")
+    print(f"\n{'PASS' if all_pass else 'FAIL'}")
     return 0 if all_pass else 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

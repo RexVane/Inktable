@@ -8,10 +8,12 @@ dependencies = [
     "fastapi>=0.115",
     "jieba>=0.42.1",
     "numpy>=1.26",
+    "onnxruntime>=1.22,<2",
     "pydantic>=2",
     "pymupdf>=1.28.2",
     "python-docx>=1.2.0",
     "sqlite-vec>=0.1.9",
+    "tokenizers>=0.21,<1",
     "uvicorn[standard]>=0.52.1",
     "watchdog>=6.0.0",
 ]

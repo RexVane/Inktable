@@ -10,11 +10,13 @@ from app.index.search import extract_query_terms
 # 单段上限放宽到 ~900：保留成段的叙述而不是切成零碎句子，
 # 让"把某事讲全"类问题拿到连贯上下文（现代模型上下文管够）。
 MAX_SPAN_CHARS = 900
+MAX_FALLBACK_CHARS = 1200
 DEFAULT_CONTEXT_CHARS = 3600
-DEFAULT_MAX_SPANS = 120
+DEFAULT_MAX_SPANS = 240
 # 每个来源文档最多贡献几段证据。早期为小预算定的 3 会让单个文档"讲不透"，
 # 放宽到 6 —— 配合更大的装配预算，回答更全面。
 MAX_SPANS_PER_SOURCE = 6
+DOCUMENT_HEAD_PRIORITY_SCORE = 0.70
 
 
 @dataclass(frozen=True)
@@ -33,6 +35,7 @@ class EvidenceSource:
     document_end_offset: int | None
     candidate_score: float
     ordinal_distance: int = 0
+    is_document_head: bool = False
 
 
 @dataclass(frozen=True)
@@ -53,6 +56,8 @@ class EvidenceSpan:
     text: str
     relevance_score: float
     ordinal_distance: int = 0
+    is_fallback: bool = False
+    is_document_head: bool = False
 
 
 @dataclass(frozen=True)
@@ -168,6 +173,7 @@ def extract_spans(query: str, sources: list[EvidenceSource]) -> list[EvidenceSpa
                 text=text,
                 relevance_score=relevance,
                 ordinal_distance=source.ordinal_distance,
+                is_document_head=source.is_document_head,
             ))
         source_spans.sort(key=lambda span: span.relevance_score, reverse=True)
         chosen: list[EvidenceSpan] = []
@@ -181,8 +187,43 @@ def extract_spans(query: str, sources: list[EvidenceSource]) -> list[EvidenceSpa
             chosen.append(span)
             if len(chosen) >= MAX_SPANS_PER_SOURCE:
                 break
+        # Query-term scoring is intentionally cheap, but a semantically matched
+        # Child can answer a paraphrase without sharing surface words. Preserve
+        # one lower-priority whole-Child fallback so compression cannot erase an
+        # already retrieved short source. The global pack budget still decides
+        # whether it fits; no generated or rewritten text is introduced.
+        if (
+            len(source.text) <= MAX_FALLBACK_CHARS
+            and not any(
+                span.start_offset == 0 and span.end_offset == len(source.text)
+                for span in chosen
+            )
+        ):
+            chosen.append(EvidenceSpan(
+                span_id=f"ch{source.chunk_id}:0-{len(source.text)}",
+                chunk_id=source.chunk_id,
+                content_id=source.content_id,
+                section_id=source.section_id,
+                file_id=source.file_id,
+                file_name=source.file_name,
+                file_path=source.file_path,
+                page=source.page,
+                heading_path=source.section_path,
+                start_offset=0,
+                end_offset=len(source.text),
+                document_start_offset=source.document_start_offset,
+                document_end_offset=source.document_end_offset,
+                text=source.text,
+                relevance_score=candidate_score + 0.05 / (1 + source.ordinal_distance),
+                ordinal_distance=source.ordinal_distance,
+                is_fallback=True,
+                is_document_head=source.is_document_head,
+            ))
         spans.extend(chosen)
-    return sorted(spans, key=lambda span: span.relevance_score, reverse=True)
+    return sorted(
+        spans,
+        key=lambda span: (span.is_fallback, -span.relevance_score),
+    )
 
 
 def assemble_pack(
@@ -193,13 +234,14 @@ def assemble_pack(
     """Pack diverse exact spans within a deterministic character budget."""
     selected: list[EvidenceSpan] = []
     selected_ids: set[str] = set()
-    normalized_texts: set[str] = set()
+    normalized_texts: set[tuple[int, str]] = set()
     used = 0
 
     def add(span: EvidenceSpan) -> bool:
         nonlocal used
         normalized = re.sub(r"\s+", "", span.text).lower()
-        if not normalized or normalized in normalized_texts:
+        provenance_key = (span.content_id, normalized)
+        if not normalized or provenance_key in normalized_texts:
             return False
         if used + len(span.text) > char_budget:
             return False
@@ -207,7 +249,7 @@ def assemble_pack(
             return False
         selected.append(span)
         selected_ids.add(span.span_id)
-        normalized_texts.add(normalized)
+        normalized_texts.add(provenance_key)
         used += len(span.text)
         return True
 
@@ -217,9 +259,66 @@ def assemble_pack(
         if span.content_id not in seen_contents and add(span):
             seen_contents.add(span.content_id)
 
-    # Directly retrieved Children outrank their expansion-only neighbors. Keep
-    # one exact span per hit before spending the remaining budget on context.
+    # Reserve half of the span slots for globally ranked source Children. For
+    # a short Child, prefer its exact whole-source fallback so two facts in
+    # different windows are not forced to compete with each other.
+    priority_chunk_limit = max(1, max_spans // 2)
+    fallback_by_chunk = {
+        span.chunk_id: span for span in spans if span.is_fallback
+    }
+    priority_chunks: set[int] = set()
+    for span in spans:
+        if span.is_fallback or span.chunk_id in priority_chunks:
+            continue
+        priority_chunks.add(span.chunk_id)
+        add(fallback_by_chunk.get(span.chunk_id, span))
+        if len(priority_chunks) >= priority_chunk_limit:
+            break
+
+    # A document-level hit can land near the end while its summary, table, or
+    # orientation facts live in the first few Children. Keep one exact span
+    # from every selected head Child before score-only filling.
+    head_by_content: dict[int, dict[int, EvidenceSpan]] = {}
+    for span in spans:
+        if not span.is_document_head:
+            continue
+        by_chunk = head_by_content.setdefault(span.content_id, {})
+        current = by_chunk.get(span.chunk_id)
+        if current is None or (span.is_fallback and not current.is_fallback):
+            by_chunk[span.chunk_id] = span
+    head_lists = [
+        [
+            span for span in by_chunk.values()
+            if span.relevance_score >= DOCUMENT_HEAD_PRIORITY_SCORE
+        ]
+        for by_chunk in head_by_content.values()
+    ]
+    head_lists = [content_spans for content_spans in head_lists if content_spans]
+    head_depth = max(map(len, head_lists), default=0)
+    for index in range(head_depth):
+        for content_spans in head_lists:
+            if index < len(content_spans):
+                add(content_spans[index])
+
+    # Preserve short retrieved/expanded Children in retrieval-score order.
+    # Fallbacks are kept in a separate pass so they cannot outrank the
+    # query-relevant sentence spans used for first-pass document coverage.
     seen_hit_chunks: set[int] = set()
+    fallbacks_by_content: dict[int, list[EvidenceSpan]] = {}
+    for span in spans:
+        if span.is_fallback and not span.is_document_head:
+            fallbacks_by_content.setdefault(span.content_id, []).append(span)
+    fallback_depth = max(map(len, fallbacks_by_content.values()), default=0)
+    for index in range(fallback_depth):
+        for content_spans in fallbacks_by_content.values():
+            if index >= len(content_spans):
+                continue
+            span = content_spans[index]
+            if add(span) and span.ordinal_distance == 0:
+                seen_hit_chunks.add(span.chunk_id)
+
+    # Long direct Children have no whole-Child fallback; keep their best exact
+    # window so every direct hit still contributes evidence.
     for span in spans:
         if (span.ordinal_distance == 0 and span.chunk_id not in seen_hit_chunks
                 and add(span)):
@@ -260,4 +359,5 @@ def best_span(
         text=source.text,
         relevance_score=source.candidate_score,
         ordinal_distance=source.ordinal_distance,
+        is_document_head=source.is_document_head,
     )

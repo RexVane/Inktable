@@ -11,47 +11,88 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 import mimetypes
 import os
+import stat
 import time
-from dataclasses import dataclass
+from contextlib import nullcontext
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.domain.identity import FileIdentity, identify
+from app.watcher.policy import canonical_source_path, is_drive_root
 
-# 不下钻的目录（§7.7 ①）。开发者的 ~/Documents 里一个 node_modules 就是几万个文件
+# 永不从「整盘/用户目录」来源向下遍历的基础设施目录。
+#
+# 规则只作用于来源根的子目录：用户若明确把其中某个目录（例如微信真正的
+# msg/file）单独设为来源，根目录本身不会被这份名单误伤。
 EXCLUDED_DIRS = {
-    "node_modules", ".git", ".svn", ".hg", "Pods", "vendor", "target",
-    "DerivedData", "build", "dist", "out", ".next", ".nuxt", ".venv", "venv",
-    "__pycache__", ".pytest_cache", ".mypy_cache", ".tox",
-    "Library", ".Trash", ".Spotlight-V100", ".fseventsd", ".DocumentRevisions-V100",
-    ".cache", ".npm", ".gradle", ".m2",
+    # 版本库、依赖与构建缓存
+    "node_modules", ".git", ".svn", ".hg", "pods", ".venv", "venv",
+    "__pycache__", ".pytest_cache", ".mypy_cache", ".tox", ".next", ".nuxt",
+    ".cache", ".npm", ".gradle", ".m2", "site-packages", "testdata",
+    "library", ".trash", ".spotlight-v100", ".fseventsd",
+    ".documentrevisions-v100",
+    # 系统、商店与回收站
+    "windows", "program files", "program files (x86)", "programdata",
+    "appdata", "windowsapps", "wpsystem", "deliveryoptimization",
+    "$recycle.bin", "system volume information", "recovery", "perflogs",
+    "windows.old", "msocache", "onedrivetemp",
+    # 通用缩略图与临时缓存。来源不再按应用区分，盘内目录统一递归。
+    "thumb", "thumbtemp", "rwtemp",
+    # 游戏库与工具链
+    "steam", "steamapps", "steamlibrary", "windows kits",
+    # 解释器/语言工具链；其中的 README、NEWS、字典不属于个人知识资料
+    "go", "python",
 }
 
-# 目录形态的"文件"，整体当作一个文件而不下钻（§7.7 ②）
+# 目录形态的应用/文档包不能当普通目录展开，否则会把内部资源当用户资料。
 PACKAGE_EXTS = {
     ".app", ".photoslibrary", ".xcodeproj", ".xcworkspace", ".bundle",
     ".framework", ".rtfd", ".pages", ".numbers", ".key", ".sparsebundle",
 }
 
-# 解析正文 + 建全文索引
-#
-# 只放**用户会用自然语言去搜内容**的格式。源码/配置不在此列 —— 见下方 CODE_EXTS。
-FULLTEXT_EXTS = {
-    ".pdf", ".docx", ".md", ".markdown", ".txt", ".rtf",
-    # HTML：保存的网页、微信/QQ 导出的聊天记录；CSV：小型表格/导出数据
-    ".html", ".htm", ".csv",
+# 进入目录后看到这些标记，说明整棵树是代码项目。整盘来源不收项目文档；
+# 用户若确实需要某个项目的 README，可把项目目录显式设成来源（根目录豁免）。
+CODE_PROJECT_MARKERS = {
+    ".git", "package.json", "pyproject.toml", "setup.py", "setup.cfg",
+    "requirements.txt", "cargo.toml", "go.mod", "pom.xml",
+    "build.gradle", "build.gradle.kts", "cmakelists.txt", "makefile",
 }
 
-# 源码与配置：**只登记元数据，不解析正文**
+# 品牌化安装目录可安全识别；普通的 Documents/build 之类名称不在这里，
+# 避免仅凭一个通用目录名误杀用户资料。
+INSTALL_DIR_NAMES = {
+    "microsoft vs code", "android studio", "visual studio",
+    "microsoft visual studio", "vmware workstation",
+}
+INSTALL_DIR_PREFIXES = ("pycharm ", "intellij idea ")
+INSTALL_MARKERS = (
+    ("python.exe",),
+    ("code.exe",),
+    ("vmware.exe",),
+    ("cmd", "git.exe"),
+    ("bin", "pycharm64.exe"),
+    ("bin", "idea64.exe"),
+    ("bin", "studio64.exe"),
+    ("bin", "mvn.cmd"),
+    ("platform-tools", "adb.exe"),
+    ("sdk", "platform-tools", "adb.exe"),
+)
+
+# 允许入库并解析正文的唯一白名单。
+FULLTEXT_EXTS = {".txt", ".docx", ".pdf", ".md", ".csv", ".html", ".htm"}
+
+# 源码与配置：**彻底不入库**（2026-08 与用户确认的筛选规则）
 #
-# 实测（本机 ~/Documents）：源码类占入库文件的 59%，把它们降级后
-# 需要解析正文的文件减少 78%，而用户并无实际损失 ——
-# 文件仍可按文件名搜到，而搜代码内容本就该用 ripgrep / IDE 全局搜索。
+# 早期版本把它们降级为"仅登记元数据"，实测仍然是噪音主力：文件列表被
+# package.json / *.yml 刷屏，而知识库要收的是"人读的资料"。搜代码内容
+# 本就该用 ripgrep / IDE 全局搜索，连名字都不值得占一行。
 #
-# 注意 .md **不在此列**：它既是文档格式又常驻代码库（README、设计文档），
-# 按扩展名归入文档类是正确的 —— 用路径判断"是否在代码目录里"会误杀
-# ~/Documents/code/*/PLAN.md 这类真文档。
+# 注意 .md **不在此列**：普通资料目录里的 Markdown 仍是全文文档；
+# 只有带明确项目标记的整棵代码树会在目录层剪掉。用户显式选择项目根时
+# 又会豁免该目录规则，因此仍可主动收录某个项目的设计文档。
 CODE_EXTS = {
     ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".c", ".cpp", ".cc", ".h", ".hpp",
     ".go", ".rs", ".rb", ".php", ".swift", ".kt", ".scala", ".m", ".mm",
@@ -61,18 +102,22 @@ CODE_EXTS = {
     ".lock", ".gradle", ".cmake", ".mk",
 }
 
-# 只登记元数据，不解析正文
-METADATA_EXTS = {
-    ".xlsx", ".xls", ".pptx", ".ppt", ".doc",
-    ".png", ".jpg", ".jpeg", ".heic", ".gif", ".webp", ".svg", ".bmp", ".tiff",
-    ".mp4", ".mov", ".avi", ".mkv", ".mp3", ".m4a", ".wav", ".flac",
-    ".zip", ".rar", ".7z", ".tar", ".gz", ".dmg", ".pkg", ".img", ".iso",
-    ".pages", ".numbers", ".key", ".dwg", ".psd", ".ai", ".sketch", ".fig",
-    ".epub", ".mobi", ".apk", ".ipa", ".log",
-} | CODE_EXTS
+# 安装包/可执行/日志/下载残片：既不是"人读的资料"，也很少按名检索，
+# 只会稀释列表与问答 —— 同样彻底不入库
+NOISE_EXTS = {
+    ".exe", ".msi", ".dll", ".sys", ".dmg", ".pkg", ".img", ".iso",
+    ".apk", ".ipa", ".log", ".tmp", ".bak", ".crdownload", ".part", ".download",
+}
+
+# 当前没有“只登记元数据”格式：不在 FULLTEXT_EXTS 的文件一律不入库。
+METADATA_EXTS: set[str] = set()
 
 MAX_FULLTEXT_SIZE = 200 * 1024 * 1024   # 超过只登记元数据（§7.7 ④）
-MAX_DEPTH = 12
+# 内容去重哈希的体积上限：元数据类超过此值不再读全文算 sha256 ——
+# 整盘收录时给几十 GB 的视频/压缩包算哈希会把首扫拖成天级
+#（实测 D 盘因此完全扫不动）。代价只是大媒体不参与「重复内容」归并。
+MAX_DEDUP_SIZE = 64 * 1024 * 1024
+MAX_DEPTH = 32
 HASH_BLOCK = 8 * 1024 * 1024            # 分块流式，避免大文件占满内存
 
 # 内容读取失败不是「文件没有变化」。保留明确的可重试错误码，避免下一次
@@ -98,6 +143,7 @@ class ScanStats:
     skipped_too_large: int = 0
     marked_missing: int = 0      # 全量扫描发现"库里有、磁盘上没"
     errors: int = 0
+    content_ids: set[int] = field(default_factory=set)
 
     @property
     def accounted(self) -> int:
@@ -111,29 +157,104 @@ def classify_ext(ext: str) -> str:
     """返回 fulltext / metadata / ignore。
 
     **默认白名单而非黑名单** —— 黑名单永远列不全（§7.7 ③）。
+    CODE/NOISE 的显式列举只是让意图可读，兜底仍然是"不认识就 ignore"。
     """
     e = ext.lower()
     if e in FULLTEXT_EXTS:
         return "fulltext"
+    if e in CODE_EXTS or e in NOISE_EXTS:
+        return "ignore"
     if e in METADATA_EXTS:
         return "metadata"
     return "ignore"
 
 
 def should_skip_dir(name: str) -> bool:
-    if name in EXCLUDED_DIRS or name.startswith("."):
+    """按目录名判断明确的基础设施/包目录（大小写不敏感）。"""
+    low = name.casefold()
+    if low in EXCLUDED_DIRS or low.startswith("."):
         return True
-    return Path(name).suffix.lower() in PACKAGE_EXTS
+    if Path(name).suffix.casefold() in PACKAGE_EXTS:
+        return True
+    return low in INSTALL_DIR_NAMES or low.startswith(INSTALL_DIR_PREFIXES)
+
+
+def _normal_path(path: Path | str) -> str:
+    """用于来源归属比较的规范路径；Windows 自动折叠大小写。"""
+    return os.path.normcase(os.path.abspath(os.path.normpath(os.fspath(path))))
+
+
+def path_is_within(path: Path | str, root: Path | str, *, strict: bool = False) -> bool:
+    """路径是否位于 root 内；避免易错的字符串前缀匹配。"""
+    child, base = _normal_path(path), _normal_path(root)
+    if strict and child == base:
+        return False
+    try:
+        return os.path.commonpath((child, base)) == base
+    except ValueError:  # 不同盘符
+        return False
+
+
+def _is_reparse_dir(path: Path) -> bool:
+    """拒绝符号链接/junction/挂载点，防止环路与重复收录。"""
+    try:
+        st = path.lstat()
+    except OSError:
+        return True
+    if stat.S_ISLNK(st.st_mode):
+        return True
+    return bool(getattr(st, "st_file_attributes", 0)
+                & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+
+
+def _looks_like_code_project(path: Path) -> bool:
+    try:
+        with os.scandir(path) as entries:
+            names = {entry.name.casefold() for entry in entries}
+        return bool(names & CODE_PROJECT_MARKERS) or any(
+            name.endswith((".sln", ".xcodeproj")) for name in names
+        )
+    except OSError:
+        return False
+
+
+def _listing_is_code_project(dirnames: list[str], filenames: list[str]) -> bool:
+    names = {n.casefold() for n in (*dirnames, *filenames)}
+    if names & CODE_PROJECT_MARKERS:
+        return True
+    return any(n.endswith((".sln", ".xcodeproj")) for n in names)
+
+
+def _looks_like_install_dir(path: Path) -> bool:
+    low = path.name.casefold()
+    if low in INSTALL_DIR_NAMES or low.startswith(INSTALL_DIR_PREFIXES):
+        return True
+    try:
+        return any(path.joinpath(*parts).is_file() for parts in INSTALL_MARKERS)
+    except OSError:
+        return False
+
+
+def should_skip_file_name(name: str) -> bool:
+    """过滤隐藏/临时文件和软件许可证巨型文本。"""
+    if name.startswith(".") or name.startswith("~$"):
+        return True
+    compact = name.casefold().replace("_", "").replace("-", "").replace(" ", "")
+    return (
+        compact.startswith("thirdpartynotice")
+        or compact.startswith("licenses.chromium")
+        or compact.startswith("eula.")
+        or compact.startswith("license.")
+        or compact in {"license", "license.txt", "license.md", "copying", "copying.txt"}
+    )
 
 
 def should_skip_path(path: Path | str, root: Path | str,
-                     max_depth: int = MAX_DEPTH) -> bool:
-    """判断一个**文件**是否应按扫描规则排除。
+                     max_depth: int = MAX_DEPTH, *, check_markers: bool = True) -> bool:
+    """判断一个**文件**是否应跳过。
 
-    扫描与实时监听必须使用同一套规则：否则首次扫描避开 node_modules，
-    监听却会在用户安装依赖时把其中几万个文件重新塞进库。这里以文件相对
-    来源根目录的祖先目录为准；用户若显式把某个目录作为来源根，则它本身
-    不因名字（例如 ``node_modules``）而被排除，这与 ``iter_files`` 一致。
+    扫描与实时监听共用同一套规则。来源根本身不受目录名/项目标记影响，
+    因而用户的显式来源永远优先于整盘默认过滤。
     """
     p, base = Path(path), Path(root)
     try:
@@ -148,10 +269,21 @@ def should_skip_path(path: Path | str, root: Path | str,
             return True
 
     parents = rel.parts[:-1]
-    # iter_files 在当前目录深度 >= MAX_DEPTH 时不再处理其中的文件。
     if len(parents) >= max_depth:
         return True
-    return any(should_skip_dir(part) for part in parents)
+    if should_skip_file_name(p.name):
+        return True
+
+    current = base
+    for part in parents:
+        current /= part
+        if should_skip_dir(part):
+            return True
+        if check_markers and (
+            _looks_like_code_project(current) or _looks_like_install_dir(current)
+        ):
+            return True
+    return False
 
 
 def hash_file(path: Path) -> str:
@@ -162,27 +294,57 @@ def hash_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def iter_files(root: Path, max_depth: int = MAX_DEPTH):
-    """遍历目录，应用排除规则。产出 (路径, 是否被排除跳过)。"""
+def iter_files(root: Path, max_depth: int = MAX_DEPTH,
+               prune_roots: tuple[Path | str, ...] = (),
+               prune_projects: bool = True):
+    """遍历目录树，应用通用目录、包、重解析点与嵌套来源规则。
+
+    ``prune_projects`` is disabled for fixed-disk ingestion: the file suffix
+    whitelist, rather than a project marker in an ancestor, decides what is
+    registered inside a selected disk.
+    """
     root = Path(root)
     root_depth = len(root.parts)
+    pruned = {_normal_path(p) for p in prune_roots}
 
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         current = Path(dirpath)
-        if len(current.parts) - root_depth >= max_depth:
+        depth = len(current.parts) - root_depth
+        if depth >= max_depth:
             dirnames.clear()
             continue
 
-        skipped = [d for d in dirnames if should_skip_dir(d)]
-        dirnames[:] = [d for d in dirnames if d not in skipped]
-        for _ in skipped:
-            yield None, True  # 计入 skipped_excluded
+        # 显式来源根豁免；整盘扫描可选择跳过代码项目/安装树。
+        if prune_projects and current != root and (
+            _listing_is_code_project(dirnames, filenames)
+            or (depth <= 3 and _looks_like_install_dir(current))
+        ):
+            dirnames.clear()
+            yield None, True
+            continue
+
+        kept: list[str] = []
+        skipped = 0
+        for dirname in dirnames:
+            candidate = current / dirname
+            if (
+                should_skip_dir(dirname)
+                or _normal_path(candidate) in pruned
+                or _is_reparse_dir(candidate)
+            ):
+                skipped += 1
+            else:
+                kept.append(dirname)
+        dirnames[:] = kept
+        for _ in range(skipped):
+            yield None, True
 
         for fn in filenames:
-            if fn.startswith("."):
+            if should_skip_file_name(fn):
                 continue
             path = current / fn
-            if should_skip_path(path, root, max_depth):
+            # 当前目录的项目/安装判定已在上面做过，逐文件无需重复 stat 标记。
+            if should_skip_path(path, root, max_depth, check_markers=False):
                 continue
             yield path, False
 
@@ -210,6 +372,12 @@ def register_file(conn, path: Path, source_id: int | None, stats: ScanStats) -> 
 
     kind = classify_ext(ext)
 
+    # 超大文件不做内容哈希：全文类超过解析上限、元数据类超过去重上限
+    skip_dedup = (
+        (kind == "fulltext" and ident.size > MAX_FULLTEXT_SIZE)
+        or (kind == "metadata" and ident.size > MAX_DEDUP_SIZE)
+    )
+
     # 已登记过？先按身份查（§8：移动/改名后 inode 不变）
     row = conn.execute(
         "SELECT id, size, mtime, path, state, source_id, ext, mime, is_dataless, "
@@ -219,8 +387,6 @@ def register_file(conn, path: Path, source_id: int | None, stats: ScanStats) -> 
     ).fetchone()
     identity_matched = row is not None
     if row is None:
-        # 原子替换会让同一路径得到新 inode。路径兜底复用原 file_id，避免
-        # 同一路径留下两条记录；由于身份不同，下面不会走 unchanged 快路径。
         row = conn.execute(
             "SELECT id, size, mtime, path, state, source_id, ext, mime, is_dataless, "
             "content_id, error_code, volume_uuid, inode FROM files WHERE path = ? "
@@ -230,9 +396,6 @@ def register_file(conn, path: Path, source_id: int | None, stats: ScanStats) -> 
 
     if row:
         if kind == "ignore":
-            # 已索引文件改名到白名单外，或同一路径被原子替换成忽略类型：
-            # 保留身份记录以继续追踪，但立即解除 content，避免旧全文仍以
-            # 新文件名/类型出现在检索结果里。孤儿 content 由既有清扫流程处理。
             conn.execute(
                 """UPDATE files
                    SET volume_uuid = ?, inode = ?, content_id = NULL, path = ?, name = ?,
@@ -246,14 +409,12 @@ def register_file(conn, path: Path, source_id: int | None, stats: ScanStats) -> 
             stats.skipped_ext += 1
             return None
 
-        # 路径变了但内容没变 → 只更新路径，不重新解析（§12.1 性能关键项）
-        # 但 hash/read 失败的文件是例外：其 metadata 即使没有变化，也必须
-        # 在下一次扫描重新尝试读取，不能进入永久 unchanged。
         if (identity_matched
                 and row["size"] == ident.size
                 and row["mtime"] == ident.mtime
                 and row["error_code"] != HASH_FAILED
-                and (row["content_id"] is not None or ident.is_dataless)):
+                and (row["content_id"] is not None or ident.is_dataless
+                     or skip_dedup)):
             changed = any((
                 row["path"] != str(path),
                 row["source_id"] != source_id,
@@ -276,24 +437,24 @@ def register_file(conn, path: Path, source_id: int | None, stats: ScanStats) -> 
                 stats.unchanged += 1
             return row["id"]
 
-    # 新的白名单外文件不入库；已登记文件已在上面更新为 ignored 并解除全文。
+    # 新的白名单外文件不入库
     if kind == "ignore":
         stats.skipped_ext += 1
         return None
 
-    # iCloud 占位文件：**绝不读取内容**，读了就会触发全量下载（§7.8）
-    if ident.is_dataless:
+    # iCloud 占位文件
+    elif ident.is_dataless:
         stats.skipped_dataless += 1
-        content_id = None
         state = "cloud_placeholder"
-    elif kind == "fulltext" and ident.size > MAX_FULLTEXT_SIZE:
-        stats.skipped_too_large += 1
-        try:
-            content_id = _ensure_content(conn, path, ident, stats)
-        except ContentReadError:
-            _record_content_read_failure(conn, row, path, source_id, ident, ext, mime, stats)
-            return None
+        content_id = None
+
+    # 过大文件
+    elif skip_dedup:
+        if kind == "fulltext":
+            stats.skipped_too_large += 1
         state = "registered"
+        content_id = None
+
     else:
         try:
             content_id = _ensure_content(conn, path, ident, stats)
@@ -327,13 +488,13 @@ def register_file(conn, path: Path, source_id: int | None, stats: ScanStats) -> 
     )
     stats.registered += 1
 
-    # 新文件跑一遍分类规则（A6）。规则只碰未归类文件，永不覆盖用户决定。
+    # 新文件跑一遍分类规则（A6）
     try:
         from app.organize.classify import classify_new_file
 
         classify_new_file(conn, cur.lastrowid)
     except Exception:
-        pass  # 分类失败不该影响登记
+        pass
 
     return cur.lastrowid
 
@@ -387,61 +548,136 @@ def _record_content_read_failure(conn, row, path: Path, source_id: int | None,
     stats.errors += 1
 
 
-def scan_source(conn, source_id: int, root: Path | str, progress=None) -> ScanStats:
+def scan_source(conn, source_id: int, root: Path | str, progress=None,
+                lock=None, prune_projects: bool = True) -> ScanStats:
     """扫描一个来源目录。
 
     扫描同时是**消失检测的兜底**（§11.1）：FSEvents 可能漏事件
     （应用没开着、网络卷、事件缓冲溢出），全量扫描比对"库里有、
     磁盘上没"的文件并标 missing —— 保留索引，等待重现自动恢复。
+
+    ``lock``：传入全局写锁时按**小批次进出**（目录遍历不持锁，每批
+    登记 + 提交后立即释放）。整盘首扫单来源可达几十分钟，若整个来源
+    一把锁，/ask 这类持锁请求会排队等它扫完（实测问答被饿数分钟）。
+    每批都 commit —— 释放 Python 锁的同时必须结束 SQLite 写事务，
+    否则其它连接的写入仍会 database is locked。
     """
     stats = ScanStats()
     root = Path(root)
+    guard = lock if lock is not None else nullcontext()
+
+    # 来源允许嵌套，但一个文件只能归最具体来源。广域来源遍历时直接剪掉
+    # 已启用的子来源，避免「QQ 扫完归 QQ，随后 B 盘又把它抢走」的来回改写。
+    with guard:
+        source_rows = conn.execute(
+            "SELECT id, path FROM sources WHERE enabled = 1 AND id != ?",
+            (source_id,),
+        ).fetchall()
+    nested_sources = [
+        (r["id"], Path(r["path"])) for r in source_rows
+        if path_is_within(r["path"], root, strict=True)
+    ]
 
     seen_ids: set[int] = set()
-    for path, was_excluded in iter_files(root):
-        if was_excluded:
-            stats.skipped_excluded += 1
-            continue
-        stats.scanned += 1
-        fid = register_file(conn, path, source_id, stats)
-        if fid is not None:
-            seen_ids.add(fid)
-
-        if progress and stats.scanned % 100 == 0:
+    files_iter = iter_files(
+        root,
+        prune_roots=tuple(p for _, p in nested_sources),
+        prune_projects=prune_projects,
+    )
+    while True:
+        # 文件系统遍历在锁外进行；每批 15 个进锁登记
+        chunk = list(itertools.islice(files_iter, 15))
+        if not chunk:
+            break
+        with guard:
+            for path, was_excluded in chunk:
+                if was_excluded:
+                    stats.skipped_excluded += 1
+                    continue
+                stats.scanned += 1
+                fid = register_file(conn, path, source_id, stats)
+                if fid is not None:
+                    seen_ids.add(fid)
+                    content_row = conn.execute(
+                        "SELECT content_id FROM files WHERE id = ?", (fid,)
+                    ).fetchone()
+                    if content_row and content_row["content_id"] is not None:
+                        stats.content_ids.add(content_row["content_id"])
             conn.commit()
+        if progress and stats.scanned % 100 < 15:
             progress(stats)
 
-    # 库里属于本来源、这次没扫到、磁盘上也确实不在 → missing。
-    # 双重确认（not exists）防误伤：文件可能刚被移出扫描深度/排除目录，
-    # 但仍在原地 —— 那不算消失。
-    rows = conn.execute(
-        "SELECT id, path FROM files WHERE source_id = ? AND state != 'missing'",
-        (source_id,),
-    ).fetchall()
-    now = time.time()
-    for r in rows:
-        if r["id"] in seen_ids:
+    # 对历史记录做三路收敛：
+    # 1) 属于子来源 → 修正归属；2) 现已命中过滤规则 → 隐藏并解除索引；
+    # 3) 磁盘确实不存在 → missing。原文件始终不动。
+    with guard:
+        rows = conn.execute(
+            "SELECT id, path, ext, state FROM files "
+            "WHERE source_id = ? AND state != 'missing'",
+            (source_id,),
+        ).fetchall()
+    reassign: list[tuple[int, int]] = []
+    ignored_ids: list[int] = []
+    gone_ids: list[int] = []
+    for row in rows:
+        if row["id"] in seen_ids:
             continue
-        if Path(r["path"]).exists():
+        owners = [
+            (child_id, child_root) for child_id, child_root in nested_sources
+            if path_is_within(row["path"], child_root)
+        ]
+        if owners:
+            owner_id, _ = max(owners, key=lambda item: len(_normal_path(item[1])))
+            reassign.append((owner_id, row["id"]))
             continue
-        conn.execute(
-            "UPDATE files SET state = 'missing', missing_since = ? WHERE id = ?",
-            (now, r["id"]),
-        )
-        stats.marked_missing += 1
+        disk_path = Path(row["path"])
+        if not disk_path.exists():
+            gone_ids.append(row["id"])
+        elif (
+            classify_ext(row["ext"] or "") == "ignore"
+            or should_skip_path(disk_path, root, check_markers=prune_projects)
+        ):
+            ignored_ids.append(row["id"])
 
-    conn.commit()
+    now = time.time()
+    with guard:
+        for owner_id, file_id in reassign:
+            conn.execute(
+                "UPDATE files SET source_id = ?, missing_since = NULL WHERE id = ?",
+                (owner_id, file_id),
+            )
+        for file_id in ignored_ids:
+            conn.execute(
+                """UPDATE files SET content_id = NULL, state = 'ignored',
+                   indexed_at = NULL, error_code = NULL, missing_since = NULL
+                   WHERE id = ?""",
+                (file_id,),
+            )
+        for gone_id in gone_ids:
+            conn.execute(
+                "UPDATE files SET state = 'missing', missing_since = ? WHERE id = ?",
+                (now, gone_id),
+            )
+            stats.marked_missing += 1
+        conn.commit()
     return stats
 
 
-def preview_source(root: Path | str, limit: int = 50000) -> dict:
-    """启用前预扫描：只计数不入库（§7.7 ⑤）。
-
-    让用户在点「启用」之前就看到"这个目录有 48 万个文件，将索引 1842 个"，
-    把风险变成可见的决策点。
-    """
+def preview_source(
+    root: Path | str,
+    limit: int = 50000,
+    *,
+    prune_projects: bool = True,
+    prune_roots: tuple[Path | str, ...] = (),
+) -> dict:
+    """Preview exactly the directory policy used by a source scan."""
+    root = canonical_source_path(root)
     total = will_index = excluded = ignored = 0
-    for path, was_excluded in iter_files(Path(root)):
+    stopped_early = False
+    files_iter = iter(iter_files(
+        root, prune_roots=prune_roots, prune_projects=prune_projects,
+    ))
+    for path, was_excluded in files_iter:
         if was_excluded:
             excluded += 1
             continue
@@ -451,11 +687,17 @@ def preview_source(root: Path | str, limit: int = 50000) -> dict:
         else:
             will_index += 1
         if total >= limit:
+            # Peek once so exactly-limit files are not falsely reported as
+            # truncated when the iterator is actually exhausted.
+            stopped_early = next(files_iter, None) is not None
             break
     return {
         "total_files": total,
         "will_index": will_index,
         "ignored_by_ext": ignored,
         "excluded_dirs": excluded,
-        "truncated": total >= limit,
+        "truncated": stopped_early,
+        "policy": {"prune_projects": prune_projects,
+                    "root": str(root),
+                    "prune_roots": [str(item) for item in prune_roots]},
     }
