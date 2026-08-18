@@ -118,7 +118,43 @@ OneDrive\文档\GitHub\InkHole\docs\跨网络传输方案.md
 `__inktable_policy_probe__.txt` 做**目录级**探测，评估不到与真实文件名相关的
 规则，导致 348 个 `README.md` 一直躲过清理。现在按真实路径再判一次。
 
-### 3.2 按目录排除，由用户决定（新增机制）
+### 3.2 安装目录剪枝与代码项目剪枝分开门控（已生效，零 PDF/DOCX 风险）
+
+`exclude_dirs.py --list` 把"占地方的目录"排出来之后，噪声的另一半立刻显形：
+
+| 文件数 | 目录 | 性质 |
+|---|---|---|
+| 751 | `C:\Users\guica\WPSDrive`（.pdf 383 / .docx 312） | **真文档** |
+| 690 | `B:\WeChat profiles\xwechat_files\…`（.docx 345 / .pdf 278） | **真文档** |
+| 604 | `D:\Android\gradle\caches`（.txt 604） | 构建缓存 |
+| 378 + 247 | `D:\git\Git\mingw64` / `usr` | Git 安装目录的文档 |
+| 168 | `D:\Android\Sdk\platforms` | Android SDK |
+
+`iter_files` 原来把**代码项目剪枝**和**安装目录剪枝**放在同一个
+`prune_projects` 门控下，整盘收录时一起关掉。但两者的歧义程度完全不同：
+
+- 代码项目：用户确实会把真笔记写在带 `.git` 的目录里（实测），不能剪。
+- 安装树：没人把个人资料放进 Git 安装目录或 Android SDK；而
+  `INSTALL_MARKERS` 认的是 `git.exe` / `adb.exe` / `mvn.cmd` 这类**具体
+  可执行文件**，不是通用目录名，误判空间极小。
+
+拆开门控后实测（可见文件 5,526）：
+
+| | 结果 |
+|---|---|
+| 剪掉 | 1,456（26%） |
+| 扩展名 | `.txt` 898、`.html` 507、`.md` 48、`.csv` 3 —— **`.pdf` 与 `.docx` 各 0 个** |
+| 个人文件哨兵 | 5/5 安全 |
+| WPSDrive / 微信接收目录 | **各 0 个被剪** |
+
+零 PDF/DOCX 被触及，是这一刀可以放心落下的判据。
+
+实现上两处：`iter_files` 的目录遍历里安装树不再受 `prune_projects` 约束
+（顺带避免整棵 gradle 缓存被走一遍）；`should_skip_path` 新增独立的
+`check_install` 开关，默认开，扫描路径显式传 `False` —— 那里遍历已在目录级
+剪过，逐文件再探会对每层祖先重复 stat。清理侧因此也能移除已入库的这批记录。
+
+### 3.3 按目录排除，由用户决定（新增机制）
 
 剩下的噪声（openclaw/TradingAgents 的 docs 等约 1,700 个）只有用户知道
 哪些该留。所以提供机制而不是猜测：
