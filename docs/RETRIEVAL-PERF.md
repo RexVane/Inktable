@@ -31,7 +31,7 @@ route_limit=120、65 条 gold 查询。工具：`scripts/profile_retrieval.py`�
 Recall 96.9%（门槛 95%）、中位压缩 60.6%（门槛 ≥35%）、offset 往返错误 0、
 压缩 P95 178.6ms（此前 219.3ms，预算 500ms）。
 
-工程回归：后端 **276 passed**（改前 266，本轮新增 10 条）、桌面 **16 passed**。
+工程回归：后端 **283 passed**（改前 266，本轮新增 17 条）、桌面 **16 passed**。
 
 
 ## 2. 为什么之前定位不到
@@ -106,6 +106,74 @@ Ollama 编码一条短查询实测 **619ms**，而**同一次调用编码 8 条�
 改完后 `hierarchy_routing` 与 `lexical_retrieval` 的耗时被嵌入的固定往返
 完全吸收，**关键路径的下界就是这 619ms**。这一点决定了后续优化的方向：
 再压词法路线（例如 `substr` 的 p95 697ms 全表扫描）对总延迟没有收益。
+
+### 3.4 同一病理的第三处：清理时的虚拟索引重建（小时级 → 秒级）
+
+不在查询路径上，但根因完全相同，实测代价更夸张。
+
+大批清理会触发 `rebuild_virtual_indexes_after_orphan_cleanup`（它的存在理由
+本来就是"逐条删几十万 FTS5/vec0 行病理性地慢，保留活集重建更快"）。但它把
+仍被引用的向量搬进临时表用的是
+
+    SELECT v.rowid, v.embedding FROM chunks_vec v JOIN chunks ch ...
+
+也就是**逐行读 vec0**。真实库 16.4 万分片时，这一步在实际运行中跑了
+**1 小时 40 分钟仍未完成**（WAL 大小不变而 mtime 持续更新 —— 读不增长 WAL，
+正是卡在读上）。
+
+改为优先走 `vector._shadow_bulk_vectors`（`_preserve_kept_vectors`），
+同一台机器同一个库实测：
+
+| | 逐行读 | 影子表整块读 |
+|---|---|---|
+| 搬运 147,427 条向量 | > 100 分钟未完成 | **< 1 分钟** |
+
+布局不符合预期时退回原来的 SQL 直拷，慢但一定正确；写回用
+`ndarray.tobytes()`，float32 逐字节还原原始 blob。
+
+中断安全性同时得到实测确认：这一步在破坏性事务之前，两次中断后
+`quick_check=ok`、外键错误 0、`chunks / chunks_fts / chunks_fts_tri /
+chunks_vec` 四张表仍全部为 164,180 且相互同步（H7）。
+
+### 3.5 顺带挖出的第四处：chunks.parent_id 缺索引（删除路径退化成平方级）
+
+不是 vec0 的病理，是一个**漏建的外键索引**，在同一次排查里暴露出来。
+
+`chunks.parent_id INTEGER REFERENCES chunks(id) ON DELETE SET NULL` 是**自引用
+外键**（parent 层指向 child 层）。开着 `PRAGMA foreign_keys` 时，删一个 chunk
+就要找出所有 `parent_id` 指向它的行来执行 SET NULL —— 没有索引就是**每删一行
+全表扫一遍**。
+
+`sections.parent_id` 建了 `idx_sections_parent`，`chunks.section_id` 建了
+`idx_chunks_section`，唯独 `chunks.parent_id` 漏了。
+
+实测（真实库 164,180 个分片，清理 670 个孤儿 content 需级联删 16,753 个分片）：
+
+| | 无索引 | 有 `idx_chunks_parent` |
+|---|---|---|
+| `DELETE FROM contents WHERE NOT EXISTS(...)` 的级联 | **30 分钟以上未完成**（约 27 亿次行访问） | **3 秒** |
+| 建索引本身 | — | 0.5 秒 |
+
+**影响面不止清理**：任何删除内容的路径都在付这笔钱 —— 移除来源
+（`/sources/remove`）、删文件（`/files/remove`）、孤儿清扫。在这个规模的库上，
+它们此前都会退化到分钟乃至小时级。
+
+`test_database.py::test_self_referencing_fk_columns_are_indexed` 守住这一列，
+顺带守住 `content_id` 与 `section_id`。
+
+### 3.6 修复叠加后的清理耗时
+
+同一次清理（真实库、删 845 个文件 + 清 670 个孤儿 content）：
+
+| 阶段 | 修复前 | 修复后 |
+|---|---|---|
+| 搬运 147,427 条向量 | > 100 分钟未完成 | 秒级 |
+| 级联删 16,753 个分片 | > 30 分钟未完成 | 3 秒 |
+| 重建 `chunks_fts`（含 jieba 重切 147,427 片） | — | 约 2 分钟 |
+| 重建 `chunks_fts_tri` / `chunks_vec` | — | 分钟级 |
+
+vec0 的**写**侧没有批量接口，147k 次插入仍是分钟级，这部分优化不了；
+但整个维护操作从"跑不完"变成几分钟，对一个少见操作可以接受。
 
 ## 4. 风险与退化路径
 

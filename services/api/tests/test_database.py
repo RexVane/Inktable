@@ -70,6 +70,35 @@ def test_init_rebuilds_legacy_contentless_fts_for_deletion() -> None:
     conn.close()
 
 
+def test_self_referencing_fk_columns_are_indexed() -> None:
+    """外键指向的列必须有索引，尤其是 chunks.parent_id 这个**自引用**外键。
+
+    chunks.parent_id REFERENCES chunks(id) ON DELETE SET NULL。开着
+    PRAGMA foreign_keys 时，删一个 chunk 就要找出所有 parent_id 指向它的行来
+    执行 SET NULL —— 没有索引就是每删一行全表扫一遍。
+
+    实测代价：真实库 164,180 个分片、删 16,753 个（清理 670 个孤儿 content）
+    时，`DELETE FROM contents WHERE NOT EXISTS(...)` 的级联跑了 30 分钟以上
+    仍未完成（约 27 亿次行访问）；补上索引后同一步几秒完成。
+    sections.parent_id 与 chunks.section_id 本来就有索引，唯独这一列漏了，
+    所以这条用例守的是"别再漏"。
+    """
+    conn = database.connect(":memory:")
+    try:
+        database.init_db(conn)
+        indexed_columns = set()
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'chunks'"
+        ):
+            for info in conn.execute(f"PRAGMA index_info({row[0]!r})"):
+                indexed_columns.add(info[2])
+        assert "parent_id" in indexed_columns, "chunks.parent_id 缺索引，级联删除会退化成全表扫"
+        assert "content_id" in indexed_columns
+        assert "section_id" in indexed_columns
+    finally:
+        conn.close()
+
+
 def test_single_instance_lock_blocks_second_holder(tmp_path, monkeypatch) -> None:
     lock_path = tmp_path / "library.db.lock"
     monkeypatch.setenv("INKTABLE_DB", str(tmp_path / "library.db"))

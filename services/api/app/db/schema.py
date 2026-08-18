@@ -139,6 +139,16 @@ CREATE TABLE IF NOT EXISTS chunks (
 CREATE INDEX IF NOT EXISTS idx_chunks_content ON chunks(content_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_layer   ON chunks(content_id, layer);
 CREATE INDEX IF NOT EXISTS idx_chunks_hash    ON chunks(text_hash);
+-- chunks.parent_id 是**自引用外键**（parent 层指向 child 层）。开着
+-- PRAGMA foreign_keys 时，删一个 chunk 就要找出所有 parent_id 指向它的行来
+-- 执行 ON DELETE SET NULL —— 没有这个索引就是每删一行全表扫一遍。
+--
+-- 实测代价：真实库 164,180 个分片、删 16,753 个（清理 670 个孤儿 content）
+-- 时，`DELETE FROM contents WHERE NOT EXISTS(...)` 的级联跑了半小时以上仍未
+-- 完成，约合 27 亿次行访问。sections.parent_id 和 chunks.section_id 都建了
+-- 索引，唯独这一列漏了。任何删除内容的路径（移除来源、删文件、清理）都在
+-- 付这笔钱。
+CREATE INDEX IF NOT EXISTS idx_chunks_parent  ON chunks(parent_id);
 
 -- Document / Section / Child 分层索引（v7 M2）。Document 与 Section 表示按
 -- index_version 保存，contents.active_index_version 是唯一激活指针。
