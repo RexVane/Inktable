@@ -309,6 +309,51 @@ def _populate_empty_virtual_indexes(
     }
 
 
+def _preserve_kept_vectors(conn: sqlite3.Connection) -> None:
+    """把仍被引用的向量搬进临时表，供虚拟表重建后写回。
+
+    直接 `SELECT embedding FROM chunks_vec` 是逐行读 vec0，实测约 5ms/行 ——
+    17 万分片光这一步就要十几分钟（本轮清理实测卡在这里近一个半小时）。
+    向量在 vec0 内部按每 1024 条打包在影子表里，整块读只要秒级，
+    所以优先走 `vector._shadow_bulk_vectors`；布局不符合预期时退回原来的
+    SQL 直拷，慢但一定正确。
+    """
+    kept = {
+        row[0] for row in conn.execute(
+            """SELECT ch.id FROM chunks ch
+               WHERE EXISTS (SELECT 1 FROM files f WHERE f.content_id = ch.content_id)"""
+        )
+    }
+    if not kept:
+        return
+
+    from app.index import vector as vec
+
+    built = vec._shadow_bulk_vectors(conn)
+    if built is not None:
+        ids, matrix = built
+        rows = [
+            (int(chunk_id), matrix[index].tobytes())
+            for index, chunk_id in enumerate(ids.tolist())
+            if chunk_id in kept
+        ]
+        conn.executemany(
+            "INSERT OR REPLACE INTO temp.inktable_kept_vectors(rowid, embedding) "
+            "VALUES (?, ?)",
+            rows,
+        )
+        return
+
+    conn.execute(
+        """INSERT INTO temp.inktable_kept_vectors(rowid, embedding)
+           SELECT v.rowid, v.embedding
+           FROM chunks_vec v JOIN chunks ch ON ch.id = v.rowid
+           WHERE EXISTS (
+               SELECT 1 FROM files f WHERE f.content_id = ch.content_id
+           )"""
+    )
+
+
 def rebuild_virtual_indexes_after_orphan_cleanup(
     conn: sqlite3.Connection,
     *,
@@ -337,14 +382,7 @@ def rebuild_virtual_indexes_after_orphan_cleanup(
         "(rowid INTEGER PRIMARY KEY, embedding BLOB NOT NULL)"
     )
     if _table_exists(conn, "chunks_vec"):
-        conn.execute(
-            """INSERT INTO temp.inktable_kept_vectors(rowid, embedding)
-               SELECT v.rowid, v.embedding
-               FROM chunks_vec v JOIN chunks ch ON ch.id = v.rowid
-               WHERE EXISTS (
-                   SELECT 1 FROM files f WHERE f.content_id = ch.content_id
-               )"""
-        )
+        _preserve_kept_vectors(conn)
     kept_vectors = conn.execute(
         "SELECT count(*) FROM temp.inktable_kept_vectors"
     ).fetchone()[0]
