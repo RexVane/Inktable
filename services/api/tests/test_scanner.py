@@ -503,6 +503,40 @@ def test_repo_boilerplate_skipped_only_inside_code_projects(tmp_path):
         assert not scanner.should_skip_file_name(name), f"误杀真实资料：{name}"
 
 
+def test_install_trees_pruned_even_when_project_pruning_is_off(db, source, tmp_path):
+    """安装目录与代码项目**分开门控**：整盘收录关掉代码项目剪枝，但仍剪安装树。
+
+    整盘剪代码项目会误删用户写在带 .git 目录里的真笔记（实测），所以那条关掉。
+    但安装树没有这种歧义 —— 没人把个人资料放进 Git 安装目录或 Android SDK，
+    而 INSTALL_MARKERS 认的是 git.exe / adb.exe 这类具体可执行文件，不是通用
+    目录名。实测只开安装目录剪枝可去掉 1456 个可见文件（Android gradle 缓存
+    604、Git mingw64 378…），其中 .pdf 与 .docx 各 0 个。
+    """
+    root = tmp_path / "drive"
+    # 安装树：靠 cmd/git.exe 这个具体标记识别
+    install = root / "git" / "Git"
+    (install / "cmd").mkdir(parents=True)
+    (install / "cmd" / "git.exe").write_text("", encoding="utf-8")
+    (install / "usr").mkdir()
+    (install / "usr" / "手册.txt").write_text("安装目录里的手册", encoding="utf-8")
+    # 代码项目：整盘收录时**不**剪，用户可能把真笔记写在里面
+    project = root / "myproject"
+    project.mkdir()
+    (project / "package.json").write_text("{}", encoding="utf-8")
+    (project / "设计笔记.md").write_text("用户自己写的笔记", encoding="utf-8")
+    # 普通资料
+    (root / "资料.txt").write_text("普通资料", encoding="utf-8")
+
+    found = {
+        path.name
+        for path, _skipped in scanner.iter_files(root, prune_projects=False)
+        if path is not None
+    }
+    assert "资料.txt" in found
+    assert "设计笔记.md" in found, "整盘收录不该剪掉代码项目里的真笔记"
+    assert "手册.txt" not in found, "安装树应当被剪掉，即使代码项目剪枝是关的"
+
+
 def test_scan_never_modifies_files(db, source, tmp_path):
     """扫描绝不改动原文件 —— PLAN §1 第一条不可协商约束。"""
     paths = []

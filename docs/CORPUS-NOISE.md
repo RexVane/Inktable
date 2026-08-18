@@ -160,5 +160,32 @@ cd services/api
 把相伴的数值与限定条件写进同一句。**一条安全约束都没放松**：仍然不加背景
 知识、不加推理、每行一个可验证事实并带引用、无依据时只输出拒答句。
 
-改动必须用 65 题真实模型 QA 复验引用门槛（引用支持率 ≥95%、精确引用率、
-句级覆盖、正确拒答率），因为放长回答会增加未获支持声明的机会。
+### 4.1 复验状态：尚未验证（provider 全部不可用）
+
+放长回答会增加未获支持声明的机会，所以必须用 65 题真实模型 QA 复验引用门槛。
+2026-08-18 尝试复验时，cc-switch 里 7 个配好的 provider 全部不可用：
+
+| provider / model | 状态 |
+|---|---|
+| myself / gpt-5.6-terra、modelshare | HTTP 503 |
+| kocode、Z30、ModelShare、佬友炸弹车（gpt-5.6-sol） | HTTP 403 |
+| anyrouter | 超时 |
+
+**因此 `docs/eval` 与 CURRENT_STATUS 第九节记录的引用支持率 96.99% 等数字，
+是用旧提示词测出来的**；在复验通过之前不应把它当作当前代码的门槛结果。
+
+风险性质要分清：引用的**强制执行在代码里，不在提示词里**（`HANDOFF.md` H8
+「prompt 是建议，校验是执行」）。四条后置硬校验一行未动，且已用
+`build_messages` 直接断言新提示词仍禁止背景知识与推理、仍要求每行带引用、
+仍保留拒答规则。所以放长回答的风险是**指标可能下滑**，不是安全性下滑。
+
+provider 恢复后：
+
+```bash
+cd services/api
+INKTABLE_DB=../../output/release-gate-20260817/library-working.db INKTABLE_OLLAMA_URL=http://127.0.0.1:18434 .venv/Scripts/python.exe scripts/run_qa_eval.py   --provider myself --model gpt-5.6-luna --reranker auto   --ollama-url http://127.0.0.1:18434 --case-delay 2 --judge-retries 3   --json ../../output/release-gate-20260817/qa-luna-65-longer.json
+```
+
+判据：引用支持率 ≥95%、精确引用率 100%、句级引用覆盖 100%、正确拒答 12/12、
+provider 故障 0。任一项跌破就把提示词改回原来的「1 至 6 个简短条目」——
+不为"回答长一点"牺牲引用可靠性。

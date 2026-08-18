@@ -333,7 +333,8 @@ def should_skip_file_name(name: str) -> bool:
 
 
 def should_skip_path(path: Path | str, root: Path | str,
-                     max_depth: int = MAX_DEPTH, *, check_markers: bool = True) -> bool:
+                     max_depth: int = MAX_DEPTH, *, check_markers: bool = True,
+                     check_install: bool = True) -> bool:
     """判断一个**文件**是否应跳过。
 
     扫描与实时监听共用同一套规则。来源根本身不受目录名/项目标记影响，
@@ -377,7 +378,11 @@ def should_skip_path(path: Path | str, root: Path | str,
             # 与自己的项目在路径上无法区分，所以这条不做成规则，交给用户按
             # 目录排除（见 sources 的排除机制）。
             return True
-        if check_markers and _looks_like_install_dir(current):
+        # 安装目录与代码项目分开门控：整盘收录关掉的只是代码项目剪枝，
+        # 安装树没有歧义（认的是 git.exe / adb.exe 这类具体可执行文件），
+        # 所以默认仍然挡。扫描路径传 check_install=False —— 那里的目录遍历
+        # 已在目录级剪过安装树，逐文件再探会对每层祖先重复 stat。
+        if check_install and _looks_like_install_dir(current):
             return True
     return False
 
@@ -410,9 +415,18 @@ def iter_files(root: Path, max_depth: int = MAX_DEPTH,
             dirnames.clear()
             continue
 
-        # 显式来源根豁免；整盘扫描可选择跳过代码项目/安装树。
-        if prune_projects and current != root and (
-            _listing_is_code_project(dirnames, filenames)
+        # 显式来源根豁免。
+        #
+        # 安装目录与代码项目**分开门控**：整盘收录关掉的是代码项目剪枝
+        # （实测打开会误删用户写在带 .git 目录里的面试笔记、实现路线图），
+        # 但安装树没有这种歧义 —— 没人把个人资料放进 Git 安装目录或
+        # Android SDK，而 INSTALL_MARKERS 认的是 git.exe / adb.exe 这类具体
+        # 可执行文件，不是通用目录名。实测只开安装目录剪枝可去掉 1456 个
+        # 可见文件（Android gradle 缓存 604、Git mingw64 378、Git usr 247、
+        # Android SDK 168…），其中 .pdf 与 .docx **各 0 个**，
+        # WPSDrive 与微信接收目录各 0 个 —— 真文档零风险。
+        if current != root and (
+            (prune_projects and _listing_is_code_project(dirnames, filenames))
             or (depth <= 3 and _looks_like_install_dir(current))
         ):
             dirnames.clear()
@@ -440,7 +454,8 @@ def iter_files(root: Path, max_depth: int = MAX_DEPTH,
                 continue
             path = current / fn
             # 当前目录的项目/安装判定已在上面做过，逐文件无需重复 stat 标记。
-            if should_skip_path(path, root, max_depth, check_markers=False):
+            if should_skip_path(path, root, max_depth, check_markers=False,
+                                check_install=False):
                 continue
             yield path, False
 
