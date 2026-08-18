@@ -453,6 +453,56 @@ def test_broad_source_never_steals_nested_source_files(db, tmp_path):
     ).fetchone()["source_id"] == nested_id
 
 
+def test_agent_config_docs_skipped_anywhere():
+    """第一层：agent / 编辑器机器配置在任何位置都不是知识，无条件挡掉。
+
+    实测真实库里 skill.md 一项就有 265 个副本。
+    """
+    for name in ["SKILL.md", "skill.md", "AGENTS.md", "CLAUDE.md",
+                 "GEMINI.md", "cursorrules.md", "copilot-instructions.md"]:
+        assert scanner.should_skip_file_name(name), f"agent 配置未被挡住：{name}"
+
+
+def test_repo_boilerplate_skipped_only_inside_code_projects(tmp_path):
+    """第二层：仓库样板只在代码项目内部才算噪声。
+
+    同一个 README.md 在用户资料目录里可能是他自己写的说明，在 git 仓库里
+    就是样板。所以这一层必须结合路径判断，不能只看文件名。
+
+    为什么不能直接对整盘打开代码项目剪枝：实测那样会连 OneDrive / WPSDrive
+    里的个人简历、证件、升学材料一起判成"代码项目内"而排除 —— 6266 个可见
+    文件里 5409 个会消失。所以只挡样板文件名，不剪整棵项目树。
+    """
+    root = tmp_path / "drive"
+    project = root / "repo"
+    project.mkdir(parents=True)
+    (project / "package.json").write_text("{}", encoding="utf-8")
+    notes = root / "资料"
+    notes.mkdir()
+
+    # 仓库里的样板：挡
+    for name in ["README.md", "README.en.md", "README_CN.md", "CHANGELOG.md",
+                 "CONTRIBUTING.md", "NOTICE.txt"]:
+        assert scanner.should_skip_path(project / name, root, check_markers=False), \
+            f"仓库样板未被挡住：{name}"
+
+    # 同名文件在普通资料目录里：保留
+    for name in ["README.md", "CHANGELOG.md"]:
+        assert not scanner.should_skip_path(notes / name, root, check_markers=False), \
+            f"误杀资料目录里的同名文件：{name}"
+
+    # 仓库里的真实内容文件：保留（只挡样板名，不剪整棵树）
+    for name in ["架构设计.md", "readme笔记.md", "market_report.md",
+                 "auth-credential-semantics.md"]:
+        assert not scanner.should_skip_path(project / name, root, check_markers=False), \
+            f"误杀仓库内的真实内容：{name}"
+
+    # 文件名判定不该误伤用户资料
+    for name in ["理论笔记.md", "个人简历.docx", "操作系统实验报告.pdf",
+                 "我的readme总结.md", "readme使用说明.md"]:
+        assert not scanner.should_skip_file_name(name), f"误杀真实资料：{name}"
+
+
 def test_scan_never_modifies_files(db, source, tmp_path):
     """扫描绝不改动原文件 —— PLAN §1 第一条不可协商约束。"""
     paths = []

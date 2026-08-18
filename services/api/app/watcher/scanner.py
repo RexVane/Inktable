@@ -207,7 +207,27 @@ def _is_reparse_dir(path: Path) -> bool:
                 & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
 
 
+def _is_profile_or_drive_root(path: Path) -> bool:
+    """家目录与盘根永远不算代码项目。
+
+    实测踩到的坑：用户家目录 `C:\\Users\\guica` 里有一个 `.git`（dotfiles 仓库
+    或工具留下的），于是 `_looks_like_code_project` 对家目录返回 True，家目录
+    **以下所有**文件都被判成"在代码项目内" —— 打开整盘剪枝时会把 OneDrive、
+    WPSDrive、Desktop 里的个人简历、证件、升学材料一起排除，6266 个可见文件
+    里 5409 个消失。家目录级别的标记是 dotfiles，不是"这棵树是代码项目"。
+    """
+    try:
+        normalized = _normal_path(path)
+        if normalized == _normal_path(path.anchor or path):
+            return True
+        return normalized == _normal_path(Path.home())
+    except (OSError, RuntimeError):
+        return False
+
+
 def _looks_like_code_project(path: Path) -> bool:
+    if _is_profile_or_drive_root(path):
+        return False
     try:
         with os.scandir(path) as entries:
             names = {entry.name.casefold() for entry in entries}
@@ -235,9 +255,72 @@ def _looks_like_install_dir(path: Path) -> bool:
         return False
 
 
+# 样板文档分两层，因为它们的"是不是噪声"取决于位置的程度不同。
+#
+# 第一层：AI agent 与编辑器的机器配置。它们在**任何位置**都不是用户写下的
+# 知识，而是给工具读的配置，所以无条件挡掉。实测 skill.md 一项就 265 个。
+AGENT_CONFIG_DOC_STEMS = {
+    "skill", "agents", "claude", "gemini", "cursorrules", "copilotinstructions",
+}
+# 第二层：代码仓库样板。同一个文件名在不同位置含义完全不同 ——
+# 用户 Documents 里的 README 可能是他自己写的说明，而 git 仓库里的
+# README 是仓库样板。所以这一层**只在祖先目录是代码项目时**才挡。
+# 实测真实库里 readme.md 有 348 个副本，是 .md 噪声的头号来源。
+REPO_BOILERPLATE_DOC_STEMS = {
+    "readme", "changelog", "changes", "contributing", "codeofconduct",
+    "security", "authors", "maintainers", "notice", "history",
+}
+# 本地化与序号变体的基名：readme.en / README_CN / changelog-zh / README2
+_BOILERPLATE_VARIANT_BASES = ("readme", "changelog", "contributing")
+_DOC_SUFFIXES = {"md", "markdown", "txt", "rst"}
+
+
+def _doc_stem(name: str) -> str | None:
+    """取文档类文件的规范化主名；非文档扩展名返回 None。"""
+    lowered = name.casefold()
+    stem, _, suffix = lowered.rpartition(".")
+    if not stem or suffix not in _DOC_SUFFIXES:
+        return None
+    return (
+        stem.replace("_", "").replace("-", "").replace(" ", "").replace(".", "")
+    )
+
+
+def _is_agent_config_doc(name: str) -> bool:
+    """第一层：agent / 编辑器机器配置，任何位置都挡。"""
+    stem = _doc_stem(name)
+    return stem in AGENT_CONFIG_DOC_STEMS if stem else False
+
+
+def _is_repo_boilerplate_doc(name: str) -> bool:
+    """第二层：仓库样板文档名。是否真的挡由调用方结合路径决定。"""
+    stem = _doc_stem(name)
+    if not stem:
+        return False
+    if stem in REPO_BOILERPLATE_DOC_STEMS:
+        return True
+    # 本地化/序号变体：余下部分必须是**纯 ASCII 短标记**才算样板。
+    # 这道限制保住 readme笔记.md 这类 —— 带中文后缀说明是用户自己写的内容。
+    for base in _BOILERPLATE_VARIANT_BASES:
+        if stem.startswith(base):
+            rest = stem[len(base):]
+            if not rest:
+                return True
+            if len(rest) <= 6 and rest.isascii() and rest.isalnum():
+                return True
+    return False
+
+
 def should_skip_file_name(name: str) -> bool:
-    """过滤隐藏/临时文件和软件许可证巨型文本。"""
+    """过滤隐藏/临时文件、软件许可证巨型文本，以及 agent 机器配置文档。
+
+    仓库样板（README / CHANGELOG …）**不在这里**挡：它同一个名字在
+    用户资料目录里可能是真内容，只有落在代码项目里才是样板，
+    所以交给 should_skip_path 结合路径判断。
+    """
     if name.startswith(".") or name.startswith("~$"):
+        return True
+    if _is_agent_config_doc(name):
         return True
     compact = name.casefold().replace("_", "").replace("-", "").replace(" ", "")
     return (
@@ -274,14 +357,27 @@ def should_skip_path(path: Path | str, root: Path | str,
     if should_skip_file_name(p.name):
         return True
 
+    # 样板文件名先做**纯字符串**预判，只有命中才去付 scandir 探项目标记的
+    # 代价。反过来写会让整盘扫描的每个文件都对每层祖先 scandir 一次。
+    boilerplate = _is_repo_boilerplate_doc(p.name)
+
     current = base
     for part in parents:
         current /= part
         if should_skip_dir(part):
             return True
-        if check_markers and (
-            _looks_like_code_project(current) or _looks_like_install_dir(current)
-        ):
+        if (check_markers or boilerplate) and _looks_like_code_project(current):
+            # 整盘收录时不剪整棵项目树：实测剪了会把用户写在带代码标记目录里的
+            # 面试笔记、实现路线图一起排除。但项目里的 README / CHANGELOG
+            # 仍然是样板而非知识，这里单独挡掉。
+            #
+            # 曾经试过把 docs/ 目录也一并算作项目文档（能多清 1200 个 .md），
+            # 但它同时会删掉用户**自己**项目的设计文档 —— InkHole/docs 下的
+            # 「墨洞项目计划」正是 gold 评测 X07 题依赖的资料。第三方克隆项目
+            # 与自己的项目在路径上无法区分，所以这条不做成规则，交给用户按
+            # 目录排除（见 sources 的排除机制）。
+            return True
+        if check_markers and _looks_like_install_dir(current):
             return True
     return False
 
@@ -548,6 +644,14 @@ def _record_content_read_failure(conn, row, path: Path, source_id: int | None,
     stats.errors += 1
 
 
+def _user_exclusions(conn) -> list[str]:
+    """读取用户排除的目录。表可能还不存在（老库首次升级），此时视为无排除。"""
+    try:
+        return [row[0] for row in conn.execute("SELECT path FROM excluded_paths")]
+    except Exception:  # noqa: BLE001 - 排除表缺失不能让扫描失败
+        return []
+
+
 def scan_source(conn, source_id: int, root: Path | str, progress=None,
                 lock=None, prune_projects: bool = True) -> ScanStats:
     """扫描一个来源目录。
@@ -577,11 +681,18 @@ def scan_source(conn, source_id: int, root: Path | str, progress=None,
         (r["id"], Path(r["path"])) for r in source_rows
         if path_is_within(r["path"], root, strict=True)
     ]
+    # 用户排除的目录直接并进 prune_roots：iter_files 本来就按子树剪，
+    # 不需要为排除功能另铺一套管道。排除只作用于索引层，不动磁盘文件。
+    with guard:
+        excluded_roots = tuple(
+            Path(path) for path in _user_exclusions(conn)
+            if path_is_within(path, root)
+        )
 
     seen_ids: set[int] = set()
     files_iter = iter_files(
         root,
-        prune_roots=tuple(p for _, p in nested_sources),
+        prune_roots=tuple(p for _, p in nested_sources) + excluded_roots,
         prune_projects=prune_projects,
     )
     while True:

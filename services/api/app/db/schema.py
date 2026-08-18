@@ -259,6 +259,22 @@ CREATE TABLE IF NOT EXISTS book_members (
     PRIMARY KEY (book_id, file_id)
 );
 
+-- 用户排除的目录子树（2026-08-18）。
+--
+-- 为什么必须交给用户而不是靠启发式：入库白名单按**扩展名**过滤，而 .md
+-- 同时是用户笔记和每个代码仓库样板的格式。实测真实库里 .md 占可见文件
+-- 41%，大头是克隆的第三方项目的 docs/。试过按目录名（docs/）自动排除，
+-- 但那会连用户**自己**项目的设计文档一起删掉 —— InkHole/docs 下的
+-- 「墨洞项目计划」正是 gold 评测 X07 题依赖的资料。第三方项目与自己的
+-- 项目在路径上无法区分，只有用户知道，所以由用户按目录排除。
+--
+-- 只影响索引层：排除不移动、不改名、不删除磁盘上的任何文件，
+-- 文件记录也保留（置为 ignored），取消排除后重新扫描即可恢复。
+CREATE TABLE IF NOT EXISTS excluded_paths (
+    path       TEXT PRIMARY KEY,
+    created_at REAL NOT NULL
+);
+
 -- 中文全文检索双索引（§9.1，M0 实测确认必须双路）
 --
 -- FTS5 默认 unicode61 对中文零命中：整段汉字被当作一个 token。

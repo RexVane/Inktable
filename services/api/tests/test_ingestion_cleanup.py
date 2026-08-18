@@ -186,9 +186,23 @@ def test_cleanup_repairs_nested_source_and_never_touches_original_files(db, tmp_
     assert (root / "keep.py").exists()
 
 
-def test_cleanup_fixed_drive_policy_keeps_whitelisted_project_docs(
+def test_cleanup_fixed_drive_policy_keeps_project_content_but_drops_boilerplate(
     db, tmp_path, monkeypatch,
 ):
+    """固定盘策略下，代码项目里的**真实内容**保留，**仓库样板**清掉。
+
+    这条用例原先断言项目里的 README.md 也要保留（"important user document"）。
+    2026-08-18 按真实使用反馈反转了 README 这一半：真实库里 readme.md 有
+    348 个副本、skill.md 有 265 个，可见文件里 .md 占 41%，用户报告
+    "很多没用的 .md 文件在干扰"。仓库样板是给仓库读的说明，不是个人知识。
+
+    反转的范围被刻意限窄，只动样板文件名：
+      · 整盘扫描仍然不剪整棵项目树 —— 实测剪了会连 OneDrive / WPSDrive 里的
+        个人简历、证件、升学材料一起排除，6266 个可见文件里 5409 个会消失。
+      · 项目里非样板名的文档照常保留（下面 design-notes.md 这一条守住它）。
+      · 用户若确实要某个项目的样板文档，把该目录单独加成来源即可 ——
+        来源根本身豁免标记检查。
+    """
     from app.maintenance import ingestion_cleanup
     from app.watcher.policy import ScanPolicy
 
@@ -197,10 +211,13 @@ def test_cleanup_fixed_drive_policy_keeps_whitelisted_project_docs(
     project.mkdir(parents=True)
     (project / "package.json").write_text("{}", encoding="utf-8")
     readme = project / "README.md"
-    readme.write_text("important user document", encoding="utf-8")
+    readme.write_text("repo boilerplate", encoding="utf-8")
+    notes = project / "design-notes.md"
+    notes.write_text("用户自己写在项目里的设计笔记", encoding="utf-8")
     source_id = _insert_source(db, "drive", root)
     _insert_historical_file(db, source_id, project / "package.json", 1)
     readme_id = _insert_historical_file(db, source_id, readme, 2)
+    notes_id = _insert_historical_file(db, source_id, notes, 3)
     db.commit()
 
     monkeypatch.setattr(
@@ -210,8 +227,10 @@ def test_cleanup_fixed_drive_policy_keeps_whitelisted_project_docs(
     )
     plan = build_cleanup_plan(db)
 
-    assert {item.file_id for item in plan.removals} == {1}
-    assert all(item.file_id != readme_id for item in plan.removals)
+    removed = {item.file_id for item in plan.removals}
+    assert 1 in removed, "package.json 不在入库白名单内，应清掉"
+    assert readme_id in removed, "代码项目里的 README 是仓库样板，应清掉"
+    assert notes_id not in removed, "项目里非样板名的文档必须保留"
 
 
 def test_enable_planned_system_sources_is_idempotent(db, tmp_path):

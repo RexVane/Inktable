@@ -127,6 +127,17 @@ def build_cleanup_plan(conn: sqlite3.Connection) -> CleanupPlan:
                 policy.prune_projects,
             ):
                 removals.append(FileRemoval(row["id"], "directory"))
+                continue
+            # 目录级探测用的是占位文件名，评估不到与**真实文件名**相关的规则
+            # （仓库样板 README / CHANGELOG 只在代码项目内部才算噪声）。
+            # 所以这里再按真实路径判一次，否则这类残留永远清不掉：
+            # 实测真实库里 readme.md 有 348 个副本躲过了目录级探测。
+            # 对非样板文件名，should_skip_path 不会去 scandir 探项目标记，
+            # 因此这次额外判定基本不增加成本。
+            if should_skip_path(
+                row["path"], policy.root, check_markers=policy.prune_projects,
+            ):
+                removals.append(FileRemoval(row["id"], "policy"))
 
     return CleanupPlan(
         inspected=len(rows),

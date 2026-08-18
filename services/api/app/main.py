@@ -590,6 +590,62 @@ def disable_source(req: SourceIdRequest) -> dict:
     return {"disabled": True, "path": row["path"]}
 
 
+class ExcludeRequest(BaseModel):
+    path: str
+
+
+@app.get("/sources/exclusions", dependencies=[Depends(require_token)])
+def list_source_exclusions(candidates: bool = True) -> dict:
+    """列出已排除的目录，并给出按可见文件数排名的候选目录。
+
+    候选只统计不判断：哪个目录是噪声只有用户知道 —— 入库白名单按扩展名
+    过滤，而 .md 同时是用户笔记和代码仓库样板的格式，实测占可见文件 41%，
+    自动识别的两条路（整盘剪代码项目、按 docs/ 目录名排除）都会误删真资料。
+    """
+    from app.domain.exclusions import list_exclusions, noisy_directory_candidates
+
+    with _db_lock:
+        conn = db()
+        payload: dict = {"excluded": list_exclusions(conn)}
+        if candidates:
+            payload["candidates"] = noisy_directory_candidates(conn)
+        return payload
+
+
+@app.post("/sources/exclude", dependencies=[Depends(require_token)])
+def exclude_source_path(req: ExcludeRequest) -> dict:
+    """排除一个目录子树：其下文件不再进入浏览、检索与问答。
+
+    **不移动、不改名、不删除磁盘上的任何文件**（§1 约束 1）；文件记录
+    保留并置为 ignored，取消排除后重新扫描即可恢复。
+    """
+    from app.domain.exclusions import add_exclusion
+
+    target = req.path.strip()
+    if not target:
+        raise HTTPException(status_code=400, detail="path 不能为空")
+    with _db_lock:
+        conn = db()
+        result = add_exclusion(conn, target)
+        conn.commit()
+    return result
+
+
+@app.post("/sources/unexclude", dependencies=[Depends(require_token)])
+def unexclude_source_path(req: ExcludeRequest) -> dict:
+    """取消排除。被隐藏的记录恢复为 registered，等下次扫描重新索引。"""
+    from app.domain.exclusions import remove_exclusion
+
+    target = req.path.strip()
+    if not target:
+        raise HTTPException(status_code=400, detail="path 不能为空")
+    with _db_lock:
+        conn = db()
+        result = remove_exclusion(conn, target)
+        conn.commit()
+    return result
+
+
 @app.post("/sources/remove", dependencies=[Depends(require_token)])
 def remove_source(req: SourceIdRequest) -> dict:
     """移除来源，连带清掉它的文件记录与索引。
