@@ -128,6 +128,22 @@ def connect(path: Path | str | None = None) -> sqlite3.Connection:
     return conn
 
 
+def connect_readonly(path: Path | str | None = None) -> sqlite3.Connection:
+    """只读连接。用于绝不写库的旁路（预热、审计、统计）。
+
+    为什么必须有这个：普通 connect() 会执行 `PRAGMA journal_mode = WAL`，
+    那需要短暂的排他锁。只读旁路若走 connect()，就会和正常写入方抢锁 ——
+    启动时的向量矩阵预热线程曾因此让 TestClient 用例间歇性报
+    "database is locked"（app/main.py 的 _warm_vector_matrix）。
+    只读连接不设 journal_mode，也就不可能造成这种竞争。
+    """
+    p = Path(path) if path else Path(os.environ.get("INKTABLE_DB") or DB_PATH)
+    conn = sqlite3.connect(f"file:{p.as_posix()}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    _load_vec_extension(conn)
+    return conn
+
+
 def _load_vec_extension(conn: sqlite3.Connection) -> bool:
     """加载 sqlite-vec 扩展。
 

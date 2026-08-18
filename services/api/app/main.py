@@ -58,13 +58,18 @@ def _warm_vector_matrix() -> None:
     但首次重建要读满全库向量、约 1 秒起。放后台线程，别让第一个提问的人
     付这笔钱。自带连接：矩阵缓存是模块级的，任一连接预热完对全进程生效。
 
+    **必须用只读连接**：普通 connect() 会执行 `PRAGMA journal_mode = WAL`，
+    那需要短暂排他锁，会和启动时的正常写入抢锁 —— 曾让 TestClient 用例
+    间歇性报 "database is locked"。预热只读不写，只读连接不设 journal_mode，
+    也就不可能造成这种竞争。
+
     纯只读，且任何异常都只是没预热到（下一次查询自己建），不能影响启动。
     """
     try:
-        from app.db.database import connect
+        from app.db.database import connect_readonly
         from app.index import vector as vec
 
-        conn = connect()
+        conn = connect_readonly()
         try:
             started = time.perf_counter()
             if vec.warmup(conn):

@@ -70,6 +70,31 @@ def test_init_rebuilds_legacy_contentless_fts_for_deletion() -> None:
     conn.close()
 
 
+def test_connect_readonly_cannot_write_and_sets_no_journal_mode(tmp_path) -> None:
+    """只读旁路必须真的只读，而且不能碰 journal_mode。
+
+    背景：向量矩阵预热线程原先走普通 connect()，它会执行
+    `PRAGMA journal_mode = WAL` —— 那需要短暂排他锁，于是启动时预热与正常
+    写入抢锁，TestClient 用例开始**间歇性**报 database is locked
+    （三轮全量挂两次、单独跑却通过）。只读连接不设 journal_mode，
+    从根上没有这种竞争。
+
+    这条用例守的是一般化的教训：只读旁路（预热、审计、统计）不该走读写连接。
+    """
+    path = tmp_path / "library.db"
+    writer = database.connect(path)
+    database.init_db(writer)
+    writer.close()
+
+    reader = database.connect_readonly(path)
+    try:
+        assert reader.execute("SELECT count(*) FROM files").fetchone()[0] == 0
+        with pytest.raises(sqlite3.OperationalError):
+            reader.execute("INSERT INTO settings(key, value) VALUES ('x', 'y')")
+    finally:
+        reader.close()
+
+
 def test_self_referencing_fk_columns_are_indexed() -> None:
     """外键指向的列必须有索引，尤其是 chunks.parent_id 这个**自引用**外键。
 
