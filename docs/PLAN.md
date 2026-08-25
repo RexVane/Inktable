@@ -565,7 +565,7 @@ ExpandedEvidence
 | 阶段 | 指标 | v7 首个发布门槛 |
 |---|---|---|
 | 深召回 | Gold evidence Recall@50 | >= 0.90 |
-| Rerank | nDCG@10 / MRR@10 | 相对 RRF 基线提升 >= 15%，Recall@20 回退 <= 2pp |
+| Rerank | nDCG@10 / Recall / 延迟 | nDCG@10 ≥ 90%、Recall@5 ≥ 95%、Recall@20 回退 ≤ 2pp，且 Rerank P95 ≤ 1.5s；旧“相对 RRF +15%”规则已废止（高基线时数学上失真） |
 | 压缩 | Evidence Recall | >= 0.95 |
 | 压缩 | 输入 token 减少 | 中位数 >= 35%，且 Evidence Recall 达标 |
 | 问答 | 引用支持率 | >= 0.95 |

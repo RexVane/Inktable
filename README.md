@@ -17,18 +17,22 @@ Windows 移植已完成并实测可用（发现/扫描/索引/向量/问答/实�
 增量更新、保全和治理。
 
 v8 Gold 合约共 77 题（46 answerable、7 metadata、12 corpus-missing、
-12 unanswerable），含 96 个证据要求和 691 个精确原文 span。当前生产默认
-`local-static-v3`：53 个可评估问题 Recall@5 **94.3%**、MRR@10 **88.1%**、
-nDCG@10 **91.0%**、P95 2.67 秒。正式证据压缩达到 Gold Evidence Recall
-**99.0%**、完整案例 **97.8%**、压缩率中位数 **62.0%**、P95 247.5 ms，
-offset 往返零错误。Cross-Encoder 已完成 ONNX 实装与对照，但相对 RRF 的
-MRR/nDCG 仅提升约 8%，未达到 +15% 门槛，因此未切换生产默认。
+12 unanswerable），含 96 个证据要求和 691 个精确原文 span。以下冻结指标均来自
+Git 基线 `6a7ce93`、同一私有语料快照（29,434 chunks）；可复核原始产物为
+`docs/eval/v8-final-local.json`、`v8-final-compress.json` 和 `v8-final-qa.json`，
+不能与其他数据库快照或模型直接横比。生产默认 `local-static-v3` 在 53 个可评估
+问题上 Recall@5 **94.3%**、MRR@10 **88.1%**、nDCG@10 **91.0%**、P95
+2.67 秒。证据压缩的 Gold Evidence Recall 为 **99.0%**、完整案例 **97.8%**、
+压缩率中位数 **62.0%**、P95 247.5 ms，offset 往返零错误。ONNX
+Cross-Encoder 已完成对照，但没有在质量、召回和延迟的联合发布门槛上优于默认，
+因此未切换生产配置；旧版“相对 nDCG +15%”门槛因高基线下数学上失真而已废止。
 
-正式真实模型 QA 使用 `kocode / gpt-5.6-sol` 完成 65/65：引用支持率
-**95.16%**、精确引用率 **100%**、句级引用覆盖 **100%**、无依据问题
-正确拒答率 **100%**（12/12），无 provider failure 或 degraded 运行。
-`A13`、`S17` 进入可审计 fallback；Gold evidence citation recall 68.93%
-作为诊断指标保留，不是本轮 QA 发布门槛。
+冻结的真实模型 QA 产物由 `kocode / gpt-5.6-sol` 跑完 65/65 个用例；这里的
+“65/65”只表示评测流程完整、无 provider failure/degraded，并不表示每个 gold
+证据都被引用。引用支持率 **95.16%** 是由同一模型对自身声明进行的自动判定，
+不是独立人工裁决；精确引用格式与句级引用覆盖均为 **100%**，无依据问题正确
+拒答率为 **100%**（12/12）。更严格且应优先阅读的端到端指标是 **Gold evidence
+citation recall 68.93%（71/103）**；`A13`、`S17` 进入可审计 fallback。
 
 | 能力 | 状态 |
 |---|---|
@@ -55,10 +59,10 @@ MRR/nDCG 仅提升约 8%，未达到 +15% 门槛，因此未切换生产默认�
 | 实时监听（新文件自动入库，约 3.5 秒） | ✅ |
 | 保全副本 / 文件消失处理 / 文件书 | ✅ |
 | Windows 移植（真实系统目录/微信 QQ 自定义路径发现、整盘收录、全盘发现、窗口控件叠加） | ✅ |
-| ONNX Cross-Encoder 重排 | 🧪 已实装并评测，未过 +15% 选型门槛 |
-| 级联重排（本地打分器 + CE 精排融合前 26 位） | 🧪 可选 `INKTABLE_RERANKER=cascade`：Recall@5 96.2% / Recall@20 100%，Rerank P95 超门槛约 10% |
+| ONNX Cross-Encoder 重排 | 🧪 已实装并冻结对照；未通过“nDCG@10 ≥90%、Recall@5 ≥95%、Recall@20 回退 ≤2pp、Rerank P95 ≤1.5s”的联合门槛 |
+| 级联重排（本地打分器 + CE 精排融合前 26 位） | 🧪 可选 `INKTABLE_RERANKER=cascade`：冻结快照 Recall@5 96.2% / Recall@20 100%，但 Rerank P95 超 1.5s 门槛约 10% |
 | 检索延迟门槛（搜索 P95 ≤2.5s、Rerank P95 ≤1.5s） | ✅ 0.98s / 0.03s，见 `docs/RETRIEVAL-PERF.md` |
-| 真实模型 65 题 QA 门槛 | ✅ `myself / gpt-5.6-luna`，65/65，引用支持 96.99%，精确引用 100%，拒答 12/12 |
+| 真实模型 65 题 QA 冻结快照 | ✅ `v8-final-qa.json`：`kocode / gpt-5.6-sol` 流程完成 65/65；同模型自判支持率 95.16%，精确引用 100%，拒答 12/12；Gold evidence citation recall **68.93%** |
 | 代码签名（macOS / Windows） | ⬜ |
 
 ## 开发

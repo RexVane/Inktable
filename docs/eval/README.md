@@ -17,12 +17,23 @@ single-document metric without stating the denominator.
 
 ## Current v8 snapshot (2026-08-16)
 
-The honest production reranker remains `local-static-v3`: Recall@5 94.34%,
+These are frozen, private-corpus measurements, not live product telemetry. They
+were produced from Git baseline `6a7ce93` and one 29,434-chunk database snapshot;
+each number below names its checked-in artifact. Re-running against another DB,
+model/provider, or commit creates a different experiment and must not overwrite
+this snapshot.
+
+The production reranker result in `v8-final-local.json` remains
+`local-static-v3`: Recall@5 94.34%,
 MRR@10 88.11%, nDCG@10 91.04%, and P95 2,669 ms. The RRF control reaches
 Recall@5 96.23% but lower MRR/nDCG (86.45%/88.69%). The pinned ONNX
 Cross-Encoder reaches MRR/nDCG 90.97%/92.63% on its 48-case comparison, only
-about +7.95%/+7.85% relative to its RRF control and with 16.5 s P95 latency;
-the required +15% gate is therefore still not met.
+about +7.95%/+7.85% relative to its RRF control and with 16.5 s P95 latency.
+The historical “+15% relative nDCG” rule is retired: at the observed RRF
+nDCG it demanded roughly 97%, making one rank-2 item enough to fail the entire
+selection. The release gate is now absolute and multi-objective: nDCG@10 ≥90%,
+Recall@5 ≥95%, Recall@20 regression ≤2 percentage points, and Rerank P95 ≤1.5s.
+The Cross-Encoder fails that latency gate and therefore remains non-default.
 
 The formal compression result (`v8-final-compress.json`) is 98.96% Gold
 Evidence Recall, 97.83% complete-case recall, 61.98% median compression,
@@ -31,10 +42,14 @@ miss.
 
 The final real-model QA artifact is `v8-final-qa.json`, produced with
 `kocode / gpt-5.6-sol`. All 65 cases completed without provider failures or
-degraded execution. Citation support is 95.16% (118/124 claims), exact citation
-integrity and statement coverage are both 100%, and correct refusal is 100%
-(12/12). A13 and S17 use the explicit fallback path. Gold-evidence citation
-recall is 68.93% and remains a diagnostic metric, not this QA gate. Results
+degraded execution. “65/65” therefore means run/format/flow completeness, not
+that all expected evidence was cited. Citation support is 95.16% (118/124
+claims), but this is a **same-model self-judgment**, not an independent human or
+model-blinded verdict. Exact citation integrity and statement coverage are both
+100%, and correct refusal is 100% (12/12). A13 and S17 use the explicit fallback
+path. The stricter end-to-end result is **Gold-evidence citation recall 68.93%
+(71/103)** and is reported as a first-class limitation rather than hidden behind
+the flow-completion gate. Results
 contain hashes, counts, and timings only; they never persist answer text,
 snippets, keys, or source paths.
 
