@@ -37,8 +37,17 @@ if (!hasSingleInstanceLock) {
   app.quit();
 }
 
-// ---- 数据目录：默认 ~/Library/Application Support/Inktable，可迁移 ----
+// ---- 数据目录：平台原生位置，可迁移 ----
 const dataDirConfigPath = () => path.join(app.getPath('userData'), 'data-dir.json');
+
+const legacyDataDir = () =>
+  path.join(app.getPath('home'), 'Library', 'Application Support', 'Inktable');
+const nativeDefaultDataDir = () => {
+  if (process.platform === 'darwin') return legacyDataDir();
+  // userData is `%APPDATA%/Inktable` on Windows and the XDG config location on
+  // Linux. Keep DB/config/key material under one platform-native root.
+  return app.getPath('userData');
+};
 
 function loadCustomDataDir() {
   try {
@@ -49,8 +58,19 @@ function loadCustomDataDir() {
 }
 
 let customDataDir = loadCustomDataDir();
-const defaultDataDir = () =>
-  path.join(app.getPath('home'), 'Library', 'Application Support', 'Inktable');
+const defaultDataDir = () => {
+  const nativeDir = nativeDefaultDataDir();
+  const legacyDir = legacyDataDir();
+  // Existing Windows installs used the macOS-shaped ~/Library path. Preserve
+  // them until the user runs the normal data-location migration; new installs
+  // use the platform-native root. Never silently strand an existing library.
+  if (process.platform !== 'darwin'
+      && fs.existsSync(path.join(legacyDir, 'library.db'))
+      && !fs.existsSync(path.join(nativeDir, 'library.db'))) {
+    return legacyDir;
+  }
+  return nativeDir;
+};
 const currentDataDir = () => customDataDir || defaultDataDir();
 
 // ---- LLM 配置：safeStorage 加密落盘（§6.3），密钥绝不进渲染进程 ----
@@ -64,6 +84,10 @@ function loadLLMConfig() {
 }
 
 function saveLLMConfig(cfg) {
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('系统安全存储不可用，已拒绝在磁盘保存 API 密钥');
+  }
+  fs.mkdirSync(path.dirname(llmConfigPath()), { recursive: true });
   fs.writeFileSync(llmConfigPath(), safeStorage.encryptString(JSON.stringify(cfg)));
 }
 
@@ -283,6 +307,7 @@ function terminateSidecarProcess(proc) {
 }
 
 function stopSidecar() {
+  abortAllApiStreams();
   if (!sidecar) return;
   const proc = sidecar;
   sidecar = null;
@@ -291,6 +316,7 @@ function stopSidecar() {
 }
 
 function stopSidecarAndWait(timeoutMs = 6000) {
+  abortAllApiStreams();
   // 数据迁移前必须确认进程真的退了 —— 数据库文件被占用时移动会损坏
   return new Promise((resolve) => {
     const proc = sidecar;
@@ -309,17 +335,31 @@ function stopSidecarAndWait(timeoutMs = 6000) {
   });
 }
 
+// Windows 原生窗口控件（最小化/最大化/关闭）画在系统叠加层上，不受 CSS
+// 管辖。它必须与 .topbar 的外壳色**逐值一致**，否则右上角会出现一块颜色
+// 割裂的白条 —— 顶栏融进外壳的整体感当场破掉。
+//
+// 主题有七套（Nebula #222630、Coal #161616、Linen #f2f2ec …），一对
+// 「深色/浅色」硬编码值表达不了，所以颜色由渲染层从 CSS 的 --shell /
+// --ink 读出后传进来：**CSS 始终是唯一颜色来源**，加主题不必改这里。
+const OVERLAY_FALLBACK = { color: '#222630', symbolColor: '#e2e8f0' };
+let overlayColors = { ...OVERLAY_FALLBACK };
+
+// 渲染层是不可信边界，颜色字符串必须先验形再交给 Electron。
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+
 function updateTitleBarOverlay() {
-  // Windows 叠加按钮的配色跟随主题（浅色 #fff/深色 #202226 与 .topbar 一致）
   if (process.platform !== 'win32' || !mainWindow || mainWindow.isDestroyed()) return;
-  const dark = nativeTheme.shouldUseDarkColors;
   try {
-    mainWindow.setTitleBarOverlay({
-      color: dark ? '#202226' : '#ffffff',
-      symbolColor: dark ? '#f4f5f7' : '#1d1d1f',
-      height: 48,
-    });
+    mainWindow.setTitleBarOverlay({ ...overlayColors, height: 48 });
   } catch { /* 旧版 Electron 或非叠加窗口：忽略 */ }
+}
+
+function setOverlayColors(color, symbolColor) {
+  if (!HEX_COLOR.test(String(color)) || !HEX_COLOR.test(String(symbolColor))) return false;
+  overlayColors = { color: String(color), symbolColor: String(symbolColor) };
+  updateTitleBarOverlay();
+  return true;
 }
 
 nativeTheme.on('updated', updateTitleBarOverlay);
@@ -339,7 +379,9 @@ function createWindow() {
       : process.platform === 'win32'
         ? {
             titleBarStyle: 'hidden',
-            titleBarOverlay: { color: '#ffffff', symbolColor: '#1d1d1f', height: 48 },
+            // 首帧就用默认主题（Nebula）的外壳色。渲染层就绪后会按实际生效
+            // 的主题覆写；这里若留纯白，启动瞬间右上角会闪一块白条。
+            titleBarOverlay: { ...OVERLAY_FALLBACK, height: 48 },
           }
         : {}),
     backgroundColor: '#faf9f7',
@@ -379,22 +421,254 @@ function createWindow() {
   });
 }
 
-ipcMain.handle('sidecar:info', () => sidecarInfo);
+// 只回连接就绪信号，绝不把 bearer token 交给渲染进程。渲染层的所有
+// sidecar 调用都改走下面的主进程代理，令牌仅存在于主进程内存里 ——
+// 即便 CSP 被绕过、渲染层被注入脚本，也拿不到令牌直接打 sidecar。
+ipcMain.handle('sidecar:info', () => (sidecarInfo ? { port: sidecarInfo.port } : null));
 ipcMain.handle('sidecar:get-status', () => lastSidecarStatus);
-ipcMain.handle('shell:reveal', (_e, filePath) => {
-  if (typeof filePath === 'string' && filePath) shell.showItemInFolder(filePath);
+
+const API_ROUTE_RULES = [
+  ['GET', /^\/(?:health|categories|books|stats|sources|watch\/status|index\/status|settings\/(?:ocr|qa|llm)|integrations\/ccswitch|reports\/weekly)(?:\?[^#]*)?$/],
+  ['GET', /^\/files(?:\?[^#]*)?$/],
+  // 文件树是 /files/tree（两段），不是 /files/{id}/tree；正文读取带分页查询参数。
+  // file_id 是整数主键，收窄成 [0-9]+ 而非宽松的 [^/]+。
+  ['GET', /^\/files\/tree(?:\?[^#]*)?$/],
+  ['GET', /^\/files\/[0-9]+\/(?:detail|content)(?:\?[^#]*)?$/],
+  ['POST', /^\/(?:settings\/llm\/test|ask(?:\/stream)?|files\/(?:remove|classify)|books\/add|classify\/auto_ext|search|sources\/(?:discover|discover_deep|preview|enable|disable|remove|add|auto_preserve|preserve_all)|watch\/start|index\/(?:run|embed_backfill|retry_scanned)|settings\/(?:ocr|qa))$/],
+];
+const MAX_API_BODY_BYTES = 1024 * 1024;
+const MAX_STREAM_PAYLOAD_BYTES = 256 * 1024;
+const MAX_STREAM_FRAME_BYTES = 1024 * 1024;
+const MAX_STREAM_TOTAL_BYTES = 16 * 1024 * 1024;
+const MAX_STREAMS_PER_SENDER = 4;
+
+function isSafeApiPath(p) {
+  if (typeof p !== 'string' || !p || p.length > 4096 || p[0] !== '/' ||
+      p[1] === '/' || /[\s\x00-\x1f\\#]/.test(p) || p.includes('://')) return false;
+  let parsed;
+  try { parsed = new URL(p, 'http://sidecar.invalid'); } catch { return false; }
+  if (parsed.origin !== 'http://sidecar.invalid') return false;
+  let decoded;
+  try { decoded = decodeURIComponent(parsed.pathname); } catch { return false; }
+  return decoded === parsed.pathname && !decoded.includes('\\') &&
+    !decoded.split('/').some((part) => part === '.' || part === '..');
+}
+
+function isAllowedApiRequest(method, p) {
+  return isSafeApiPath(p) && API_ROUTE_RULES.some(([m, rule]) => m === method && rule.test(p));
+}
+
+function byteLength(value) { return Buffer.byteLength(value, 'utf8'); }
+
+function abortAllApiStreams() {
+  for (const entry of activeApiStreams.values()) entry.controller.abort();
+}
+
+
+// 主进程受控 HTTP 代理：渲染层只给出相对 path / method / 已序列化 body，
+// 令牌由主进程附加。非 GET/POST 一律拒绝。
+ipcMain.handle('api:request', async (_e, req) => {
+  if (!sidecarInfo) return { ok: false, status: 0, error: 'sidecar 未就绪' };
+  const reqPath = req && req.path;
+  const method = (req && req.method ? String(req.method) : 'GET').toUpperCase();
+  if (!isAllowedApiRequest(method, reqPath)) return { ok: false, status: 0, error: 'route not allowed' };
+  const body = req && typeof req.body === 'string' ? req.body : undefined;
+  if (method === 'POST' && body !== undefined && byteLength(body) > MAX_API_BODY_BYTES) {
+    return { ok: false, status: 0, error: 'request body too large' };
+  }
+  try {
+    const response = await fetch(`http://127.0.0.1:${sidecarInfo.port}${reqPath}`, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${sidecarInfo.token}`,
+      },
+      body: method === 'POST' ? (body ?? '{}') : undefined,
+    });
+    let data = null;
+    try { data = await response.json(); } catch { data = null; }
+    return { ok: response.ok, status: response.status, data };
+  } catch (err) {
+    return { ok: false, status: 0, error: String((err && err.message) || err) };
+  }
 });
 
-ipcMain.handle('shell:open', (_e, filePath) => {
+// SSE 流式代理：主进程读取 SSE、就地解析成 {event, data}，逐条转发给
+// 发起窗口的私有频道。令牌不出主进程，渲染层只收到已解析事件。
+const activeApiStreams = new Map();
+
+ipcMain.handle('api:stream-start', (evt, req) => {
+  if (!sidecarInfo) throw new Error('sidecar 未就绪');
+  const id = req && req.id;
+  const reqPath = req && req.path;
+  if (typeof id !== 'string' || !id || !isAllowedApiRequest('POST', reqPath)) {
+    throw new Error('invalid stream request');
+  }
+  if (id.length > 128 || !/^[A-Za-z0-9_-]+$/.test(id)) {
+    throw new Error('invalid stream id');
+  }
+  const sender = evt.sender;
+  const streamKey = `${sender.id}:${id}`;
+  if (activeApiStreams.has(streamKey)) throw new Error('stream already active');
+  if ([...activeApiStreams.values()].filter((entry) => entry.sender === sender).length >= MAX_STREAMS_PER_SENDER) {
+    throw new Error('too many active streams');
+  }
+
+  const controller = new AbortController();
+  const payload = req && typeof req.payload === 'object' && req.payload ? req.payload : {};
+  let serializedPayload;
+  try { serializedPayload = JSON.stringify(payload); } catch { throw new Error('invalid stream payload'); }
+  if (byteLength(serializedPayload) > MAX_STREAM_PAYLOAD_BYTES) throw new Error('stream payload too large');
+  let cleaned = false;
+
+  // A stream belongs to the renderer that opened it. Closing/reloading that
+  // renderer must abort the upstream fetch; otherwise the sidecar worker keeps
+  // generating after nobody can receive the IPC events.
+  const onSenderGone = () => controller.abort();
+  const onSenderNavigation = (_event, _url, isInPlace, isMainFrame) => {
+    if (isMainFrame && !isInPlace) onSenderGone();
+  };
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    sender.removeListener('destroyed', onSenderGone);
+    sender.removeListener('render-process-gone', onSenderGone);
+    sender.removeListener('did-start-navigation', onSenderNavigation);
+    if (activeApiStreams.get(streamKey)?.controller === controller) {
+      activeApiStreams.delete(streamKey);
+    }
+  };
+  const entry = { controller, sender, cleanup };
+  activeApiStreams.set(streamKey, entry);
+  const channel = `api:stream:${id}`;
+  sender.once('destroyed', onSenderGone);
+  sender.once('render-process-gone', onSenderGone);
+  sender.on('did-start-navigation', onSenderNavigation);
+
+  const emit = (msg) => {
+    if (sender.isDestroyed()) {
+      onSenderGone();
+      return;
+    }
+    try {
+      sender.send(channel, msg);
+    } catch {
+      onSenderGone();
+    }
+  };
+
+  (async () => {
+    try {
+      const response = await fetch(`http://127.0.0.1:${sidecarInfo.port}${reqPath}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sidecarInfo.token}`,
+        },
+        body: serializedPayload,
+        signal: controller.signal,
+      });
+      if (!response.ok || !response.body) {
+        emit({ type: 'error', message: `HTTP ${response.status}` });
+        return;
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let streamedBytes = 0;
+      for (;;) {
+        const chunk = await reader.read();
+        // 一个坏掉/恶意的 sidecar 响应不能把主进程内存吃光：单帧和总量都设上限，
+        // 超限即中止本流（abort 会让下面的 catch 走 end 分支）。
+        streamedBytes += chunk.value ? chunk.value.byteLength : 0;
+        if (streamedBytes > MAX_STREAM_TOTAL_BYTES) {
+          emit({ type: 'error', message: 'stream response too large' });
+          controller.abort();
+          return;
+        }
+        buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done });
+        if (byteLength(buffer) > MAX_STREAM_FRAME_BYTES) {
+          emit({ type: 'error', message: 'stream frame too large' });
+          controller.abort();
+          return;
+        }
+        let split;
+        while ((split = buffer.indexOf('\n\n')) >= 0) {
+          const block = buffer.slice(0, split);
+          buffer = buffer.slice(split + 2);
+          let event = 'message';
+          const data = [];
+          block.split(/\r?\n/).forEach((line) => {
+            if (line.startsWith('event:')) event = line.slice(6).trim();
+            else if (line.startsWith('data:')) data.push(line.slice(5).trim());
+          });
+          if (data.length) {
+            let parsed = null;
+            try { parsed = JSON.parse(data.join('\n')); } catch { parsed = null; }
+            // 只转发解析成功的事件对象；坏帧丢弃而不是把 null 塞给渲染层处理器。
+            if (parsed !== null) emit({ type: 'event', event, data: parsed });
+          }
+        }
+        if (chunk.done) break;
+      }
+      emit({ type: 'end' });
+    } catch (err) {
+      if (controller.signal.aborted) emit({ type: 'end' });
+      else emit({ type: 'error', message: String((err && err.message) || err) });
+    } finally {
+      cleanup();
+    }
+  })();
+  return { started: true };
+});
+
+ipcMain.handle('api:stream-abort', (evt, id) => {
+  const entry = activeApiStreams.get(`${evt.sender.id}:${id}`);
+  // A compromised renderer must not be able to cancel another renderer's stream.
+  if (entry && entry.sender === evt.sender) entry.controller.abort();
+  return true;
+});
+
+async function authorizeShellPath(filePath, action) {
+  if (typeof filePath !== 'string' || !filePath || filePath.length > 4096) return false;
+  if (!sidecarInfo) return false;
+  try {
+    const response = await fetch(
+      `http://127.0.0.1:${sidecarInfo.port}/files/authorize_path`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sidecarInfo.token}`,
+        },
+        body: JSON.stringify({ path: filePath, action }),
+      },
+    );
+    if (!response.ok) return false;
+    const result = await response.json();
+    return result.authorized === true;
+  } catch {
+    return false;
+  }
+}
+
+ipcMain.handle('shell:reveal', async (_e, filePath) => {
+  if (!await authorizeShellPath(filePath, 'reveal')) return false;
+  shell.showItemInFolder(filePath);
+  return true;
+});
+
+ipcMain.handle('shell:open', async (_e, filePath) => {
   // 用系统默认应用打开文件（文件查看器对不可解析格式的兜底）
-  if (typeof filePath !== 'string' || !filePath) return '';
+  if (!await authorizeShellPath(filePath, 'open')) return '路径未获授权';
   return shell.openPath(filePath);
 });
 
 ipcMain.handle('shell:trash', async (_e, filePath) => {
-  // 删除 = 移到废纸篓（可恢复），绝不直接 unlink
-  if (typeof filePath !== 'string' || !filePath) {
-    return { ok: false, error: '路径无效' };
+  // 删除 = 移到废纸篓（可恢复），绝不直接 unlink。路径必须是 sidecar
+  // 数据库中的 exact source path；renderer 不能自行指定任意磁盘目标。
+  if (!await authorizeShellPath(filePath, 'trash')) {
+    return { ok: false, error: '路径未获授权' };
   }
   try {
     await shell.trashItem(filePath);
@@ -404,8 +678,18 @@ ipcMain.handle('shell:trash', async (_e, filePath) => {
   }
 });
 
-ipcMain.handle('theme:set', (_e, mode) => {
+ipcMain.handle('theme:set', (_e, req) => {
+  // 兼容旧签名（只传 mode 字符串）；新签名带上当前主题的实际叠加色。
+  const mode = req && typeof req === 'object' ? req.mode : req;
   nativeTheme.themeSource = ['light', 'dark', 'system'].includes(mode) ? mode : 'system';
+  if (req && typeof req === 'object') {
+    setOverlayColors(req.color, req.symbolColor);
+  } else {
+    // 没带颜色（旧渲染层）：退回按深浅取 Nebula / Silver 的外壳色，
+    // 至少不会露出与任何主题都不匹配的纯白。
+    const dark = nativeTheme.shouldUseDarkColors;
+    setOverlayColors(dark ? '#222630' : '#f3f4f6', dark ? '#e2e8f0' : '#334155');
+  }
 });
 
 ipcMain.handle('data:get', () => ({
@@ -492,9 +776,11 @@ ipcMain.handle('dialog:pickDirectory', async () => {
 
 ipcMain.handle('llm:get', () => {
   const cfg = loadLLMConfig();
+  const encryption_available = safeStorage.isEncryptionAvailable();
   return cfg
-    ? { endpoint: cfg.endpoint || '', model: cfg.model || '', has_key: !!cfg.api_key }
-    : { endpoint: '', model: '', has_key: false };
+    ? { endpoint: cfg.endpoint || '', model: cfg.model || '', has_key: !!cfg.api_key,
+        encryption_available }
+    : { endpoint: '', model: '', has_key: false, encryption_available };
 });
 
 ipcMain.handle('llm:set', async (_e, incoming) => {

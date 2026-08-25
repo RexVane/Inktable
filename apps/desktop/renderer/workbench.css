@@ -1,61 +1,93 @@
 /* ============================================================
-   Inktable 设计系统 —— 现代 macOS 原生精致风格
+   Inktable 设计系统 —— Nebula 风格（移植自 Kuddev/nebula）
    单一样式来源：index.html 的内联 <style> 只保留结构性 reset，
    全部视觉规则集中在本文件，避免两层覆盖漂移。
+
+   结构签名：**统一外壳 + 悬浮圆角卡**。顶栏、左栏、右栏与窗底同为
+   外壳色，分隔线隐形；唯一的结构分界是中栏那张浮起的内容卡。
+   层级靠明度差建立，不靠描边 —— 这是与旧版 macOS 风格最根本的差别：
+   旧版给每一栏各自的表面色和描边，读作三块并列的板；新版读作
+   一块外壳上开了一扇窗。
+
+   主题共七套（四深三浅），见 §1.1。切换写 <html data-theme>，
+   引导脚本在 <head> 里于首帧前定妥，避免浅色用户看到一帧深色。
    ============================================================ */
 
 /* ---------- 1. 设计 Token ---------- */
+/* 配色移植自 Kuddev/nebula（nebula_app/src/display/ui/theme.rs 的 Skin）。
+   设计语言照搬其设计单：
+   - 低饱和表面，层级靠**明度**而不是描边
+   - 每套主题只有一个 accent；语义三色（danger/ok/warn）不跟主题走 ——
+     绿主题下把警示色也调成绿的，等于把警告说成一切正常
+   - 深色下浮层比内容层**亮**，浅色下相反（凹槽：浮层与输入面同为纯白，
+     中间的分组卡压暗一档）
+   - 叠加色深色用 slate-300、浅色用 slate-700。纯黑/纯白会把底色色相冲淡，
+     只能得到零色相的死灰 —— 这就是"灰显脏"的物理来源
+   - 浅色的 accent 是刻意选的中性深灰：浅底亮度高，饱和色压上去会抢过内容 */
+
 :root {
-  /* 基础与表面 */
-  --bg: #f5f6f8;
-  --surface: #ffffff;
-  --surface-2: #fafafc;
-  --surface-3: #f0f2f5;
-  --inset: #eef0f4;
-  --hover: rgba(0, 0, 0, 0.045);
-  --active: rgba(0, 0, 0, 0.08);
+  /* 字体是语义标记，不是全局选择（照搬 nebula 的裁定）。
+     界面文字走 sans；而路径、扩展名、分片编号、文件数、耗时、百分比、
+     引用标记这些「机器读、要逐字符对齐、要能整段复制」的内容显式走 mono。
+     Maple Mono NF CN 是 nebula 的界面等宽族，本机未装时依次回落。 */
+  --font-sans: "Microsoft YaHei UI", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", system-ui, "PingFang SC", "Hiragino Sans GB", sans-serif;
+  --font-mono: "Maple Mono NF CN", "Cascadia Code", "JetBrains Mono",
+    "SF Mono", Consolas, "Liberation Mono", monospace;
 
-  /* 文字体系 */
-  --text: #1d1d1f;
-  --text-2: #515459;
-  --text-3: #868b94;
-  --line: rgba(0, 0, 0, 0.09);
-  --line-soft: rgba(0, 0, 0, 0.045);
+  /* 圆角三档，呼应 nebula 的层级：内容卡 14 > 浮层 12 > 控件 8。
+     三档必须彼此可辨，否则「卡浮在壳上」这件事读不出来。 */
+  --radius-card: 14px;
+  --radius-pop: 12px;
+  --radius-ctl: 8px;
+  --radius-pill: 999px;
 
-  /* Apple System Blue 主强调色 */
-  --accent: #0071e3;
-  --accent-strong: #005bb5;
-  --accent-soft: rgba(0, 113, 227, 0.085);
-  --accent-tint: rgba(0, 113, 227, 0.16);
-  --on-accent: #ffffff;
+  /* 外壳与内容卡之间的留白。nebula 用 8px：够让圆角被看见，
+     又不至于把三栏挤窄。 */
+  --shell-gap: 8px;
 
-  /* 品牌印记色（朱砂印） */
-  --seal: #e05344;
-  --seal-soft: rgba(224, 83, 68, 0.10);
+  --dur-fast: 0.12s;
+  --dur: 0.18s;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
 
-  /* 语义色 */
-  --ok: #28cd41;
-  --ok-soft: rgba(40, 205, 65, 0.12);
-  --amber: #f5a623;
-  --amber-soft: rgba(245, 166, 35, 0.12);
-  --danger: #ff3b30;
-  --danger-soft: rgba(255, 59, 48, 0.12);
+  /* ---- 别名层：只定义一次，全部指向下方各主题的 nebula token ----
+     var() 在**使用时**解析，所以切 data-theme 时这些自动跟随，
+     不必在七个主题块里各写一遍。既有 2100 行规则因此不用逐条改写。 */
+  --bg: var(--shell);
+  --surface: var(--card-bg);
+  --surface-2: var(--shell);
+  --surface-3: var(--panel);
+  --inset: var(--inset-surface);
+  --hover: var(--wash-hover);
+  --active: var(--wash-hover-strong);
+  --text: var(--ink);
+  --text-2: var(--ink-dim);
+  --text-3: var(--ink-faint-ink);
+  --line: var(--hairline);
+  --line-soft: var(--wash-surface);
+  --accent: var(--accent-raw);
+  --accent-strong: var(--icon-hover);
+  --accent-soft: var(--accent-wash);
+  --on-accent: var(--ink-on-accent);
+  --seal: var(--sem-danger);
+  --ok: var(--sem-ok);
+  --amber: var(--sem-warn);
+  --danger: var(--sem-danger);
+  /* 语义色的水洗底从语义色本身派生，七套主题不必各写一遍。 */
+  --seal-soft: color-mix(in srgb, var(--sem-danger) 16%, transparent);
+  --ok-soft: color-mix(in srgb, var(--sem-ok) 16%, transparent);
+  --amber-soft: color-mix(in srgb, var(--sem-warn) 16%, transparent);
+  --danger-soft: color-mix(in srgb, var(--sem-danger) 16%, transparent);
 
-  /* 阴影层次 */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.04), 0 0 0 1px var(--line-soft);
-  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.06);
-  --shadow-pop: 0 20px 48px rgba(0, 0, 0, 0.18), 0 4px 12px rgba(0, 0, 0, 0.06);
-
-  /* 兼容旧别名，勿删 */
+  /* 历史别名，勿删 —— 仍被规则引用，或供内联样式兜底。 */
   --warn: var(--amber);
   --text-primary: var(--text);
   --text-secondary: var(--text-2);
   --separator: var(--line);
   --bg-hover: var(--hover);
   --bg-selected: var(--accent-soft);
-  --accent-legacy: var(--accent);
   --ink-active: var(--accent-tint);
+  --accent-legacy: var(--accent);
   --ink-line: var(--line);
   --ink-hover: var(--hover);
   --ink-soft: var(--inset);
@@ -72,43 +104,194 @@
   --ink-danger-soft: var(--danger-soft);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #161719;
-    --surface: #202226;
-    --surface-2: #1b1c20;
-    --surface-3: #272a30;
-    --inset: #292d34;
-    --hover: rgba(255, 255, 255, 0.06);
-    --active: rgba(255, 255, 255, 0.10);
+/* ---------- 1.1 七套主题 ----------
+   每套只写自己的实值。派生方式（照 nebula 的 skin()）：
+   - panel = shell 按**比例**提亮（均值 +14 换算）。加常数会摊薄蓝的相对
+     占比，冷调朝中性灰漂，深底上读作发绿；乘法保住色温
+   - accent-area = accent 降饱和到 62%（通道往自身亮度收，色相明度不动），
+     用于主按钮/开关轨道这类成片色；发丝级用途（链接、焦点环、光标）用
+     accent-raw 原值 —— 饱和度决定刺不刺眼，亮度差决定看不看得见
+   - 浅色的 accent-wash 把中性灰 accent 的色相推足（steer_hue gain 5.5）
+     再叠 19%，三个浅色主题各自的色温才保得住：Silver 冷、Limestone 暖、
+     Linen 绿 */
 
-    --text: #f4f5f7;
-    --text-2: #a4abb5;
-    --text-3: #707782;
-    --line: rgba(255, 255, 255, 0.10);
-    --line-soft: rgba(255, 255, 255, 0.05);
+/* Nebula 深蓝（旗舰，默认）—— 外壳 #222630，内容卡 #0f111a */
+:root,
+[data-theme="nebula"] {
+  color-scheme: dark;
+  --shell: #222630;
+  --card-bg: #0f111a;
+  --panel: #2e3341;
+  --inset-surface: rgba(15, 17, 26, 0.86);
+  --card-lift: rgba(255, 255, 255, 0.043);
+  --veil: rgba(2, 6, 23, 0.36);
 
-    --accent: #388bfd;
-    --accent-strong: #58a6ff;
-    --accent-soft: rgba(56, 139, 253, 0.16);
-    --accent-tint: rgba(56, 139, 253, 0.25);
-    --on-accent: #ffffff;
+  --ink: #e2e8f0;
+  --ink-dim: #94a3b8;
+  --ink-strong: #f8fafc;
+  --ink-faint-ink: #64748b;
+  --ink-on-accent: #0f172a;
+  --icon: #cbd5e1;
+  --icon-hover: #f8fafc;
 
-    --seal: #f87171;
-    --seal-soft: rgba(248, 113, 113, 0.16);
+  --accent-raw: #52a8ff;
+  --accent-area: #6da2d8;
+  --accent-wash: rgba(82, 168, 255, 0.18);
+  --accent-tint: rgba(82, 168, 255, 0.27);
 
-    --ok: #34d399;
-    --ok-soft: rgba(52, 211, 153, 0.16);
-    --amber: #fbbf24;
-    --amber-soft: rgba(251, 191, 36, 0.16);
-    --danger: #f87171;
-    --danger-soft: rgba(248, 113, 113, 0.16);
+  --hairline: rgba(203, 213, 225, 0.12);
+  --wash-surface: rgba(203, 213, 225, 0.06);
+  --wash-hover: rgba(203, 213, 225, 0.14);
+  --wash-hover-strong: rgba(203, 213, 225, 0.21);
+  --track-off: rgba(203, 213, 225, 0.18);
 
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
-    --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.22), 0 0 0 1px var(--line-soft);
-    --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.35);
-    --shadow-pop: 0 20px 48px rgba(0, 0, 0, 0.55), 0 4px 12px rgba(0, 0, 0, 0.3);
-  }
+  --sem-danger: #c44a58;
+  --sem-ok: #7db2c2;
+  --sem-warn: #f59e0b;
+  --ico-folder: #e5ab3b;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.22);
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.26), 0 0 0 1px var(--wash-surface);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.38);
+  --shadow-pop: 0 24px 56px rgba(0, 0, 0, 0.58), 0 4px 12px rgba(0, 0, 0, 0.34);
+}
+
+/* 三套深色的墨色 / 叠加色 / 语义色完全同构，只有壳、卡、accent 不同：
+   墨走 slate（200/400/50/500），叠加统一叠 slate-300。 */
+[data-theme="steel"],
+[data-theme="coal"],
+[data-theme="moss"] {
+  color-scheme: dark;
+  --card-lift: rgba(255, 255, 255, 0.043);
+  --veil: rgba(2, 6, 23, 0.36);
+
+  --ink: #e2e8f0;
+  --ink-dim: #94a3b8;
+  --ink-strong: #f8fafc;
+  --ink-faint-ink: #64748b;
+  --ink-on-accent: #0f172a;
+  --icon: #cbd5e1;
+  --icon-hover: #f8fafc;
+
+  --hairline: rgba(203, 213, 225, 0.12);
+  --wash-surface: rgba(203, 213, 225, 0.06);
+  --wash-hover: rgba(203, 213, 225, 0.14);
+  --wash-hover-strong: rgba(203, 213, 225, 0.21);
+  --track-off: rgba(203, 213, 225, 0.18);
+
+  --sem-danger: #c44a58;
+  --sem-ok: #7db2c2;
+  --sem-warn: #f59e0b;
+  --ico-folder: #e5ab3b;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.22);
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.26), 0 0 0 1px var(--wash-surface);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.38);
+  --shadow-pop: 0 24px 56px rgba(0, 0, 0, 0.58), 0 4px 12px rgba(0, 0, 0, 0.34);
+}
+
+/* Steel Dark —— 冷钢，Silver 的深色对偶 */
+[data-theme="steel"] {
+  --shell: #16181e;
+  --card-bg: #1a1c24;
+  --panel: #22252f;
+  --inset-surface: rgba(26, 28, 36, 0.86);
+  --accent-raw: #94a3b8;
+  --accent-area: #99a2af;
+  --accent-wash: rgba(148, 163, 184, 0.18);
+  --accent-tint: rgba(148, 163, 184, 0.27);
+}
+
+/* Coal Dark —— 纯中性，三通道相等，无色温 */
+[data-theme="coal"] {
+  --shell: #161616;
+  --card-bg: #171717;
+  --panel: #242424;
+  --inset-surface: rgba(23, 23, 23, 0.86);
+  --accent-raw: #d4d4d4;
+  --accent-area: #d4d4d4;
+  --accent-wash: rgba(212, 212, 212, 0.18);
+  --accent-tint: rgba(212, 212, 212, 0.27);
+}
+
+/* Moss Dark —— 暖绿，Linen 的深色对偶 */
+[data-theme="moss"] {
+  --shell: #191c19;
+  --card-bg: #1e211e;
+  --panel: #262b26;
+  --inset-surface: rgba(30, 33, 30, 0.86);
+  --accent-raw: #a3b3a3;
+  --accent-area: #a7b0a7;
+  --accent-wash: rgba(163, 179, 163, 0.18);
+  --accent-tint: rgba(163, 179, 163, 0.27);
+}
+
+/* 三套浅色同构部分。内容卡一律**纯白**（最高对比）；浮层与输入面同为纯白，
+   分组卡压暗一档挖出凹槽 —— 浅色下最亮的那层应该是可输入的表面，不是承载
+   它的容器。语义三色比深色那份更沉：同一个饱和色压在高明度底上明度对比大
+   得多，复用深色值会艳到从卡里跳出来。 */
+[data-theme="silver"],
+[data-theme="limestone"],
+[data-theme="linen"] {
+  color-scheme: light;
+  --card-bg: #ffffff;
+  --panel: #ffffff;
+  --inset-surface: #ffffff;
+  --card-lift: rgba(100, 116, 139, 0.043);
+  --veil: rgba(15, 23, 42, 0.22);
+
+  --ink: #334155;
+  --ink-dim: #64748b;
+  --ink-strong: #0f172a;
+  --ink-faint-ink: #94a3b8;
+  --ink-on-accent: #f8fafc;
+  --icon: #475569;
+  --icon-hover: #0f172a;
+
+  --hairline: rgba(51, 65, 85, 0.12);
+  --wash-surface: rgba(100, 116, 139, 0.08);
+  --wash-hover: rgba(100, 116, 139, 0.13);
+  --wash-hover-strong: rgba(100, 116, 139, 0.2);
+  --track-off: rgba(100, 116, 139, 0.31);
+
+  --sem-danger: #b23a48;
+  --sem-ok: #548c9e;
+  --sem-warn: #d97706;
+  --ico-folder: #d99b26;
+
+  /* 浅色的阴影更浅：白底对比高，深阴影会显脏（同"中性灰显脏"的理由）。 */
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow-card: 0 1px 3px rgba(15, 23, 42, 0.06), 0 0 0 1px var(--wash-surface);
+  --shadow-md: 0 4px 14px rgba(15, 23, 42, 0.08);
+  --shadow-pop: 0 20px 48px rgba(15, 23, 42, 0.18), 0 4px 12px rgba(15, 23, 42, 0.07);
+}
+
+/* Silver Light —— 中性银，冷。Nebula 在系统浅色下的对偶 */
+[data-theme="silver"] {
+  --shell: #f3f4f6;
+  --accent-raw: #495057;
+  --accent-area: #575c62;
+  /* steer_hue(gain 5.5) 把中性灰的冷调推足再叠 19%，否则零色相灰叠白底显脏 */
+  --accent-wash: rgba(28, 51, 74, 0.19);
+  --accent-tint: rgba(28, 51, 74, 0.25);
+}
+
+/* Limestone Light —— 暖石 */
+[data-theme="limestone"] {
+  --shell: #f0efeb;
+  --accent-raw: #58554c;
+  --accent-area: #5c5a54;
+  --accent-wash: rgba(80, 70, 33, 0.19);
+  --accent-tint: rgba(80, 70, 33, 0.25);
+}
+
+/* Linen Light —— 亚麻，微绿 */
+[data-theme="linen"] {
+  --shell: #f2f2ec;
+  --accent-raw: #5f635f;
+  --accent-area: #616361;
+  --accent-wash: rgba(74, 92, 74, 0.19);
+  --accent-tint: rgba(74, 92, 74, 0.25);
 }
 
 /* ---------- 2. 基础规范 ---------- */
@@ -122,11 +305,14 @@ body {
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "PingFang SC", "Hiragino Sans GB", "Segoe UI", "Microsoft YaHei", "Helvetica Neue", sans-serif;
+  font-family: var(--font-sans);
   font-size: 13px;
   line-height: 1.5;
-  letter-spacing: -0.006em;
-  background: var(--bg);
+  /* 负字距是为 SF Pro 调的；YaHei UI 在负字距下中文会挤。归零。 */
+  letter-spacing: 0;
+  /* 整窗是**外壳**色。内容以圆角卡浮于其上（见第 4 节）—— 这是
+     nebula 的结构签名：顶栏、侧栏、窗底同色，唯一的结构分界是那张卡。 */
+  background: var(--shell);
   color: var(--text);
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
@@ -178,7 +364,7 @@ textarea:focus-visible,
 
 ::-webkit-scrollbar-thumb {
   border: 2px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--text) 18%, transparent);
   background-clip: padding-box;
 }
@@ -223,8 +409,10 @@ textarea:focus-visible,
   /* 左侧留出 macOS 窗口红绿灯的位置（titleBarStyle: hiddenInset） */
   padding: 0 16px 0 86px;
   gap: 12px;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface);
+  /* 顶栏融进外壳：不描边、不换底色。分隔靠下方内容卡自己的边界完成，
+     这样整个 chrome 读作一块，而不是三条横向堆叠的带子。 */
+  border-bottom: 0;
+  background: transparent;
   -webkit-app-region: drag;
   z-index: 20;
 }
@@ -285,7 +473,7 @@ textarea:focus-visible,
   max-width: 320px;
   height: 22px;
   padding: 0 9px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--hover);
   color: var(--text-2);
   font-size: 11px;
@@ -313,7 +501,7 @@ textarea:focus-visible,
   gap: 6px;
   height: 24px;
   padding: 0 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--hover);
   color: var(--text-2);
   font-size: 11px;
@@ -398,7 +586,7 @@ textarea:focus-visible,
   width: 28px;
   height: 28px;
   padding: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-ctl);
   background: transparent;
   color: var(--text-2);
   transition: background .12s ease, color .12s ease, transform .2s ease;
@@ -430,7 +618,10 @@ textarea:focus-visible,
   overflow: hidden;
   display: grid;
   grid-template-columns: 214px 5px minmax(360px, 1fr) 5px 330px;
-  background: var(--bg);
+  /* 外壳色继续铺到底；卡区自己的留白由 .results-panel 的 margin 让出。
+     不在这里上底色叠 padding，否则卡的圆角会被容器边缘切掉。 */
+  background: transparent;
+  padding: 0 var(--shell-gap) var(--shell-gap);
 }
 
 .splitter {
@@ -484,16 +675,24 @@ body.resizing * {
   overflow: hidden;
 }
 
+/* 左右两栏是 chrome，融进外壳（对应 nebula 的 sidebar == shell）；
+   中栏是内容，做成浮在外壳上的圆角卡。三栏共存的结构不变，变的是
+   "谁是容器、谁是内容"的读法 —— 证据正文是主体，导航与问答是框。 */
 .nav-panel {
-  background: var(--surface-2);
+  background: transparent;
 }
 
 .results-panel {
-  background: var(--surface);
+  background: var(--card-bg);
+  border-radius: var(--radius-card);
+  /* 卡与外壳的对比已由明度差建立，描边只留发丝一层收边，
+     避免深底上圆角出现锯齿。 */
+  box-shadow: 0 0 0 1px var(--hairline), var(--shadow-md);
+  overflow: hidden;
 }
 
 .qa-panel {
-  background: var(--surface-2);
+  background: transparent;
 }
 
 .panel-head {
@@ -522,6 +721,9 @@ body.resizing * {
   margin-left: auto;
   color: var(--text-3);
   font-size: 11px;
+  /* 文件数是机器读、要逐位对齐的数值，归入 mono 语义（照搬 nebula
+     把等宽当语义标记而不是全局字体的裁定）。 */
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -534,7 +736,7 @@ body.resizing * {
   height: 24px;
   padding: 0 9px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius-ctl);
   background: var(--surface);
   color: var(--text-2);
   font-size: 11px;
@@ -570,7 +772,7 @@ body.resizing * {
   min-height: 28px;
   padding: 4px 8px;
   margin-bottom: 2px;
-  border-radius: 7px;
+  border-radius: var(--radius-ctl);
   cursor: pointer;
   color: var(--text-2);
   font-size: 12px;
@@ -659,13 +861,7 @@ body.resizing * {
 }
 
 .ico-folder {
-  color: #d99b26;
-}
-
-@media (prefers-color-scheme: dark) {
-  .ico-folder {
-    color: #e5ab3b;
-  }
+  color: var(--ico-folder);
 }
 
 .ico-file {
@@ -702,7 +898,7 @@ body.resizing * {
   align-items: center;
   height: 32px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-ctl);
   background: var(--surface);
   box-shadow: var(--shadow-sm);
   transition: border-color .15s ease, box-shadow .15s ease;
@@ -751,7 +947,7 @@ body.resizing * {
   height: 24px;
   margin-right: 4px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-ctl);
   background: transparent;
   color: var(--text-3);
   transition: background .12s ease, color .12s ease;
@@ -796,7 +992,7 @@ body.resizing * {
   height: 42px;
   margin: 1px 0;
   padding: 0 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-ctl);
   cursor: default;
   transition: background .1s ease;
 }
@@ -912,7 +1108,7 @@ body.resizing * {
 .load-more button {
   padding: 5px 16px;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--surface);
   color: var(--text-2);
   font-size: 11px;
@@ -940,7 +1136,7 @@ body.resizing * {
 .empty button {
   margin-top: 14px;
   padding: 6px 16px;
-  border-radius: 7px;
+  border-radius: var(--radius-ctl);
   background: var(--accent);
   color: var(--on-accent);
   font-weight: 550;
@@ -962,7 +1158,7 @@ body.resizing * {
   margin: 6px 0;
   padding: 10px 12px;
   border: 1px solid var(--line-soft);
-  border-radius: 9px;
+  border-radius: var(--radius-ctl);
   background: var(--surface);
   box-shadow: var(--shadow-sm);
   cursor: pointer;
@@ -1050,7 +1246,7 @@ body.resizing * {
 .evidence-document {
   overflow: hidden;
   border: 1px solid var(--line-soft);
-  border-radius: 12px;
+  border-radius: var(--radius-pop);
   background: var(--surface);
   box-shadow: var(--shadow-card);
 }
@@ -1082,10 +1278,10 @@ body.resizing * {
 .file-detail-path {
   margin-top: 6px;
   padding: 5px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-ctl);
   background: var(--hover);
   color: var(--text-2);
-  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 10.5px;
   overflow-wrap: anywhere;
   user-select: text;
@@ -1096,7 +1292,7 @@ body.resizing * {
   margin-top: 10px;
   padding: 10px 12px;
   border-left: 3px solid var(--accent);
-  border-radius: 0 8px 8px 0;
+  border-radius: 0 var(--radius-ctl) var(--radius-ctl) 0;
   background: var(--accent-soft);
   color: var(--text);
   font-size: 12px;
@@ -1183,7 +1379,7 @@ body.resizing * {
   min-height: 26px;
   padding: 0 12px;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--surface);
   color: var(--text-2);
   font-size: 11px;
@@ -1220,7 +1416,7 @@ body.resizing * {
   height: 24px;
   padding: 0 9px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius-ctl);
   background: var(--surface);
   color: var(--text-3);
   font-size: 10.5px;
@@ -1240,7 +1436,7 @@ body.resizing * {
   overflow: hidden;
   padding: 0 9px;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--surface);
   color: var(--text-2);
   font-size: 10.5px;
@@ -1297,7 +1493,7 @@ body.resizing * {
   max-width: 82%;
   margin: 14px 14px 0 auto;
   padding: 8px 14px;
-  border-radius: 16px 16px 4px 16px;
+  border-radius: var(--radius-pop) var(--radius-pop) 4px var(--radius-pop);
   background: var(--accent);
   color: var(--on-accent);
   font-size: 12.5px;
@@ -1313,7 +1509,7 @@ body.resizing * {
   margin: 10px 14px 0;
   padding: 13px 15px 14px;
   border: 1px solid var(--line-soft);
-  border-radius: 14px 14px 14px 4px;
+  border-radius: var(--radius-card) var(--radius-card) var(--radius-card) 4px;
   background: var(--surface);
   box-shadow: var(--shadow-card);
 }
@@ -1374,7 +1570,7 @@ body.resizing * {
   margin-bottom: 10px;
   padding: 8px 10px;
   border-left: 3px solid var(--amber);
-  border-radius: 0 6px 6px 0;
+  border-radius: 0 var(--radius-ctl) var(--radius-ctl) 0;
   background: var(--amber-soft);
   color: var(--amber);
   font-size: 11px;
@@ -1396,7 +1592,7 @@ body.resizing * {
   min-width: 16px;
   height: 15px;
   padding: 0 4px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--accent-soft);
   color: var(--accent);
   cursor: pointer;
@@ -1432,7 +1628,7 @@ body.resizing * {
   gap: 3px 8px;
   margin-top: 6px;
   padding: 8px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-ctl);
   background: var(--surface-2);
   cursor: pointer;
   font-size: 11.5px;
@@ -1452,7 +1648,7 @@ body.resizing * {
   height: 15px;
   margin-top: 1px;
   padding: 0 4px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--accent-soft);
   color: var(--accent);
   font-size: 9.5px;
@@ -1511,7 +1707,7 @@ body.resizing * {
   height: 22px;
   padding: 0 9px;
   border: 1px solid var(--line-soft);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   color: var(--text-3);
   font-size: 10px;
   transition: all .12s ease;
@@ -1548,7 +1744,7 @@ body.resizing * {
   gap: 8px;
   padding: 7px 8px 7px 12px;
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: var(--radius-card);
   background: var(--surface);
   box-shadow: var(--shadow-sm);
   transition: border-color .15s ease, box-shadow .15s ease;
@@ -1631,7 +1827,7 @@ body.resizing * {
   width: 44px;
   height: 44px;
   margin: 0 auto 10px;
-  border-radius: 12px;
+  border-radius: var(--radius-pop);
   background: var(--hover);
   color: var(--text-3);
 }
@@ -1654,6 +1850,8 @@ body.resizing * {
 }
 
 /* ---------- 11. 弹窗与设置 (Sheets & Settings) ---------- */
+/* 遮罩用主题自己的 veil：深色压暗、浅色用冷调薄雾。硬编码的黑幕在
+   浅色主题下会把整页压成灰。 */
 .sheet,
 .setup {
   position: fixed;
@@ -1662,7 +1860,7 @@ body.resizing * {
   display: none;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.35);
+  background: var(--veil);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
 }
@@ -1671,6 +1869,21 @@ body.resizing * {
   display: flex;
 }
 
+/* 浮层内部**重绑表面语义**，而不是逐条改四十处规则。
+   在中栏那张内容卡里，--surface 指的是"卡面"；可到了浮层里，卡面色是整个
+   界面最暗的一层，压在更亮的 panel 上会变成一个个黑洞。浮层里的"表面"应该
+   是可输入面（凹槽），所以整体重绑一次，后代规则不动就自动对了。 */
+.sheet-box,
+.setup .body {
+  --surface: var(--inset-surface);
+  --surface-2: var(--panel);
+  --surface-3: var(--panel);
+}
+
+/* 浮层是**一整块 panel 色**，不是内容卡色。nebula 的层级方向：深色下浮层
+   比内容层亮、浅色下相反。此前用 --surface（=内容卡）导致设置面板与中栏
+   同色，"浮起来"这件事读不出来；页头/页脚/侧导航再各自换一次底色，
+   一个浮层里就出现了三种灰。现在整块同色，分区只靠发丝线。 */
 .sheet-box {
   width: 680px;
   max-width: 90vw;
@@ -1678,10 +1891,9 @@ body.resizing * {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--line-soft);
-  border-radius: 14px;
-  background: var(--surface);
-  box-shadow: var(--shadow-pop);
+  border-radius: var(--radius-card);
+  background: var(--panel);
+  box-shadow: 0 0 0 1px var(--hairline), var(--shadow-pop);
 }
 
 .sheet-head {
@@ -1689,7 +1901,7 @@ body.resizing * {
   align-items: baseline;
   gap: 10px;
   padding: 16px 20px 14px;
-  border-bottom: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--hairline);
 }
 
 .sheet-head h2 {
@@ -1715,15 +1927,14 @@ body.resizing * {
   align-items: center;
   gap: 8px;
   padding: 12px 20px;
-  border-top: 1px solid var(--line-soft);
-  background: var(--surface-2);
+  border-top: 1px solid var(--hairline);
 }
 
 .mini {
   min-height: 28px;
   padding: 0 12px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius-ctl);
   background: var(--surface);
   color: var(--text-2);
   font-size: 11.5px;
@@ -1749,17 +1960,19 @@ body.resizing * {
   margin: 0 -20px;
 }
 
+/* 侧导航不换底色，只用一条发丝线与内容分区（与浮层同为 panel）。
+   它是"这几项是一组"，不是另一层表面。 */
 .set-nav {
   flex: 0 0 130px;
   padding: 14px 10px;
-  border-right: 1px solid var(--line-soft);
-  background: var(--surface-2);
+  border-right: 1px solid var(--hairline);
+  background: transparent;
 }
 
 .set-nav-item {
   padding: 6px 10px;
   margin-bottom: 2px;
-  border-radius: 6px;
+  border-radius: var(--radius-ctl);
   color: var(--text-2);
   font-size: 12px;
   font-weight: 500;
@@ -1829,7 +2042,7 @@ body.resizing * {
 
 .set-meta {
   color: var(--text-3);
-  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 10px;
 }
 
@@ -1884,14 +2097,14 @@ body.resizing * {
   flex-shrink: 0;
   padding: 2px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-ctl);
   background: var(--inset);
 }
 
 .seg button {
   min-width: 40px;
   padding: 4px 10px;
-  border-radius: 6px;
+  border-radius: var(--radius-ctl);
   color: var(--text-2);
   font-size: 11px;
   font-weight: 500;
@@ -1933,7 +2146,7 @@ body.resizing * {
   margin-bottom: 8px;
   padding: 7px 10px;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: var(--radius-ctl);
   background: var(--surface);
   color: var(--text);
   font-size: 12px;
@@ -1961,7 +2174,7 @@ body.resizing * {
   padding: 8px 10px;
   margin-bottom: 5px;
   border: 1px solid var(--line-soft);
-  border-radius: 8px;
+  border-radius: var(--radius-ctl);
   background: var(--surface-2);
   cursor: pointer;
   transition: all .1s ease;
@@ -2015,15 +2228,15 @@ body.resizing * {
   flex-direction: column;
 }
 
+/* 引导层与设置弹层同构：整块 panel 色，上下两半只靠一条发丝线分开，
+   不各自换底色（此前 body 用内容卡色、foot 用外壳色，一个浮层三种灰）。 */
 .setup .body {
   width: 560px;
   max-width: 90vw;
   padding: 24px 24px 18px;
-  border: 1px solid var(--line-soft);
-  border-bottom: 0;
-  border-radius: 14px 14px 0 0;
-  background: var(--surface);
-  box-shadow: var(--shadow-pop);
+  border-radius: var(--radius-card) var(--radius-card) 0 0;
+  background: var(--panel);
+  box-shadow: 0 0 0 1px var(--hairline), var(--shadow-pop);
 }
 
 .setup h1 {
@@ -2045,16 +2258,16 @@ body.resizing * {
   width: 560px;
   max-width: 90vw;
   padding: 12px 20px;
-  border: 1px solid var(--line-soft);
-  border-radius: 0 0 14px 14px;
-  background: var(--surface-2);
-  box-shadow: var(--shadow-pop);
+  border-top: 1px solid var(--hairline);
+  border-radius: 0 0 var(--radius-card) var(--radius-card);
+  background: var(--panel);
+  box-shadow: 0 0 0 1px var(--hairline), var(--shadow-pop);
 }
 
 .setup .foot button {
   min-height: 30px;
   padding: 0 14px;
-  border-radius: 7px;
+  border-radius: var(--radius-ctl);
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
@@ -2106,7 +2319,7 @@ body.resizing * {
   padding: 10px 12px;
   margin-bottom: 6px;
   border: 1px solid var(--line-soft);
-  border-radius: 8px;
+  border-radius: var(--radius-ctl);
   background: var(--surface-2);
 }
 
@@ -2157,7 +2370,7 @@ body.resizing * {
   transform: translateX(-50%) translateY(20px);
   z-index: 100;
   padding: 7px 16px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: rgba(30, 30, 32, 0.88);
   backdrop-filter: blur(16px);
   color: #ffffff;
@@ -2183,7 +2396,7 @@ body.resizing * {
   overflow-y: auto;
   padding: 5px;
   border: 1px solid var(--line-soft);
-  border-radius: 8px;
+  border-radius: var(--radius-ctl);
   background: var(--surface);
   box-shadow: var(--shadow-pop);
   display: none;
@@ -2231,4 +2444,166 @@ body.resizing * {
 .is-win32 .drag,
 .is-linux .drag {
   height: 12px;
+}
+
+/* ---------- 12. 主题选择器 ---------- */
+/* 七张迷你卡，每张用**它自己那套主题**的颜色画一个缩微窗口：外壳里浮一张
+   内容卡，卡上两行墨 —— 与真实界面同构。这样选择器回答的是"底色、文字和
+   高亮怎么搭在一起"，而不只是"面板是什么颜色"。 */
+
+.set-row-stack {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+  transition: opacity var(--dur) var(--ease);
+}
+
+/* 跟随系统时具体成员由系统外观决定，选择卡表达的是"家族"。
+   压淡以示"此刻生效的可能是它的对偶"，但仍可点选换家族。 */
+.theme-grid.follows {
+  opacity: 0.62;
+}
+
+.theme-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0;
+  border-radius: var(--radius-ctl);
+  background: transparent;
+  text-align: center;
+}
+
+.theme-chip {
+  display: block;
+  position: relative;
+  height: 46px;
+  padding: 7px 6px 0;
+  border-radius: var(--radius-ctl);
+  box-shadow: 0 0 0 1px var(--hairline);
+  overflow: hidden;
+  transition: box-shadow var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+
+/* 缩微内容卡：圆角比外层小一档，复现"卡浮在壳上"的层级 */
+.theme-chip-card {
+  display: block;
+  height: 100%;
+  padding: 6px 5px 0;
+  border-radius: 5px 5px 0 0;
+}
+
+.theme-chip-line {
+  display: block;
+  height: 3px;
+  border-radius: 2px;
+  opacity: 0.85;
+}
+
+.theme-chip-line.short {
+  width: 56%;
+  margin-top: 4px;
+  opacity: 1;
+}
+
+.theme-card:hover .theme-chip {
+  transform: translateY(-1px);
+  box-shadow: 0 0 0 1px var(--wash-hover-strong), var(--shadow-md);
+}
+
+/* 选中态用 accent 描一圈：唯一的品牌位，且是发丝级用途，用原值不降饱和 */
+.theme-card.on .theme-chip {
+  box-shadow: 0 0 0 2px var(--accent), var(--shadow-md);
+}
+
+.theme-card-name {
+  font-size: 11px;
+  color: var(--text-2);
+  letter-spacing: 0;
+}
+
+.theme-card.on .theme-card-name {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.theme-card:focus-visible .theme-chip {
+  box-shadow: 0 0 0 2px var(--accent), 0 0 0 4px var(--accent-soft);
+}
+
+/* ---------- 13. 抽屉开关 ---------- */
+/* 左右两栏是 chrome（融进外壳），可整栏收起把宽度让给中间那张内容卡。
+   开关放在顶栏两端，与各自那栏的位置对应；收起后按钮仍在原处 ——
+   若把开关放在栏内，收起之后就没有可点的地方把它请回来。 */
+
+.drawer-toggle {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  padding: 0;
+  border-radius: var(--radius-ctl);
+  background: transparent;
+  color: var(--text-3);
+  /* 顶栏整条是可拖拽区，按钮必须显式退出，否则点击变成拖窗口 */
+  -webkit-app-region: no-drag;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.drawer-toggle svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* 实心块表示"那一栏此刻在场"。收起后只剩线框，图标本身就是状态显示，
+   不额外加角标 —— 一个 16px 的图标上再叠标记只会糊成一团。 */
+.drawer-toggle .drawer-fill {
+  opacity: 0;
+  transition: opacity var(--dur) var(--ease);
+}
+
+.drawer-toggle.on {
+  color: var(--text-2);
+}
+
+.drawer-toggle.on .drawer-fill {
+  opacity: 1;
+}
+
+.drawer-toggle:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.drawer-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* 收起态：0 宽列里的内容必须真正不可达。overflow 只是看不见，
+   visibility: hidden 才会同时移出 Tab 序列与无障碍树。 */
+.nav-panel.is-collapsed,
+.qa-panel.is-collapsed {
+  visibility: hidden;
+}
+
+.splitter.is-collapsed {
+  pointer-events: none;
+}
+
+/* 列宽变化走过渡，读起来是"抽屉滑出"而不是跳变。拖拽 splitter 时必须
+   关掉：每帧都在改列宽，再叠 180ms 过渡会拖出明显的滞后感。 */
+.content-layout {
+  transition: grid-template-columns var(--dur) var(--ease);
+}
+
+body.resizing .content-layout {
+  transition: none;
 }

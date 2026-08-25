@@ -6,7 +6,9 @@ const vm = require('node:vm');
 
 const rendererPath = path.resolve(__dirname, '..', 'renderer', 'index.html');
 const renderer = fs.readFileSync(rendererPath, 'utf8');
-const script = renderer.match(/<script>([\s\S]*?)<\/script>/);
+// 全部内联脚本，不只第一段：主题引导在 <head>、工作台在 </body> 之后，
+// 只取首个匹配会让 9 万字符的主脚本失去语法校验。
+const scripts = [...renderer.matchAll(/<script>([\s\S]*?)<\/script>/g)];
 
 function sourceBetween(start, end) {
   const from = renderer.indexOf(start);
@@ -16,9 +18,14 @@ function sourceBetween(start, end) {
   return renderer.slice(from, to).trim();
 }
 
-test('renderer inline script remains valid JavaScript', () => {
-  assert.ok(script, 'renderer must contain an inline script');
-  assert.doesNotThrow(() => new vm.Script(script[1], { filename: rendererPath }));
+test('every renderer inline script remains valid JavaScript', () => {
+  assert.ok(scripts.length > 0, 'renderer must contain an inline script');
+  for (const [i, match] of scripts.entries()) {
+    assert.doesNotThrow(
+      () => new vm.Script(match[1], { filename: `${rendererPath} [script ${i + 1}]` }),
+      `inline script #${i + 1} is not valid JavaScript`,
+    );
+  }
 });
 
 test('file navigation delegates filters and pagination to the API', () => {
@@ -374,7 +381,7 @@ test('sidecar lifecycle is visible and initial sidecar info counts as ready', ()
   vm.runInNewContext(`${safeNumberSource}\n${statusSource}`, context);
 
   const cases = [
-    [{ port: 51000, token: 'secret' }, 'sidecar-status ready', '服务已连接'],
+    [{ port: 51000 }, 'sidecar-status ready', '服务已连接'],
     [{ state: 'ready' }, 'sidecar-status ready', '服务已连接'],
     [{ state: 'restarting', attempt: 2 }, 'sidecar-status restarting', '正在重启（第 2 次）…'],
     [{ state: 'stopped' }, 'sidecar-status stopped', '服务已停止'],
@@ -387,4 +394,55 @@ test('sidecar lifecycle is visible and initial sidecar info counts as ready', ()
   }
   assert.equal(status.title, '健康检查失败');
   assert.equal(status.attributes['aria-label'], '健康检查失败');
+});
+
+test('drawer toggles collapse each side column and persist independently of width', () => {
+  // 顶栏两端各有一个开关，收起后按钮仍在原处 —— 若把开关放进栏内，
+  // 收起之后就没有可点的地方把它请回来。
+  assert.match(renderer, /id="toggleNav"[\s\S]{0,200}aria-controls="navPanel"/);
+  assert.match(renderer, /id="toggleQa"[\s\S]{0,200}aria-controls="qaPanel"/);
+  assert.match(renderer, /<section class="nav-panel" id="navPanel"/);
+  assert.match(renderer, /<aside class="qa-panel" id="qaPanel"/);
+
+  // 收起的栏连同它的 splitter 一起归零：留着 5px 拖拽条会在贴边处留下
+  // 一道摸不到来源的缝。
+  assert.match(renderer, /\(navOpen \? navWidth \+ 'px 5px' : '0px 0px'\)/);
+  assert.match(renderer, /\(qaOpen \? '5px ' \+ qaWidth \+ 'px' : '0px 0px'\)/);
+
+  // 开合与宽度分开存：收起再展开要回到用户拖出来的宽度，不是默认值。
+  assert.match(renderer, /nav: navWidth, qa: qaWidth, navOpen: navOpen, qaOpen: qaOpen/);
+  assert.match(renderer, /if \(saved\.navOpen === false\) navOpen = false/);
+  assert.match(renderer, /if \(saved\.qaOpen === false\) qaOpen = false/);
+
+  // 0 宽列里若还留着可聚焦控件，Tab 会跳进看不见的地方。
+  const css = fs.readFileSync(
+    path.resolve(__dirname, '..', 'renderer', 'workbench.css'), 'utf8');
+  assert.match(css, /\.nav-panel\.is-collapsed,\s*\n\.qa-panel\.is-collapsed \{\s*\n\s*visibility: hidden;/);
+  // 拖 splitter 时必须关掉列宽过渡，否则每帧都在改列宽会拖出滞后感。
+  assert.match(css, /body\.resizing \.content-layout \{\s*\n\s*transition: none;/);
+});
+
+test('overlays are one flat panel surface with a real radius', () => {
+  const css = fs.readFileSync(
+    path.resolve(__dirname, '..', 'renderer', 'workbench.css'), 'utf8');
+
+  // 浮层用 --panel（深色下比内容层亮），不是 --surface（=内容卡色）。
+  // 用内容卡色会让设置面板与中栏同色，"浮起来"读不出来。
+  assert.match(css, /\.sheet-box \{[^}]*background: var\(--panel\)/);
+  assert.match(css, /\.sheet-box \{[^}]*border-radius: var\(--radius-card\)/);
+  assert.match(css, /\.setup \.body \{[^}]*background: var\(--panel\)/);
+  assert.match(css, /\.setup \.foot \{[^}]*background: var\(--panel\)/);
+
+  // 页头/页脚/侧导航都不许再各自上底色 —— 一个浮层里第二、第三种灰
+  // 就是"颜色不一致"的来源。
+  assert.doesNotMatch(css, /\.sheet-foot \{[^}]*background:/);
+  assert.doesNotMatch(css, /\.sheet-head \{[^}]*background:/);
+  assert.match(css, /\.set-nav \{[^}]*background: transparent/);
+
+  // 遮罩走主题 veil：硬编码黑幕在浅色主题下会把整页压成灰。
+  assert.match(css, /\.sheet,\s*\n\.setup \{[\s\S]{0,220}background: var\(--veil\)/);
+  assert.doesNotMatch(css, /background: rgba\(0, 0, 0, 0\.35\)/);
+
+  // 浮层内部重绑表面语义，后代四十处规则不必逐条改。
+  assert.match(css, /\.sheet-box,\s*\n\.setup \.body \{\s*\n\s*--surface: var\(--inset-surface\)/);
 });

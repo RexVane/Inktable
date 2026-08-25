@@ -2,19 +2,58 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src http://127.0.0.1:*; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-+bogcxA9rN61l4U27NYWKv0PEc6ckm34si88nWr7EMQ=' 'sha256-p+zDa0IYhmyvF0WU5VeKl3mfYcGMOJ04AqucLGltWw4='; style-src 'self' 'unsafe-inline'; connect-src 'none'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'" />
 <title>Inktable</title>
 <style>
   /* 结构性 reset —— 全部视觉规则集中在 workbench.css，避免两处定义漂移 */
   * { box-sizing: border-box; }
-  html { color-scheme: light dark; }
+  /* color-scheme 由各主题块自己声明（深色四套 dark、浅色三套 light）， */
+  /* 这里不再写 light dark，否则原生滚动条会跟系统而不是跟主题。 */
   body { margin: 0; height: 100vh; overflow: hidden; -webkit-user-select: none; }
 </style>
 <link rel="stylesheet" href="workbench.css" />
+<script>
+// 首帧前定妥主题，否则浅色主题用户会先看到一帧默认的 Nebula 深色。
+// 只做 data-theme 这一件事；完整的主题引擎在下方主脚本里（同一套折算规则，
+// 这里刻意重复而不抽函数——主脚本在 </body> 之后才执行，抽不出来）。
+(function () {
+  try {
+    var pairs = {
+      nebula: ['silver', 'nebula'], silver: ['silver', 'steel'],
+      steel: ['silver', 'steel'], limestone: ['limestone', 'coal'],
+      coal: ['limestone', 'coal'], linen: ['linen', 'moss'],
+      moss: ['linen', 'moss']
+    };
+    var raw = localStorage.getItem('uiTheme');
+    var pref = raw === 'light' ? 'silver'
+      : (raw === 'dark' || raw === 'system' || raw === null || !pairs[raw]) ? 'nebula' : raw;
+    var f = localStorage.getItem('uiFollowSystem');
+    // 与主脚本 themeFollowsSystem() 同一判据：仅显式的旧值 'system' 跟随，
+    // 未设置过则用 nebula 的默认（不跟随，Nebula 深蓝）。
+    var follow = raw === 'system' ? true : (f === null ? false : f === '1');
+    var id = pref;
+    if (follow) {
+      id = window.matchMedia('(prefers-color-scheme: dark)').matches
+        ? pairs[pref][1] : pairs[pref][0];
+    }
+    document.documentElement.setAttribute('data-theme', id);
+  } catch (e) { /* 取不到偏好就用默认 Nebula */ }
+})();
+</script>
 </head>
 <body>
   <div class="main">
     <div class="topbar">
+      <button class="drawer-toggle" id="toggleNav" type="button" aria-controls="navPanel"
+        title="文件库抽屉（Ctrl+1）" aria-label="收起或展开文件库">
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <rect x="1.5" y="2.5" width="13" height="11" rx="2.5" fill="none"
+            stroke="currentColor" stroke-width="1.4"/>
+          <path d="M6 2.5V13.5" stroke="currentColor" stroke-width="1.4"/>
+          <rect class="drawer-fill" x="1.5" y="2.5" width="4.5" height="11"
+            fill="currentColor" stroke="none"/>
+        </svg>
+      </button>
       <div class="topbar-brand" aria-label="Inktable 个人知识库">
         <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24">
           <path d="M12 2.6 C12 2.6 5.6 10.3 5.6 14.9 a6.4 6.4 0 0 0 12.8 0 C18.4 10.3 12 2.6 12 2.6 Z" fill="currentColor"/>
@@ -29,12 +68,22 @@
         <span class="sidecar-status starting" id="sidecarStatus" title="正在连接本地服务" aria-live="polite">
           <span class="dot"></span><span id="sidecarStatusText">正在连接…</span>
         </span>
+        <button class="drawer-toggle" id="toggleQa" type="button" aria-controls="qaPanel"
+          title="知识问答抽屉（Ctrl+2）" aria-label="收起或展开知识问答">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <rect x="1.5" y="2.5" width="13" height="11" rx="2.5" fill="none"
+              stroke="currentColor" stroke-width="1.4"/>
+            <path d="M10 2.5V13.5" stroke="currentColor" stroke-width="1.4"/>
+            <rect class="drawer-fill" x="10" y="2.5" width="4.5" height="11"
+              fill="currentColor" stroke="none"/>
+          </svg>
+        </button>
         <button class="gear" id="gear" type="button" title="来源与设置" aria-label="来源与设置"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
       </div>
     </div>
     <div class="workspace" id="workspace">
       <div class="content-layout">
-        <section class="nav-panel" aria-label="文件库导航">
+        <section class="nav-panel" id="navPanel" aria-label="文件库导航">
           <div class="panel-head"><span class="panel-title">文件库</span></div>
           <div class="nav" id="nav"></div>
         </section>
@@ -56,7 +105,7 @@
           <div class="evidence-content" id="evidence" style="display:none"></div>
         </section>
         <div class="splitter" id="splitQa" role="separator" aria-orientation="vertical"></div>
-        <aside class="qa-panel" aria-label="知识问答">
+        <aside class="qa-panel" id="qaPanel" aria-label="知识问答">
           <div class="panel-head qa-head"><span class="panel-title">知识问答</span><button class="qa-clear" id="qaClear" type="button" title="清空本次会话的问答">清空</button><button class="model-state" id="modelState" type="button">未配置模型</button></div>
           <div class="answer-rows" id="answerRows"><div class="qa-empty"><div><div class="empty-mark"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3m.08 4h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></div><div class="empty-title">询问你的知识库</div><div class="empty-meta">回答会附带可定位的原文引用</div></div></div></div>
           <div class="qa-composer">
@@ -137,16 +186,64 @@ function initSplitters() {
 
   var navWidth = 214;
   var qaWidth = 330;
+  // 抽屉开合与宽度分开存：收起再展开要回到用户自己拖出来的宽度，
+  // 而不是回到默认值。
+  var navOpen = true;
+  var qaOpen = true;
   try {
     var saved = JSON.parse(localStorage.getItem('layoutCols') || '{}') || {};
     if (saved.nav) navWidth = Math.max(160, Math.min(360, saved.nav));
     if (saved.qa) qaWidth = Math.max(260, Math.min(520, saved.qa));
+    if (saved.navOpen === false) navOpen = false;
+    if (saved.qaOpen === false) qaOpen = false;
   } catch (e) {}
 
+  var navPanel = document.getElementById('navPanel');
+  var qaPanel = document.getElementById('qaPanel');
+  var toggleNav = document.getElementById('toggleNav');
+  var toggleQa = document.getElementById('toggleQa');
+
+  function save() {
+    try {
+      localStorage.setItem('layoutCols', JSON.stringify({
+        nav: navWidth, qa: qaWidth, navOpen: navOpen, qaOpen: qaOpen,
+      }));
+    } catch (e) {}
+  }
+
   function updateCols() {
-    layout.style.gridTemplateColumns = navWidth + 'px 5px minmax(360px, 1fr) 5px ' + qaWidth + 'px';
+    // 收起的那栏连同它的 splitter 一起归零：留着 5px 的拖拽条会在贴边处
+    // 留下一道摸不到来源的缝。
+    layout.style.gridTemplateColumns =
+      (navOpen ? navWidth + 'px 5px' : '0px 0px') +
+      ' minmax(360px, 1fr) ' +
+      (qaOpen ? '5px ' + qaWidth + 'px' : '0px 0px');
+    // visibility 而不是只靠 overflow：0 宽的栏里若还留着可聚焦控件，
+    // Tab 会跳进一个看不见的地方。
+    if (navPanel) navPanel.classList.toggle('is-collapsed', !navOpen);
+    if (qaPanel) qaPanel.classList.toggle('is-collapsed', !qaOpen);
+    splitNav.classList.toggle('is-collapsed', !navOpen);
+    splitQa.classList.toggle('is-collapsed', !qaOpen);
+    if (toggleNav) {
+      toggleNav.classList.toggle('on', navOpen);
+      toggleNav.setAttribute('aria-expanded', navOpen ? 'true' : 'false');
+    }
+    if (toggleQa) {
+      toggleQa.classList.toggle('on', qaOpen);
+      toggleQa.setAttribute('aria-expanded', qaOpen ? 'true' : 'false');
+    }
   }
   updateCols();
+
+  window.toggleDrawer = function (which) {
+    if (which === 'nav') navOpen = !navOpen;
+    else qaOpen = !qaOpen;
+    updateCols();
+    save();
+  };
+
+  if (toggleNav) toggleNav.addEventListener('click', function () { window.toggleDrawer('nav'); });
+  if (toggleQa) toggleQa.addEventListener('click', function () { window.toggleDrawer('qa'); });
 
   function startDrag(e, isNav) {
     e.preventDefault();
@@ -168,9 +265,7 @@ function initSplitters() {
       document.body.classList.remove('resizing');
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
-      try {
-        localStorage.setItem('layoutCols', JSON.stringify({ nav: navWidth, qa: qaWidth }));
-      } catch (e) {}
+      save();
     }
 
     window.addEventListener('mousemove', onMove);
@@ -521,45 +616,20 @@ function showSearchFileDetail(file) {
 }
 
 async function api(path, opts = {}) {
-  const info = await window.inktable.getSidecarInfo();
-  if (!info) throw new Error('sidecar 未就绪');
-  const r = await fetch('http://127.0.0.1' + ':' + info.port + path, {
-    ...opts,
-    headers: { 'Content-Type': 'application/json',
-               Authorization: 'Bearer ' + info.token, ...(opts.headers || {}) },
+  // 经主进程受控代理访问 sidecar；鉴权令牌只存在于主进程，渲染层拿不到。
+  const result = await window.inktable.apiRequest({
+    path: path,
+    method: opts.method || 'GET',
+    body: typeof opts.body === 'string' ? opts.body : undefined,
   });
-  if (!r.ok) throw new Error('HTTP ' + r.status);
-  return r.json();
+  if (!result) throw new Error('sidecar 未就绪');
+  if (!result.ok) throw new Error('HTTP ' + (result.status || result.error || '?'));
+  return result.data;
 }
 
-async function apiStream(path, payload, onEvent) {
-  const info = await window.inktable.getSidecarInfo();
-  if (!info) throw new Error('sidecar 未就绪');
-  const response = await fetch('http://127.0.0.1:' + info.port + path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json',
-               Authorization: 'Bearer ' + info.token },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok || !response.body) throw new Error('HTTP ' + response.status);
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  while (true) {
-    const item = await reader.read();
-    buffer += decoder.decode(item.value || new Uint8Array(), { stream: !item.done });
-    let split;
-    while ((split = buffer.indexOf('\n\n')) >= 0) {
-      const block = buffer.slice(0, split); buffer = buffer.slice(split + 2);
-      let event = 'message'; const data = [];
-      block.split(/\r?\n/).forEach(function (line) {
-        if (line.startsWith('event:')) event = line.slice(6).trim();
-        else if (line.startsWith('data:')) data.push(line.slice(5).trim());
-      });
-      if (data.length) onEvent(event, JSON.parse(data.join('\n')));
-    }
-    if (item.done) break;
-  }
+function apiStream(path, payload, onEvent) {
+  // 流式同样经主进程代理：主进程解析 SSE 后逐条回传 (event, data)。
+  return window.inktable.apiStream(path, payload || {}, onEvent);
 }
 
 function fmtSize(b) {
@@ -1129,7 +1199,8 @@ function renderHits(result, q) {
 /* ---------- AI 问答（B6） ---------- */
 async function runAsk(q) {
   const question = String(q || '').trim();
-  if (!question) return;
+  if (!question || askInFlight) return;
+  askInFlight = true;
   const el = document.getElementById('answerRows');
   el.innerHTML = qaHistoryHtml() +
     '<div class="qa-q">' + esc(question) + '</div>' +
@@ -1182,11 +1253,13 @@ async function runAsk(q) {
     if (box) { box.value = ''; box.style.height = ''; }
   } catch (e) {
     qaHistory.push({ question: question,
-                     html: '<div class="ans"><div class="ahedge">提问失败：' + esc(e.message) + '</div></div>' });
+                     html: '<div class="ans" role="alert"><div class="ahedge">提问失败：' + esc(e.message) + '</div></div>' });
     qaAnswers.push(null);
+    trimQaThread();
     persistQaThread();
     renderQaThread();
   } finally {
+    askInFlight = false;
     document.getElementById('askSubmit').disabled = llmInfo.available !== true;
   }
 }
@@ -1194,8 +1267,16 @@ async function runAsk(q) {
 /* 问答历史：右栏保留全部问答；引用绑定按卡片索引回查各自的
    citations，避免旧回答的引用点开后跳到新回答的证据。
    会话持久化到 localStorage（去掉 trace 等大字段），重启后还在 */
+const QA_HISTORY_LIMIT = 40;
 let qaHistory = [];   // [{ question, html }]
 let qaAnswers = [];   // 与 qaHistory 对齐的 answer 对象（失败卡为 null）
+let askInFlight = false;
+
+function trimQaThread() {
+  if (qaHistory.length <= QA_HISTORY_LIMIT) return;
+  qaHistory = qaHistory.slice(-QA_HISTORY_LIMIT);
+  qaAnswers = qaAnswers.slice(-QA_HISTORY_LIMIT);
+}
 
 function persistQaThread() {
   try {
@@ -1224,10 +1305,11 @@ function restoreQaThread() {
     var saved = JSON.parse(localStorage.getItem('qaThread') || 'null');
     if (saved && Array.isArray(saved.history) && Array.isArray(saved.answers) &&
         saved.history.length === saved.answers.length && saved.history.length) {
-      qaHistory = saved.history.map(function (item) {
-        return { question: item.question, html: migrateOldQaHtml(item.html) };
+      qaHistory = saved.history.slice(-QA_HISTORY_LIMIT).map(function (item) {
+        return { question: String(item.question || '').slice(0, 8192),
+                 html: migrateOldQaHtml(item.html) };
       });
-      qaAnswers = saved.answers;
+      qaAnswers = saved.answers.slice(-QA_HISTORY_LIMIT);
       renderQaThread();
     }
   } catch (e) { /* 损坏的存档直接忽略 */ }
@@ -1367,6 +1449,7 @@ function renderAnswer(a, q) {
 
   qaHistory.push({ question: q, html: h });
   qaAnswers.push(a);
+  trimQaThread();
   persistQaThread();
   renderQaThread();
 }
@@ -1861,10 +1944,115 @@ function bindSeg(id, onPick) {
   });
 }
 
+// ---- 主题引擎（七套，移植自 nebula 的 for_system_appearance）----
+// 每套主题是一个"家族成员"：跟随系统时在同家族的亮/暗成员之间折算，
+// 而不是把用户的选择改掉。Nebula 是刻意独立的深色主题，系统转浅色时
+// 借用 Silver 作最接近的中性对偶，但偏好本身仍记为 nebula —— 系统转回
+// 深色时会恢复，不会悄悄把用户的选择变成 Steel。
+var THEMES = [
+  { id: 'nebula', label: 'Nebula', shell: '#222630', card: '#0f111a', accent: '#52a8ff', ink: '#e2e8f0' },
+  { id: 'steel', label: 'Steel', shell: '#16181e', card: '#1a1c24', accent: '#94a3b8', ink: '#e2e8f0' },
+  { id: 'coal', label: 'Coal', shell: '#161616', card: '#171717', accent: '#d4d4d4', ink: '#e2e8f0' },
+  { id: 'moss', label: 'Moss', shell: '#191c19', card: '#1e211e', accent: '#a3b3a3', ink: '#e2e8f0' },
+  { id: 'silver', label: 'Silver', shell: '#f3f4f6', card: '#ffffff', accent: '#495057', ink: '#334155' },
+  { id: 'limestone', label: 'Limestone', shell: '#f0efeb', card: '#ffffff', accent: '#58554c', ink: '#334155' },
+  { id: 'linen', label: 'Linen', shell: '#f2f2ec', card: '#ffffff', accent: '#5f635f', ink: '#334155' }
+];
+var LIGHT_THEMES = { silver: 1, limestone: 1, linen: 1 };
+// 家族对偶表：[浅色成员, 深色成员]
+var THEME_PAIRS = {
+  nebula: ['silver', 'nebula'],
+  silver: ['silver', 'steel'],
+  steel: ['silver', 'steel'],
+  limestone: ['limestone', 'coal'],
+  coal: ['limestone', 'coal'],
+  linen: ['linen', 'moss'],
+  moss: ['linen', 'moss']
+};
+
+function themePref() {
+  var v = localStorage.getItem('uiTheme') || 'system';
+  // 迁移旧的三档取值：system/light/dark 不再是主题名。
+  if (v === 'system') { return 'nebula'; }
+  if (v === 'light') { return 'silver'; }
+  if (v === 'dark') { return 'nebula'; }
+  return THEME_PAIRS[v] ? v : 'nebula';
+}
+
+function themeFollowsSystem() {
+  var raw = localStorage.getItem('uiTheme');
+  // 旧值 'system' 是用户**显式**选过的"跟随系统"，保留该选择。
+  // 而从未设置过（raw === null）时不跟随：nebula 自己的
+  // follow_system_theme 默认就是 0，首启一律是 Nebula 深蓝旗舰。
+  if (raw === 'system') { return true; }
+  var f = localStorage.getItem('uiFollowSystem');
+  return f === null ? false : f === '1';
+}
+
+function resolveTheme(pref, follow, systemIsLight) {
+  if (!follow) { return pref; }
+  var pair = THEME_PAIRS[pref] || THEME_PAIRS.nebula;
+  return systemIsLight ? pair[0] : pair[1];
+}
+
+// 主进程只接受 #rrggbb（它会验形后才交给 Electron）。token 本身是 hex
+// 字面量，但 getComputedStyle 对某些形式会返回 rgb()，两种都归一化。
+function hexFromCss(value) {
+  var v = String(value || '').trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(v)) { return v.toLowerCase(); }
+  if (/^#[0-9a-fA-F]{3}$/.test(v)) {
+    return '#' + v.slice(1).split('').map(function (c) { return c + c; }).join('').toLowerCase();
+  }
+  var m = v.match(/^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/);
+  if (m) {
+    return '#' + [m[1], m[2], m[3]].map(function (n) {
+      var i = Math.max(0, Math.min(255, Math.round(parseFloat(n))));
+      return (i < 16 ? '0' : '') + i.toString(16);
+    }).join('');
+  }
+  return '';
+}
+
+function applyTheme() {
+  var systemIsLight = !window.matchMedia('(prefers-color-scheme: dark)').matches;
+  var id = resolveTheme(themePref(), themeFollowsSystem(), systemIsLight);
+  document.documentElement.setAttribute('data-theme', id);
+  // 原生 chrome（右键菜单、原生滚动条）跟着走深浅，否则深色主题下会露出
+  // 一圈浅色系统控件。Windows 的窗口控件叠加层还需要**确切颜色** —— 从
+  // CSS 现场读出，这样 CSS 始终是唯一颜色来源，加主题不必改主进程。
+  if (window.inktable.setTheme) {
+    var cs = getComputedStyle(document.documentElement);
+    window.inktable.setTheme({
+      mode: LIGHT_THEMES[id] ? 'light' : 'dark',
+      color: hexFromCss(cs.getPropertyValue('--shell')),
+      symbolColor: hexFromCss(cs.getPropertyValue('--ink')),
+    });
+  }
+  return id;
+}
+
+function themeCardsHtml(pref, follow) {
+  var cards = THEMES.map(function (t) {
+    var on = t.id === pref;
+    return '<button class="theme-card' + (on ? ' on' : '') + '" type="button" data-theme-id="' +
+      t.id + '" title="' + esc(t.label) + '" aria-pressed="' + (on ? 'true' : 'false') + '">' +
+      // 迷你预览用该主题**自己**的颜色画：这样选择器回答的是"底色、
+      // 文字和高亮怎么搭在一起"，而不只是"面板是什么颜色"。
+      '<span class="theme-chip" style="background:' + t.shell + '">' +
+        '<span class="theme-chip-card" style="background:' + t.card + '">' +
+          '<span class="theme-chip-line" style="background:' + t.ink + '"></span>' +
+          '<span class="theme-chip-line short" style="background:' + t.accent + '"></span>' +
+        '</span></span>' +
+      '<span class="theme-card-name">' + esc(t.label) + '</span></button>';
+  }).join('');
+  return '<div class="theme-grid' + (follow ? ' follows' : '') + '">' + cards + '</div>';
+}
+
 async function renderGeneralPane(pane) {
   document.getElementById('sheetSub').textContent = '界面与整理行为';
   var zoom = localStorage.getItem('uiZoom') || '1';
-  var theme = localStorage.getItem('uiTheme') || 'system';
+  var theme = themePref();
+  var follow = themeFollowsSystem();
   var autoOn = localStorage.getItem('autoClassify') !== '0';
    var ocr = { enabled: true, available: false, engine_label: '系统 OCR' };
   try { ocr = await api('/settings/ocr'); } catch (e) {}
@@ -1875,9 +2063,12 @@ async function renderGeneralPane(pane) {
       '<div class="set-row"><div class="set-info"><div class="set-label">界面缩放</div>' +
         '<div class="set-desc">调整全局字体与控件大小</div></div>' +
         segHtml('zoomSeg', [['0.9', '小'], ['1', '标准'], ['1.1', '大'], ['1.25', '特大']], zoom) + '</div>' +
-      '<div class="set-row"><div class="set-info"><div class="set-label">外观</div>' +
-        '<div class="set-desc">深浅色主题</div></div>' +
-        segHtml('themeSeg', [['system', '跟随系统'], ['light', '浅色'], ['dark', '深色']], theme) + '</div></div>' +
+      '<div class="set-row"><div class="set-info"><div class="set-label">跟随系统外观</div>' +
+        '<div class="set-desc">开启时在所选主题的亮/暗对偶之间自动切换</div></div>' +
+        segHtml('followSeg', [['1', '开'], ['0', '关']], follow ? '1' : '0') + '</div>' +
+      '<div class="set-row set-row-stack"><div class="set-info"><div class="set-label">主题</div>' +
+        '<div class="set-desc">四套深色与三套浅色。语义色（警示/完成/等待）不随主题变</div></div>' +
+        themeCardsHtml(theme, follow) + '</div></div>' +
     '<div class="set-section"><div class="set-title">整理</div>' +
       '<div class="set-row"><div class="set-info"><div class="set-label">自动归类</div>' +
         '<div class="set-desc">新收录的文件按扩展名自动归入分类</div></div>' +
@@ -1904,9 +2095,26 @@ async function renderGeneralPane(pane) {
     localStorage.setItem('uiZoom', v);
     if (window.inktable.setZoom) window.inktable.setZoom(parseFloat(v));
   });
-  bindSeg('themeSeg', function (v) {
-    localStorage.setItem('uiTheme', v);
-    if (window.inktable.setTheme) window.inktable.setTheme(v);
+  bindSeg('followSeg', function (v) {
+    localStorage.setItem('uiFollowSystem', v);
+    // 首次从旧的 'system' 迁移过来时把偏好落成具体主题名，
+    // 否则关掉"跟随"后 themePref() 仍读到旧值。
+    localStorage.setItem('uiTheme', themePref());
+    applyTheme();
+    var grid = pane.querySelector('.theme-grid');
+    if (grid) grid.classList.toggle('follows', v === '1');
+  });
+  Array.prototype.forEach.call(pane.querySelectorAll('.theme-card'), function (btn) {
+    btn.addEventListener('click', function () {
+      var id = btn.getAttribute('data-theme-id');
+      localStorage.setItem('uiTheme', id);
+      applyTheme();
+      Array.prototype.forEach.call(pane.querySelectorAll('.theme-card'), function (b) {
+        var on = b === btn;
+        b.classList.toggle('on', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+    });
   });
   bindSeg('autoSeg', function (v) {
     localStorage.setItem('autoClassify', v);
@@ -2171,10 +2379,13 @@ async function loadCcswitchProviders() {
       markSelected(it);
       document.getElementById('llmEp').value = p.endpoint;
       if (p.model) document.getElementById('llmModel').value = p.model;
-      document.getElementById('llmKey').value = p.api_key;
+      // cc-switch secrets never cross the sidecar HTTP boundary. Fill only
+      // non-secret metadata; the user pastes the key into Electron's encrypted
+      // settings flow explicitly.
+      document.getElementById('llmKey').value = '';
       var hint = document.getElementById('llmHint');
-      if (hint) hint.textContent = '已填入「' + p.name + '」' +
-        (p.model ? '' : '（模型名需手动填）') + ' —— 点保存，再检测连接';
+      if (hint) hint.textContent = '已填入「' + p.name + '」的端点和模型；' +
+        '出于密钥安全，请手动粘贴 API Key 后保存并检测连接';
     };
   });
 
@@ -2352,6 +2563,13 @@ document.addEventListener('keydown', function (e) {
     document.getElementById('q').focus();
     document.getElementById('q').select();
   }
+  // 抽屉开合。Ctrl+1/2 对应左右两栏，与顶栏按钮同一入口。
+  if ((e.metaKey || e.ctrlKey) && (e.key === '1' || e.key === '2')) {
+    if (typeof window.toggleDrawer === 'function') {
+      e.preventDefault();
+      window.toggleDrawer(e.key === '1' ? 'nav' : 'qa');
+    }
+  }
 });
 
 async function boot(skipSetup = false) {
@@ -2429,9 +2647,11 @@ try {
   if (window.inktable.setZoom) {
     window.inktable.setZoom(parseFloat(localStorage.getItem('uiZoom') || '1') || 1);
   }
-  if (window.inktable.setTheme) {
-    window.inktable.setTheme(localStorage.getItem('uiTheme') || 'system');
-  }
+  applyTheme();
+  // 跟随系统时，系统外观变化要当场重算家族成员（不必重启）。
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () {
+    if (themeFollowsSystem()) applyTheme();
+  });
 } catch (e) { /* 界面偏好失败不影响主流程 */ }
 
 // 恢复上次的问答会话

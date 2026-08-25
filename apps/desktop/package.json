@@ -5,7 +5,8 @@
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder",
+    "build:sidecar": "node scripts/build-sidecar.js",
+    "dist": "npm run build:sidecar && electron-builder",
     "test": "node --test tests/*.test.js"
   },
   "devDependencies": {
