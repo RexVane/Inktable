@@ -281,6 +281,8 @@ def _populate_empty_virtual_indexes(
         "INSERT INTO chunks_vec(rowid, embedding) VALUES (?, ?)",
         [(row[0], row[1]) for row in vector_rows],
     )
+    from app.index import vector as vec
+    vec.invalidate_cache()
     if progress:
         hierarchy_total = len(documents) + len(sections)
         progress("hierarchy_fts", hierarchy_total, hierarchy_total)
@@ -703,7 +705,19 @@ def enable_planned_system_sources(
     conn: sqlite3.Connection,
     candidates: list[Source] | None = None,
 ) -> dict[str, list[str]]:
-    """Enable the four system sources required by the Windows ingestion plan."""
+    """Register planned system sources **disabled**, preserving H6.
+
+    Historical cleanup code enabled Downloads/Pictures/Music/Videos as a side
+    effect, bypassing the user's source-consent step and even re-enabling rows
+    the user had explicitly disabled. That violated HANDOFF H6 (auto-discovered
+    sources default off; unapproved directories must never be watched). This
+    maintenance helper now only ensures discoverability. The desktop consent
+    flow remains the sole path that may set ``enabled=1``.
+
+    The function name is retained for compatibility with existing maintenance
+    scripts; its return includes ``pending`` rather than reporting sources as
+    enabled.
+    """
     wanted = [
         source for source in (candidates if candidates is not None else discover_system())
         if source.name in SYSTEM_SOURCE_NAMES
@@ -711,21 +725,23 @@ def enable_planned_system_sources(
     existing = conn.execute("SELECT id, path, enabled FROM sources").fetchall()
     by_path = {_normal_path(row["path"]): row for row in existing}
     added: list[str] = []
-    enabled: list[str] = []
+    pending: list[str] = []
 
     for source in wanted:
         key = _normal_path(source.path)
         row = by_path.get(key)
         if row:
+            # Never flip an existing choice. Both a prior explicit enable and a
+            # prior explicit disable belong to the user, not this maintenance
+            # helper.
             if not row["enabled"]:
-                conn.execute("UPDATE sources SET enabled = 1 WHERE id = ?", (row["id"],))
-                enabled.append(source.name)
+                pending.append(source.name)
             continue
         conn.execute(
             """INSERT INTO sources
                (name, path, kind, discovered_by, volatile, enabled,
                 permission_ok, permission_checked_at, created_at)
-               VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, 0, 1, ?, ?)""",
             (
                 source.name,
                 source.path,
@@ -737,8 +753,9 @@ def enable_planned_system_sources(
             ),
         )
         added.append(source.name)
+        pending.append(source.name)
     conn.commit()
-    return {"added": added, "enabled": enabled}
+    return {"added": added, "enabled": [], "pending": pending}
 
 
 def cleanup_metrics(conn: sqlite3.Connection) -> dict[str, object]:

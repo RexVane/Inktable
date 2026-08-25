@@ -402,6 +402,28 @@ def test_auto_uses_selected_local_reranker_without_cross_encoder(monkeypatch):
     assert result.degraded is False
 
 
+def test_local_reranker_lexical_only_without_embedding_model(monkeypatch):
+    """Ollama 不可用时本地打分器仍确定性重排（纯词法特征），不抛错、不降级 RRF。
+
+    这是 test_auto_uses_selected_local_reranker_without_cross_encoder 的实现侧
+    保证：auto 模式选中 local-static-v3 时，精排不应因现场编码不可用而失败。
+    """
+    from app.index import embedding as emb
+
+    def no_model(*_args, **_kwargs):
+        raise emb.EmbeddingUnavailable("本地嵌入模型不可用")
+
+    monkeypatch.setattr(emb, "get_embedder", no_model)
+    inputs = [
+        rerank.RerankInput(1, 1, "python 服务器如何启动与配置", "", 0.9),
+        rerank.RerankInput(2, 1, "完全无关的另一段正文内容", "", 0.5),
+    ]
+    ranked = rerank.LocalStaticReranker().rerank("如何启动 python 服务器", inputs)
+    # 词法覆盖 + RRF 就足以把命中候选排到前面，且不依赖现场编码
+    assert [item.chunk_id for item in ranked] == [1, 2]
+    assert ranked[0].score > ranked[1].score
+
+
 def test_cross_encoder_length_bucketing_restores_original_score_order():
     from app.retrieval.cross_encoder import OnnxCrossEncoder
 

@@ -54,7 +54,7 @@ class EmbeddingUnavailable(RuntimeError):
 
 # ---- Ollama 探测（带 TTL 缓存）----
 
-_probe_cache: dict = {"at": 0.0, "tag": None}
+_probe_cache: dict = {"at": 0.0, "tag": None, "digest": None}
 _probe_lock = threading.Lock()
 _encode_cache: dict[str, np.ndarray] = {}
 _encode_cache_order: list[str] = []
@@ -107,48 +107,69 @@ def _http_json(path: str, payload: dict | None = None, timeout: float = 3.0) -> 
         return json.loads(resp.read().decode())
 
 
-def _probe(force: bool = False) -> str | None:
-    """返回本机 Ollama 里可用的 bge-m3 标签（如 'bge-m3:latest'），没有则 None。"""
+def _probe_model(force: bool = False) -> tuple[str | None, str | None]:
+    """Return the available tag and its immutable Ollama manifest digest.
+
+    `/api/tags` exposes a digest for real Ollama models. Include it in the
+    persisted model id so replacing `bge-m3:latest` with different 1024-d
+    weights cannot silently mix two vector spaces. Minimal/fake compatible
+    servers may omit the digest; in that case the full tag is still safer than
+    the former prefix+dimension-only identity.
+    """
     with _probe_lock:
         now = time.time()
         if not force and now - _probe_cache["at"] < _PROBE_TTL:
-            return _probe_cache["tag"]
+            return _probe_cache["tag"], _probe_cache.get("digest")
         tag = None
+        digest = None
         try:
             data = _http_json("/api/tags", timeout=2.0)
-            for m in data.get("models", []):
-                name = str(m.get("name", ""))
+            for model in data.get("models", []):
+                name = str(model.get("name", ""))
                 if name == MODEL_PREFIX or name.startswith(MODEL_PREFIX + ":"):
                     tag = name
+                    raw_digest = str(model.get("digest", "") or "").strip()
+                    digest = raw_digest or None
                     break
         except Exception as e:  # noqa: BLE001 - 连不上就是不可用
             log.debug("Ollama 探测失败：%s", e)
-        _probe_cache.update(at=now, tag=tag)
-        return tag
+        _probe_cache.update(at=now, tag=tag, digest=digest)
+        return tag, digest
+
+
+def _probe(force: bool = False) -> str | None:
+    """Compatibility wrapper returning only the model tag."""
+    return _probe_model(force)[0]
 
 
 class Embedder:
     """Ollama 嵌入客户端。接口与旧静态嵌入完全一致（encode/encode_one/encode_iter）。"""
 
     def __init__(self):
-        tag = _probe()
+        tag, digest = _probe_model()
         if tag is None:
             raise EmbeddingUnavailable(
                 "未检测到 Ollama 的 bge-m3 模型。安装 Ollama 后执行："
                 "ollama pull bge-m3"
             )
         self.tag = tag
+        self.digest = digest
         self.dim = DIM
-        log.info("嵌入服务已连接：Ollama %s (dim=%d)", tag, DIM)
+        log.info(
+            "嵌入服务已连接：Ollama %s digest=%s (dim=%d)",
+            tag, (digest or "unknown")[:12], DIM,
+        )
 
     @property
     def model_id(self) -> str:
-        """写入 chunks.embedding_model_id，模型变更时据此触发重建（§12.8）。
+        """Stable identity for the exact vector space written to the DB.
 
-        用基名而非完整 tag：bge-m3:latest 与 bge-m3 是同一权重，
-        不应因 tag 写法差异触发全库重嵌。
+        Prefer Ollama's manifest digest (immutable across tag aliases). If a
+        compatible server omits it, include the normalized full tag rather
+        than collapsing every 1024-d bge-m3 variant into one id.
         """
-        return f"ollama-{MODEL_PREFIX}-d{DIM}"
+        identity = (self.digest or self.tag).replace(":", "-").replace("/", "-")
+        return f"ollama-{MODEL_PREFIX}-{identity[:24]}-d{DIM}"
 
     def encode(self, texts: list[str]) -> np.ndarray:
         """编码一批文本，返回 L2 归一化后的 float32 矩阵。

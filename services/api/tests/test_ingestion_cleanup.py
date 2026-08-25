@@ -249,9 +249,17 @@ def test_enable_planned_system_sources_is_idempotent(db, tmp_path):
 
     first = enable_planned_system_sources(db, candidates)
     second = enable_planned_system_sources(db, candidates)
-    assert first == {"added": ["图片"], "enabled": ["下载"]}
-    assert second == {"added": [], "enabled": []}
-    assert db.execute("SELECT count(*) FROM sources WHERE enabled = 1").fetchone()[0] == 2
+    assert first == {
+        "added": ["图片"], "enabled": [], "pending": ["下载", "图片"],
+    }
+    assert second == {
+        "added": [], "enabled": [], "pending": ["下载", "图片"],
+    }
+    assert db.execute("SELECT count(*) FROM sources WHERE enabled = 1").fetchone()[0] == 0
+    # H6: maintenance discovery cannot reverse an explicit disable or enable
+    # a newly discovered directory without user consent.
+    rows = db.execute("SELECT path, enabled FROM sources ORDER BY path").fetchall()
+    assert all(row["enabled"] == 0 for row in rows)
 
 
 def test_compacted_database_build_and_atomic_install(tmp_path):

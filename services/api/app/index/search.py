@@ -306,6 +306,11 @@ def vector_route(conn, query: str, limit: int, *,
     return _vector_search(conn, query, limit, query_vector=query_vector)
 
 
+def _like_literal(value: str) -> str:
+    """Escape user text for a literal SQLite LIKE match."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _filename_search(conn, query: str, limit: int) -> list[tuple[int, float]]:
     """Rank one active Child per content by filename coverage.
 
@@ -327,8 +332,8 @@ def _filename_search(conn, query: str, limit: int) -> list[tuple[int, float]]:
     # expensive. Filename recall requires at least one distinctive name term.
     if not terms:
         return []
-    match_clauses = ["lower(f.name) LIKE ?" for _term in terms]
-    params: list[str] = [f"%{term}%" for term in terms]
+    match_clauses = ["lower(f.name) LIKE ? ESCAPE '\\'" for _term in terms]
+    params: list[str] = [f"%{_like_literal(term)}%" for term in terms]
     match_sql = " OR ".join(match_clauses)
     try:
         rows = conn.execute(
@@ -379,7 +384,7 @@ def _filename_search(conn, query: str, limit: int) -> list[tuple[int, float]]:
     return [(chunk_id, values[0]) for chunk_id, values in ranked[:limit]]
 
 
-def _filter_vector_hits(conn, hits, limit: int):
+def _filter_vector_hits(conn, hits, limit: int, *, model_id: str):
     if not hits:
         return []
     ids = [chunk_id for chunk_id, _score in hits]
@@ -388,9 +393,10 @@ def _filter_vector_hits(conn, hits, limit: int):
         f"""SELECT ch.id FROM chunks ch
             JOIN contents c ON c.id = ch.content_id
             WHERE ch.id IN ({marks})
+              AND ch.embedding_model_id = ?
               AND ch.index_version = c.active_index_version
               AND {visible_content_exists('ch.content_id')}""",
-        ids,
+        [*ids, model_id],
     )}
     return [(chunk_id, score) for chunk_id, score in hits
             if chunk_id in active][:limit]
@@ -415,14 +421,17 @@ def _vector_search(
             return []
         if vec.count(conn) == 0:
             return []
-        qv = query_vector if query_vector is not None else emb.get_embedder().encode_one(query)
+        embedder = emb.get_embedder()
+        qv = query_vector if query_vector is not None else embedder.encode_one(query)
         # Start with the exact requested depth. Only overfetch when inactive or
         # hidden rows leave too few visible hits; the final 3x fallback preserves
         # the old correctness bound without paying it on every clean query.
         visible = []
         for factor in (2, 3):
             hits = vec.search(conn, qv, limit=limit * factor)
-            visible = _filter_vector_hits(conn, hits, limit)
+            visible = _filter_vector_hits(
+                conn, hits, limit, model_id=embedder.model_id,
+            )
             if len(visible) >= limit:
                 break
         return visible
@@ -454,12 +463,16 @@ def _substring_search(conn, query: str, limit: int) -> list[tuple[int, float]]:
 
     # 按命中词数排序：全 AND 会让长问句清零，纯 OR 又没有相关性区分
     score_expr = " + ".join(
-        ["(CASE WHEN text LIKE ? OR section_path LIKE ? THEN 1 ELSE 0 END)"] * len(terms)
+        ["(CASE WHEN text LIKE ? ESCAPE '\\' OR section_path LIKE ? ESCAPE '\\' "
+         "THEN 1 ELSE 0 END)"] * len(terms)
     )
-    where = " OR ".join(["(text LIKE ? OR section_path LIKE ?)"] * len(terms))
+    where = " OR ".join(
+        ["(text LIKE ? ESCAPE '\\' OR section_path LIKE ? ESCAPE '\\')"] * len(terms)
+    )
     like = []
     for t in terms:
-        like += [f"%{t}%", f"%{t}%"]
+        pattern = f"%{_like_literal(t)}%"
+        like += [pattern, pattern]
 
     try:
         rows = conn.execute(

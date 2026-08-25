@@ -16,9 +16,11 @@ import secrets
 import sys
 import threading
 import time
+import contextlib
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -44,6 +46,7 @@ from app.index.pipeline import (
     activate_index_version,
     count_readable_pending,
     index_pending,
+    requeue_retryable_contents,
 )
 from app.retrieval.compress import EvidenceSource, best_span
 from app.retrieval.pipeline import run as run_retrieval
@@ -103,12 +106,86 @@ _db_lock = threading.Lock()
 _db_init_lock = threading.Lock()
 _watch: WatchService | None = None
 
+
+@contextlib.contextmanager
+def _read_lock():
+    """Serialize read-only requests **only** when the connection is shared.
+
+    `_db_lock` exists to keep a single writer (PLAN §19 R9). Read-only request
+    handlers must not take it: `db()` hands every thread its own connection and
+    WAL supports concurrent readers alongside that single writer, so acquiring
+    the write lock buys nothing and costs everything.
+
+    Why this matters concretely: `/ask` and `/ask/stream` used to hold
+    `_db_lock` across the whole of `ask()` — which includes up to three
+    generation attempts plus three entailment-verifier calls. One question
+    could therefore hold the global write lock for minutes, blocking every
+    write endpoint, real-time ingestion, scans and index jobs behind an
+    external service's latency. Retrieval and QA never write (verified: no
+    INSERT/UPDATE/DELETE/commit anywhere in app/qa/answer.py,
+    app/retrieval/*, app/qa/metadata.py, app/qa/report.py), so they are pure
+    readers.
+
+    The `:memory:` exception is required: there, `db()` deliberately returns
+    one shared connection for all threads (an in-memory database is private
+    per connection), so concurrent statements on it would risk the
+    SQLITE_MISUSE interleaving that thread-local connections were introduced
+    to eliminate.
+    """
+    if os.environ.get("INKTABLE_DB") == ":memory:":
+        with _db_lock:
+            yield
+    else:
+        yield
+
 # 最近检索 trace 的内存环（PLAN §8.1 /runs/{trace_id}）。
 # 只存内存不落盘：trace 含 id/score/timing，不含正文与查询原文，
 # 但仍按隐私风险登记的口径处理 —— 进程退出即消失。
 _TRACE_CACHE: OrderedDict[str, dict] = OrderedDict()
 _TRACE_CACHE_CAP = 50
 _trace_lock = threading.Lock()
+
+# /ask/stream backpressure. The queue is bounded so an abandoned stream cannot
+# let the worker accumulate deltas forever; the timeout bounds how long the
+# worker waits on a consumer that has gone away before it gives up.
+_STREAM_QUEUE_MAX = 256
+_STREAM_PUT_TIMEOUT = 5.0
+
+# Request-input ceilings. Every list/string field that reaches SQL or an LLM
+# prompt is bounded: unbounded `file_ids` built `?,?,...` placeholder strings
+# directly from input length, and an unbounded batch `limit` reached SQLite as
+# `LIMIT -N`, which SQLite treats as *no limit at all*.
+_MAX_PATH_CHARS = 4096
+_MAX_NAME_CHARS = 512
+_MAX_QUERY_CHARS = 4096
+_MAX_QUESTION_CHARS = 8192
+_MAX_ID_LIST = 5000
+_MAX_HISTORY_TURNS = 20
+_MAX_BATCH_LIMIT = 5000
+
+
+class _StreamCancelled(Exception):
+    """Raised inside the /ask/stream worker once the client has disconnected."""
+
+
+def _release_thread_connection(conn) -> None:
+    """Close a connection opened for a short-lived worker thread.
+
+    `db()` caches per-thread connections in a `threading.local`, which for a
+    request-scoped thread would otherwise only be reclaimed when the object is
+    garbage collected. The `:memory:` singleton is shared by every thread and
+    must never be closed here.
+    """
+    if conn is None or os.environ.get("INKTABLE_DB") == ":memory:":
+        return
+    if conn is _db:
+        return
+    if getattr(_db_local, "conn", None) is conn:
+        _db_local.conn = None
+    try:
+        conn.close()
+    except Exception:  # pragma: no cover - close must never break a response
+        log.debug("关闭线程连接失败", exc_info=True)
 
 
 def _path_within(path: str, root: str) -> bool:
@@ -433,7 +510,7 @@ def discover_deep() -> dict:
 
 
 class PreviewRequest(BaseModel):
-    path: str
+    path: str = Field(min_length=1, max_length=_MAX_PATH_CHARS)
 
 
 @app.post("/sources/preview", dependencies=[Depends(require_token)])
@@ -461,10 +538,10 @@ def preview(req: PreviewRequest) -> dict:
 
 
 class EnableRequest(BaseModel):
-    name: str
-    path: str
-    kind: str = "manual"
-    discovered_by: str = "manual"
+    name: str = Field(min_length=1, max_length=_MAX_NAME_CHARS)
+    path: str = Field(min_length=1, max_length=_MAX_PATH_CHARS)
+    kind: Literal["im", "browser", "system", "manual"] = "manual"
+    discovered_by: str = Field(default="manual", min_length=1, max_length=128)
     volatile: bool = False
 
 
@@ -596,7 +673,7 @@ def disable_source(req: SourceIdRequest) -> dict:
 
 
 class ExcludeRequest(BaseModel):
-    path: str
+    path: str = Field(min_length=1, max_length=_MAX_PATH_CHARS)
 
 
 @app.get("/sources/exclusions", dependencies=[Depends(require_token)])
@@ -687,7 +764,47 @@ def remove_source(req: SourceIdRequest) -> dict:
 
 
 class FilesRemoveRequest(BaseModel):
-    file_ids: list[int]
+    file_ids: list[int] = Field(min_length=1, max_length=_MAX_ID_LIST)
+
+
+class FilePathAuthorizationRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=_MAX_PATH_CHARS)
+    action: Literal["reveal", "open", "trash"]
+
+
+@app.post("/files/authorize_path", dependencies=[Depends(require_token)])
+def authorize_file_path(req: FilePathAuthorizationRequest) -> dict:
+    """Authorize privileged Electron shell operations for an indexed path.
+
+    The renderer is an untrusted boundary: arbitrary local-file/LLM content is
+    rendered there. A missed escape must not turn into “trash any disk path”.
+    Only exact paths already known to the library are eligible. Trash is
+    restricted to the real source path; reveal/open may also target a verified
+    preservation copy.
+    """
+    normalized = os.path.normcase(os.path.abspath(os.path.expanduser(req.path)))
+    conn = db()
+    # Renderer receives paths directly from these columns, so exact lookup is
+    # the common path and uses idx_files_path. Normalize again before deciding
+    # to close `..`/separator/case tricks.
+    rows = conn.execute(
+        "SELECT path, preserved_path FROM files WHERE path = ? OR preserved_path = ?",
+        (req.path, req.path),
+    ).fetchall()
+    authorized = False
+    for row in rows:
+        source = (
+            os.path.normcase(os.path.abspath(os.path.expanduser(row["path"])))
+            if row["path"] else None
+        )
+        preserved = (
+            os.path.normcase(os.path.abspath(os.path.expanduser(row["preserved_path"])))
+            if row["preserved_path"] else None
+        )
+        if normalized == source or (req.action != "trash" and normalized == preserved):
+            authorized = True
+            break
+    return {"authorized": authorized}
 
 
 @app.post("/files/remove", dependencies=[Depends(require_token)])
@@ -747,9 +864,9 @@ def _delete_content(conn, content_id: int) -> None:
 # ---------------------------------------------------------------- 问答（B6）与模型配置
 
 class LLMConfigRequest(BaseModel):
-    endpoint: str = ""
-    api_key: str = ""
-    model: str = ""
+    endpoint: str = Field(default="", max_length=2048)
+    api_key: str = Field(default="", max_length=8192)
+    model: str = Field(default="", max_length=512)
 
 
 @app.post("/settings/llm", dependencies=[Depends(require_token)])
@@ -760,7 +877,10 @@ def set_llm(req: LLMConfigRequest) -> dict:
     """
     from app.qa import llm
 
-    llm.configure(req.endpoint, req.api_key, req.model)
+    try:
+        llm.configure(req.endpoint, req.api_key, req.model)
+    except llm.LLMError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return llm.status()
 
 
@@ -780,10 +900,10 @@ def test_llm() -> dict:
 
 
 class AskRequest(BaseModel):
-    question: str
+    question: str = Field(min_length=1, max_length=_MAX_QUESTION_CHARS)
     book_id: int | None = None
     # 最近几轮问答（[{q, a}]），用于把追问浓缩成可独立检索的问题
-    history: list[dict] = []
+    history: list[dict] = Field(default_factory=list, max_length=_MAX_HISTORY_TURNS)
 
 
 @app.post("/ask", dependencies=[Depends(require_token)])
@@ -795,7 +915,7 @@ def post_ask(req: AskRequest) -> dict:
     q = req.question.strip()
     if not q:
         raise HTTPException(status_code=400, detail="问题为空")
-    with _db_lock:
+    with _read_lock():
         conn = db()
         from app.qa.metadata import answer_metadata
         metadata = answer_metadata(conn, q)
@@ -834,15 +954,31 @@ def post_ask_stream(req: AskRequest):
         return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
     def generate():
-        events: queue.Queue[tuple[str, dict]] = queue.Queue()
-        done = object()
+        # Bounded queue: an abandoned stream must not let the producer grow the
+        # queue without limit. Cancellation is cooperative — the worker only
+        # notices when it next emits, which is per draft delta.
+        events: queue.Queue[tuple[str, dict]] = queue.Queue(maxsize=_STREAM_QUEUE_MAX)
+        cancelled = threading.Event()
+
+        def _offer(item: tuple[str, dict]) -> bool:
+            """Put with a bounded wait; report whether the consumer took it."""
+            try:
+                events.put(item, timeout=_STREAM_PUT_TIMEOUT)
+                return True
+            except queue.Full:
+                cancelled.set()
+                return False
 
         def emit(name: str, payload: dict) -> None:
-            events.put((name, payload))
+            if cancelled.is_set():
+                raise _StreamCancelled()
+            if not _offer((name, payload)):
+                raise _StreamCancelled()
 
         def worker() -> None:
+            conn = None
             try:
-                with _db_lock:
+                with _read_lock():
                     conn = db()
                     from app.qa.metadata import answer_metadata
                     metadata = answer_metadata(conn, q)
@@ -872,27 +1008,46 @@ def post_ask_stream(req: AskRequest):
                             "timings": trace.get("stages", []),
                             "degraded": trace.get("degraded", []), "trace": trace,
                         }
-                events.put(("__result__", result))
+                if not cancelled.is_set():
+                    _offer(("__result__", result))
+            except _StreamCancelled:
+                log.debug("ask/stream 客户端已断开，生成中止")
             except Exception as exc:
-                events.put(("chat.error", {"message": str(exc)}))
+                if not cancelled.is_set():
+                    _offer(("chat.error", {"message": str(exc)}))
             finally:
-                events.put(("__done__", {}))
+                _offer(("__done__", {}))
+                _release_thread_connection(conn)
 
-        threading.Thread(target=worker, name="inktable-ask-stream", daemon=True).start()
-        yield sse("chat.searching", {"question": q})
+        thread = threading.Thread(
+            target=worker, name="inktable-ask-stream", daemon=True,
+        )
+        thread.start()
         result = None
-        while True:
-            name, payload = events.get()
-            if name == "__done__":
-                break
-            if name == "__result__":
-                result = payload
-                continue
-            yield sse(name, payload)
-        if result is not None:
-            citations = result.pop("citations", [])
-            yield sse("chat.finalize", result)
-            yield sse("chat.citations", {"citations": citations})
+        try:
+            yield sse("chat.searching", {"question": q})
+            while True:
+                name, payload = events.get()
+                if name == "__done__":
+                    break
+                if name == "__result__":
+                    result = payload
+                    continue
+                yield sse(name, payload)
+            if result is not None:
+                citations = result.pop("citations", [])
+                yield sse("chat.finalize", result)
+                yield sse("chat.citations", {"citations": citations})
+        finally:
+            # Reached on client disconnect (GeneratorExit) as well as normal
+            # completion. Signal the worker and drain so a producer blocked on
+            # a full queue can observe the cancellation and unwind.
+            cancelled.set()
+            while True:
+                try:
+                    events.get_nowait()
+                except queue.Empty:
+                    break
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -914,29 +1069,36 @@ def get_run(trace_id: str) -> dict:
 @app.post("/classify/llm", dependencies=[Depends(require_token)])
 def post_llm_classify() -> dict:
     """让模型归类未分类文件（B1）。手动触发 —— 每次点击即一次云端授权。"""
-    from app.qa.classify_llm import llm_classify_unclassified
+    from app.qa.classify_llm import apply_llm_classification, plan_llm_classification
     from app.qa.llm import LLMError
+
+    # 读取候选与模型调用在锁外完成；只有短写入进锁（见 _read_lock 的说明）。
+    try:
+        with _read_lock():
+            plan = plan_llm_classification(db())
+    except LLMError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
 
     with _db_lock:
         conn = db()
         try:
-            r = llm_classify_unclassified(conn)
+            r = apply_llm_classification(conn, plan)
             conn.commit()
-        except LLMError as e:
+        except Exception:
             conn.rollback()
-            raise HTTPException(status_code=502, detail=str(e)) from e
+            raise
     return r
 
 
 # ---------------------------------------------------------------- 文件书（B7）
 
 class BookCreate(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=_MAX_NAME_CHARS)
 
 
 class BookMember(BaseModel):
-    book_id: int
-    file_ids: list[int]
+    book_id: int = Field(ge=1)
+    file_ids: list[int] = Field(min_length=1, max_length=_MAX_ID_LIST)
 
 
 @app.get("/books", dependencies=[Depends(require_token)])
@@ -1018,13 +1180,13 @@ def book_delete(req: BookId) -> dict:
 # ---------------------------------------------------------------- 分类（信息层）
 
 class CategoryCreate(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=_MAX_NAME_CHARS)
     parent_id: int | None = None
 
 
 class CategoryRename(BaseModel):
-    category_id: int
-    name: str
+    category_id: int = Field(ge=1)
+    name: str = Field(min_length=1, max_length=_MAX_NAME_CHARS)
 
 
 class CategoryId(BaseModel):
@@ -1032,7 +1194,7 @@ class CategoryId(BaseModel):
 
 
 class AssignRequest(BaseModel):
-    file_ids: list[int]
+    file_ids: list[int] = Field(min_length=1, max_length=_MAX_ID_LIST)
     category_id: int | None = None
     # 顺手建规则：同来源同扩展名以后自动归到此分类（§11.4 回流学习）
     learn_rule: bool = False
@@ -1202,8 +1364,8 @@ def set_auto_preserve(req: AutoPreserveRequest) -> dict:
 
 
 class AddSourceRequest(BaseModel):
-    path: str
-    name: str | None = None
+    path: str = Field(min_length=1, max_length=_MAX_PATH_CHARS)
+    name: str | None = Field(default=None, max_length=_MAX_NAME_CHARS)
 
 
 @app.post("/sources/add", dependencies=[Depends(require_token)])
@@ -1580,7 +1742,7 @@ def file_content(
 
 
 class SearchRequest(BaseModel):
-    q: str
+    q: str = Field(max_length=_MAX_QUERY_CHARS)
     limit: int = Field(default=40, ge=1, le=100)
     book_id: int | None = None
 
@@ -1700,7 +1862,10 @@ def search_content(req: SearchRequest) -> dict:
 
 
 class IndexRequest(BaseModel):
-    limit: int = 500
+    # Bounded: a negative value reached SQLite as `LIMIT -N`, which SQLite
+    # treats as unlimited, so one request would index the whole pending queue
+    # in a single batch while holding the write lock.
+    limit: int = Field(default=500, ge=1, le=_MAX_BATCH_LIMIT)
 
 
 class IndexVersionRequest(BaseModel):
@@ -1813,23 +1978,47 @@ def set_ocr_setting(req: OcrSettingRequest) -> dict:
 
 @app.post("/index/retry_scanned", dependencies=[Depends(require_token)])
 def retry_scanned() -> dict:
-    """把无文本（疑似扫描件）的 PDF 重新排队解析 —— 开启 OCR 后补课用。"""
+    """Requeue recoverable parse/index failures and scanned PDFs.
+
+    Kept under the historical route name for desktop compatibility. The retry
+    now covers ``parse_failed``, ``index_failed``, ``missing_file`` and files
+    that were formerly too large but are now below the parser limit, in
+    addition to no-text PDFs after OCR is enabled.
+    """
     with _db_lock:
         conn = db()
-        rows = conn.execute(
-            """SELECT DISTINCT c.id FROM contents c
-               JOIN files f ON f.content_id = c.id
-               WHERE c.parse_state = 'no_text'
-                 AND lower(COALESCE(f.ext, '')) = '.pdf'"""
-        ).fetchall()
-        if rows:
-            marks = ",".join("?" * len(rows))
-            conn.execute(
-                f"UPDATE contents SET parse_state = 'pending' WHERE id IN ({marks})",
-                [r["id"] for r in rows],
+        result = requeue_retryable_contents(conn, include_no_text_pdf=True)
+        conn.commit()
+
+    # Hash failures live on `files`, not `contents`. Re-run registration in
+    # bounded single-file lock sections: this both retries the filesystem read
+    # and prevents hashing hundreds of files while monopolizing the writer.
+    failed_rows = db().execute(
+        """SELECT id, path, source_id FROM files
+           WHERE state = 'failed' AND error_code = 'hash_failed'
+           ORDER BY id LIMIT ?""",
+        (_MAX_BATCH_LIMIT,),
+    ).fetchall()
+    hash_recovered = 0
+    hash_failed = 0
+    for row in failed_rows:
+        with _db_lock:
+            conn = db()
+            stats = ScanStats()
+            recovered_id = register_file(
+                conn, Path(row["path"]), row["source_id"], stats,
             )
             conn.commit()
-    return {"requeued": len(rows)}
+        if recovered_id is not None and not stats.errors:
+            hash_recovered += 1
+        else:
+            hash_failed += 1
+    return {
+        **result,
+        "hash_retried": len(failed_rows),
+        "hash_recovered": hash_recovered,
+        "hash_failed": hash_failed,
+    }
 
 
 @app.get("/reports/weekly", dependencies=[Depends(require_token)])
@@ -1837,7 +2026,7 @@ def get_weekly_report(force: bool = False) -> dict:
     """本周知识库摘要报告（幂等：同周复用，force=true 重新生成）。"""
     from app.qa.report import weekly_report
 
-    with _db_lock:
+    with _read_lock():
         conn = db()
         return weekly_report(conn, force=force)
 
@@ -1851,8 +2040,8 @@ def ccswitch_providers() -> dict:
 
 
 class RebasePreservedRequest(BaseModel):
-    old_prefix: str
-    new_prefix: str
+    old_prefix: str = Field(min_length=1, max_length=_MAX_PATH_CHARS)
+    new_prefix: str = Field(min_length=1, max_length=_MAX_PATH_CHARS)
 
 
 @app.post("/system/rebase_preserved", dependencies=[Depends(require_token)])
@@ -1906,7 +2095,7 @@ def rebase_preserved(req: RebasePreservedRequest) -> dict:
 
 
 class EmbedBackfillRequest(BaseModel):
-    limit: int = 500
+    limit: int = Field(default=500, ge=1, le=_MAX_BATCH_LIMIT)
 
 
 @app.post("/index/embed_backfill", dependencies=[Depends(require_token)])

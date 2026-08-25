@@ -437,6 +437,9 @@ def test_embed_backfill_covers_legacy_chunks(db, tmp_path, monkeypatch):
     assert first["embedded"] == 1
     assert first["remaining"] == 1
     assert first["model"] == "fake-d256"
+    assert db.execute(
+        "SELECT embedding_model_id FROM contents WHERE id = 1"
+    ).fetchone()[0] is None
 
     second = pipeline.embed_backfill(db, limit=10)
     assert second["embedded"] == 1
@@ -447,6 +450,9 @@ def test_embed_backfill_covers_legacy_chunks(db, tmp_path, monkeypatch):
     assert db.execute(
         "SELECT count(*) FROM chunks WHERE embedding_model_id IS NULL"
     ).fetchone()[0] == 0
+    assert db.execute(
+        "SELECT embedding_model_id FROM contents WHERE id = 1"
+    ).fetchone()[0] == "fake-d256"
 
     # 幂等：补完再跑一遍什么都不动
     third = pipeline.embed_backfill(db)

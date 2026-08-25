@@ -39,9 +39,9 @@ def test_decompose_ignores_plain_questions():
     assert decompose_comparative("") == []
 
 
-def test_decompose_requires_clean_entities():
-    # 连接词切出碎片时放弃分解，不产生噪声子查询
-    assert decompose_comparative("A 和 B 分别是什么") == []
+def test_decompose_accepts_single_character_entities():
+    # 型号/代号经常就是一个字符，A/B 与甲/乙比较都应正常分解。
+    assert decompose_comparative("A 和 B 分别是什么") == ["A 是什么", "B 是什么"]
 
 
 def test_mentioned_exts_uses_word_boundaries():

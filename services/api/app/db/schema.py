@@ -81,6 +81,9 @@ CREATE INDEX IF NOT EXISTS idx_files_source   ON files(source_id);
 CREATE INDEX IF NOT EXISTS idx_files_volume   ON files(volume_uuid);
 CREATE INDEX IF NOT EXISTS idx_files_category ON files(category_id);
 CREATE INDEX IF NOT EXISTS idx_files_mtime    ON files(mtime);
+-- Watcher callbacks fall back to exact-path lookup on inode changes/deletions.
+-- Without this, every filesystem event scanned the entire files table.
+CREATE INDEX IF NOT EXISTS idx_files_path     ON files(path);
 
 -- 分类树（§9 categories）：**纯虚拟，磁盘上不存在对应目录**
 CREATE TABLE IF NOT EXISTS categories (

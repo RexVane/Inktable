@@ -19,6 +19,7 @@ Anthropic 中转是否兼容 OpenAI 协议因站而异，由用户「检测连�
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -107,22 +108,28 @@ def read_providers(db_path: Path | str | None = None) -> dict:
             continue  # gemini/opencode 等格式各异，先不猜
         if not endpoint or not api_key:
             continue
+        # Never return the secret through the sidecar HTTP API. Keep an opaque
+        # process-memory handle so a later explicit import request can select
+        # it without placing the key in renderer memory/DOM/devtools.
+        provider_id = hashlib.sha256(
+            f"{endpoint}\0{api_key}".encode("utf-8")
+        ).hexdigest()[:24]
         providers.append({
+            "provider_id": provider_id,
             "app_type": app_type,
             "name": str(row["name"] or ""),
             "endpoint": endpoint,
             "model": model,
-            "api_key": api_key,
             "is_current": bool(row["is_current"]),
             # Anthropic 中转不保证兼容 OpenAI 协议，前端提示用户检测连接
             "openai_native": app_type == "codex",
         })
 
-    # 去重：同 endpoint+key 只留一条（claude / claude-desktop 常常重复）
-    seen: set[tuple[str, str]] = set()
+    # 去重：公开句柄已包含 secret 指纹但不可逆，不需要向响应附带 key。
+    seen: set[str] = set()
     unique: list[dict] = []
     for provider in providers:
-        key = (provider["endpoint"], provider["api_key"])
+        key = provider["provider_id"]
         if key in seen:
             continue
         seen.add(key)

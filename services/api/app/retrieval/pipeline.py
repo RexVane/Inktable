@@ -51,7 +51,7 @@ def _parallel_subquery_search(db_path: str, subquery: str, limit: int,
     try:
         return child_search(
             child, subquery, limit=limit, include_hierarchy=False,
-            vector_query=query_vector,
+            vector_query=query_vector, include_substring=False,
         )
     finally:
         child.close()
@@ -359,7 +359,7 @@ def run(conn, query: str, *, route_limit: int = 100,
         sub_results = [
             child_search(
                 conn, query, limit=sub_limit, include_hierarchy=False,
-                vector_query=query_vectors.get(query),
+                vector_query=query_vectors.get(query), include_substring=False,
             )
             for query in subqueries
         ]

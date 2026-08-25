@@ -329,6 +329,8 @@ def _delete_content_indexes_batch(
         _delete_virtual_rows(conn, "chunks_fts_tri", chunk_ids)
         if _vector_table_exists(conn):
             _delete_virtual_rows(conn, "chunks_vec", chunk_ids)
+            from app.index import vector as vec
+            vec.invalidate_cache()
         conn.execute(
             f"DELETE FROM chunks WHERE content_id IN ({content_marks})", content_ids,
         )
@@ -395,6 +397,8 @@ def _embed_chunks(conn, inserted: list[tuple[int, object]]) -> str | None:
     m = emb.get_embedder()
     model_id = m.model_id
 
+    from app.index import vector as vec
+
     min_new = min(cid for cid, _ in inserted)
     need: list[tuple[int, object]] = []
     batch_first: dict[str, int] = {}   # 批内去重：同文字只编一次
@@ -432,8 +436,6 @@ def _embed_chunks(conn, inserted: list[tuple[int, object]]) -> str | None:
             raise RuntimeError(
                 f"嵌入模型返回 {len(vectors)} 条向量，预期 {len(need)} 条"
             )
-        from app.index import vector as vec
-
         vec.upsert(conn, [(cid, v) for (cid, _), v in zip(need, vectors)])
 
     for cid, first_id in pending_copy:
@@ -444,6 +446,10 @@ def _embed_chunks(conn, inserted: list[tuple[int, object]]) -> str | None:
         ).rowcount
         if copied != 1:
             raise RuntimeError(f"复制分片 {first_id} 的向量到 {cid} 失败")
+    # These INSERT...SELECT copies bypass vec.upsert; invalidate even when the
+    # batch only reused existing vectors.
+    if reused or pending_copy:
+        vec.invalidate_cache()
 
     ids = [cid for cid, _ in inserted]
     marks = ",".join("?" * len(ids))
@@ -487,24 +493,27 @@ def embed_backfill(
     elif content_ids is not None:
         return {"embedded": 0, "remaining": 0, "available": True}
 
+    m = emb.get_embedder()
+    # NULL means never embedded; a different id means the tag/digest changed
+    # while retaining the same vector dimension. Both require re-encoding.
     remaining_sql = (
         "SELECT count(*) c FROM chunks ch "
         "JOIN contents c ON c.id = ch.content_id "
-        "WHERE ch.embedding_model_id IS NULL "
+        "WHERE (ch.embedding_model_id IS NULL OR ch.embedding_model_id != ?) "
         "AND ch.index_version = c.active_index_version" + scope
     )
+    remaining_params: list[object] = [m.model_id, *scope_params]
     rows = conn.execute(
-        f"""SELECT ch.id, ch.text, ch.section_path
+        f"""SELECT ch.id, ch.content_id, ch.text, ch.section_path
            FROM chunks ch JOIN contents c ON c.id = ch.content_id
-           WHERE ch.embedding_model_id IS NULL
+           WHERE (ch.embedding_model_id IS NULL OR ch.embedding_model_id != ?)
              AND ch.index_version = c.active_index_version{scope}
            ORDER BY ch.id LIMIT ?""",
-        [*scope_params, limit],
+        [m.model_id, *scope_params, limit],
     ).fetchall()
     if not rows:
         return {"embedded": 0, "remaining": 0, "available": True}
 
-    m = emb.get_embedder()
     texts = [emb.embed_text_for(r["text"], r["section_path"] or "") for r in rows]
     vectors = m.encode(texts)
     if len(vectors) != len(rows):
@@ -519,7 +528,24 @@ def embed_backfill(
         f"UPDATE chunks SET embedding_model_id = ? WHERE id IN ({marks})",
         [m.model_id, *(r["id"] for r in rows)],
     )
-    remaining = conn.execute(remaining_sql, scope_params).fetchone()["c"]
+    # contents.embedding_model_id is the summary shown by detail/status APIs.
+    # Mark a content complete only after every chunk in its active version uses
+    # the current vector space; partial batches must leave it unset/stale.
+    content_ids = sorted({int(r["content_id"]) for r in rows})
+    content_marks = ",".join("?" * len(content_ids))
+    conn.execute(
+        f"""UPDATE contents AS co SET embedding_model_id = ?
+            WHERE co.id IN ({content_marks})
+              AND NOT EXISTS (
+                  SELECT 1 FROM chunks ch
+                  WHERE ch.content_id = co.id
+                    AND ch.index_version = co.active_index_version
+                    AND (ch.embedding_model_id IS NULL
+                         OR ch.embedding_model_id != ?)
+              )""",
+        [m.model_id, *content_ids, m.model_id],
+    )
+    remaining = conn.execute(remaining_sql, remaining_params).fetchone()["c"]
     logging.getLogger("inktable.pipeline").info(
         "向量补齐 %d 片，剩余 %d 片", len(rows), remaining)
     return {"embedded": len(rows), "remaining": remaining,
@@ -615,6 +641,68 @@ def _readable_index_paths(conn: sqlite3.Connection, content_id: int,
                 continue
             readable.append(path)
     return readable
+
+
+RETRYABLE_PARSE_STATES = frozenset({
+    "parse_failed", "index_failed", "missing_file", "too_large", "no_text",
+})
+
+
+def requeue_retryable_contents(
+    conn: sqlite3.Connection,
+    *,
+    include_no_text_pdf: bool = True,
+) -> dict:
+    """Move recoverable terminal states back to ``pending`` when now readable.
+
+    A parse failure can be transient (mid-write file, temporary permission,
+    OCR disabled); ``missing_file`` can recover when a preserved copy appears;
+    and a file formerly above the 10 MiB parser limit can later be replaced by
+    a smaller file. These states used to be terminal forever, poisoning every
+    duplicate that shares the content hash. Requeue only content that has a
+    currently readable, indexable copy. ``too_large`` is requeued only when at
+    least one copy is now within the parser limit, preventing a tight retry
+    loop for genuinely large documents.
+    """
+    exts = indexable_exts()
+    candidates = conn.execute(
+        "SELECT id, parse_state FROM contents WHERE parse_state IN "
+        "('parse_failed','index_failed','missing_file','too_large','no_text') "
+        "ORDER BY id"
+    ).fetchall()
+    ids: list[int] = []
+    by_state: dict[str, int] = {}
+    for row in candidates:
+        state = row["parse_state"]
+        paths = _readable_index_paths(conn, row["id"], exts)
+        if not paths:
+            continue
+        if state == "too_large":
+            if not any(
+                _path_within_index_limit(path)
+                for path in paths
+            ):
+                continue
+        if state == "no_text":
+            if not include_no_text_pdf or not any(path.suffix.lower() == ".pdf" for path in paths):
+                continue
+        ids.append(row["id"])
+        by_state[state] = by_state.get(state, 0) + 1
+    if ids:
+        for batch in _id_batches(ids):
+            marks = ",".join("?" * len(batch))
+            conn.execute(
+                f"UPDATE contents SET parse_state = 'pending' WHERE id IN ({marks})",
+                batch,
+            )
+    return {"requeued": len(ids), "by_state": by_state}
+
+
+def _path_within_index_limit(path: Path) -> bool:
+    try:
+        return path.stat().st_size <= MAX_INDEX_BYTES
+    except OSError:
+        return False
 
 
 def count_readable_pending(conn: sqlite3.Connection) -> int:

@@ -212,6 +212,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         "ON chunks(content_id, index_version, ordinal)"
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_section ON chunks(section_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_files_path ON files(path)")
 
     # Existing v1 libraries had one implicit active generation. Backfill a
     # coarse Document/Section representation without reparsing user files;
@@ -380,6 +381,11 @@ def _init_vec_table(conn: sqlite3.Connection) -> None:
                 logging.getLogger("inktable.db").warning(
                     "向量表维度 %s → %d：已重建，全部分片待回填重嵌",
                     m.group(1), DIM)
+                try:
+                    from app.index import vector as vec
+                    vec.invalidate_cache()
+                except Exception:
+                    pass
         conn.execute(
             f"CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec "
             f"USING vec0(embedding float[{DIM}])"

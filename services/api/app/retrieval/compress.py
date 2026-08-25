@@ -141,7 +141,7 @@ def extract_spans(query: str, sources: list[EvidenceSource]) -> list[EvidenceSpa
             ) else 0.0
             answer_cue = 1.0 if (
                 any(word in query for word in ("什么", "多少", "哪个", "哪种"))
-                and ("=" in text or "为 " in text or "是 " in text)
+                and ("=" in text or re.search(r"(?:为|是)[：:，,、\s]", text))
             ) else 0.0
             relevance = (
                 0.55 * coverage + 0.30 * candidate_score

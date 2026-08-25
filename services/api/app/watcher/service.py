@@ -66,6 +66,7 @@ INITIAL_RECONCILE_DELAY = 2.0
 RECONCILE_INTERVAL = 6 * 60 * 60
 RECONCILE_INDEX_BUDGET = 2000
 RECONCILE_ORPHAN_BUDGET = 500
+SCAN_JOB_HISTORY_LIMIT = 100
 
 
 class WatchService:
@@ -143,6 +144,20 @@ class WatchService:
             if job is not None:
                 job.update(updates)
                 job["updated_at"] = time.time()
+
+    def _prune_scan_jobs_locked(self) -> None:
+        """Keep active jobs plus a bounded, newest-first terminal history."""
+        terminal = [
+            (job_id, job) for job_id, job in self._scan_jobs.items()
+            if job["state"] not in {"queued", "scanning", "indexing", "embedding"}
+        ]
+        overflow = len(terminal) - SCAN_JOB_HISTORY_LIMIT
+        if overflow <= 0:
+            return
+        terminal.sort(key=lambda item: item[1].get("updated_at") or 0)
+        for job_id, _job in terminal[:overflow]:
+            self._scan_jobs.pop(job_id, None)
+            self._scan_cancel.pop(job_id, None)
 
     def _scan_loop(self) -> None:
         while not self._scan_stop.is_set():
@@ -287,9 +302,11 @@ class WatchService:
             # do not close it here and leave a closed handle in that thread.
             with self._scan_lock:
                 self._scan_cancel.pop(job_id, None)
+                self._prune_scan_jobs_locked()
 
     def scan_jobs(self) -> list[dict]:
         with self._scan_lock:
+            self._prune_scan_jobs_locked()
             return [dict(job) for job in self._scan_jobs.values()]
 
     def active_scan_source_ids(self) -> set[int]:
@@ -551,9 +568,14 @@ class WatchService:
     # ------------------------------------------------------------ 回调
 
     def _on_stable(self, path: str, moved_in: bool) -> None:
-        """文件写完了 —— 登记并索引。
+        """文件写完了 —— 登记并建立可立即搜索的词法索引。
 
-        整段在 db_lock 内：与 API 的写操作串行，避免 SQLite 锁冲突。
+        DB 写入在 db_lock 内与 API 串行。**向量编码绝不在这里内联**：
+        Ollama 是外部 HTTP 服务，最坏可等数分钟；旧实现把那段等待也放在
+        全局写锁内，一份大文件就会冻结全部写端点、扫描与其他 watcher
+        回调。这里以 ``embed=False`` 先让 FTS 可搜，向量由已有的幂等
+        ``embed_backfill`` 后台批次补齐（与整盘扫描使用同一路径）。
+
         单个文件失败只记日志，绝不让监听线程死掉 —— 监听一旦死了，
         用户不会收到任何错误提示，只会觉得"新文件没进来"。
         """
@@ -595,9 +617,9 @@ class WatchService:
 
                 self._counters["registered"] += 1
 
-                # 立即索引 —— 用户刚存的文件应当马上能搜到，
-                # 而不是等下一次手动"重新索引"
-                idx = index_pending(conn, limit=5)
+                # 立即建立关系+FTS 索引，让用户刚存的文件马上能搜到；
+                # 向量编码走后台幂等回填，绝不把外部 HTTP 等待放在写锁内。
+                idx = index_pending(conn, limit=5, embed=False)
                 conn.commit()
 
             chunks = idx.get("chunks", 0)

@@ -28,13 +28,21 @@ HEAD_CHARS = 300      # 每个文件发送的正文开头长度 —— 只发必
 _JSON_BLOCK = re.compile(r"\[[\s\S]*\]")
 
 
-def llm_classify_unclassified(conn: sqlite3.Connection, limit: int = BATCH) -> dict:
+def plan_llm_classification(conn: sqlite3.Connection, limit: int = BATCH) -> dict:
+    """Read candidates, ask the model, and return a validated write plan.
+
+    Split out from the apply step on purpose: this half performs the reads and
+    the (slow, network-bound) model call, so the caller can run it **without**
+    holding the global write lock. `apply_llm_classification` then does only
+    short DB writes under the lock. Holding `_db_lock` across the model call
+    used to freeze every writer for the duration of the request.
+    """
     if not llm.is_configured():
-        return {"classified": 0, "skipped": 0, "error": "未配置模型服务"}
+        return {"picks": [], "candidates": 0, "error": "未配置模型服务"}
 
     cats = category_tree(conn)
     if not cats:
-        return {"classified": 0, "skipped": 0, "error": "还没有分类，先在侧边栏创建"}
+        return {"picks": [], "candidates": 0, "error": "还没有分类，先在侧边栏创建"}
 
     rows = conn.execute(
         """SELECT f.id, f.name, f.ext,
@@ -48,7 +56,7 @@ def llm_classify_unclassified(conn: sqlite3.Connection, limit: int = BATCH) -> d
         (limit,),
     ).fetchall()
     if not rows:
-        return {"classified": 0, "skipped": 0}
+        return {"picks": [], "candidates": 0}
 
     cat_lines = "\n".join(
         f"  {c['id']}: {'　' * c['depth']}{c['name']}" for c in cats
@@ -70,14 +78,15 @@ def llm_classify_unclassified(conn: sqlite3.Connection, limit: int = BATCH) -> d
     raw = llm.chat(messages, temperature=0.0, max_tokens=1200)
     m = _JSON_BLOCK.search(raw)
     if not m:
-        return {"classified": 0, "skipped": len(rows), "error": "模型未返回有效 JSON"}
+        return {"picks": [], "candidates": len(rows), "error": "模型未返回有效 JSON"}
     try:
         picks = json.loads(m.group(0))
     except json.JSONDecodeError:
-        return {"classified": 0, "skipped": len(rows), "error": "模型 JSON 解析失败"}
+        return {"picks": [], "candidates": len(rows), "error": "模型 JSON 解析失败"}
 
     file_ids = {r["id"] for r in rows}
-    done = skipped = 0
+    validated: list[tuple[int, int]] = []
+    skipped = 0
     for item in picks if isinstance(picks, list) else []:
         try:
             fid = int(item.get("file_id"))
@@ -89,8 +98,31 @@ def llm_classify_unclassified(conn: sqlite3.Connection, limit: int = BATCH) -> d
         if fid not in file_ids or cid is None or int(cid) not in valid_ids:
             skipped += 1
             continue
-        assign_category(conn, [fid], int(cid), by="llm")
-        done += 1
+        validated.append((fid, int(cid)))
+    return {"picks": validated, "candidates": len(rows), "skipped": skipped}
 
+
+def apply_llm_classification(conn: sqlite3.Connection, plan: dict) -> dict:
+    """Write the validated plan. Caller holds the write lock; keep this short."""
+    if plan.get("error"):
+        return {
+            "classified": 0,
+            "skipped": plan.get("candidates", 0),
+            "error": plan["error"],
+        }
+    picks: list[tuple[int, int]] = plan.get("picks", [])
+    for fid, cid in picks:
+        assign_category(conn, [fid], cid, by="llm")
+    done = len(picks)
+    skipped = plan.get("skipped", 0)
+    candidates = plan.get("candidates", 0)
     log.info("LLM 归类：%d 成，%d 跳过", done, skipped)
-    return {"classified": done, "skipped": skipped + (len(rows) - done - skipped)}
+    return {
+        "classified": done,
+        "skipped": skipped + max(0, candidates - done - skipped),
+    }
+
+
+def llm_classify_unclassified(conn: sqlite3.Connection, limit: int = BATCH) -> dict:
+    """Backwards-compatible single-shot wrapper (used by tests and scripts)."""
+    return apply_llm_classification(conn, plan_llm_classification(conn, limit))

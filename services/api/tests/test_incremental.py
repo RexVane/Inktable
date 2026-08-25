@@ -56,7 +56,10 @@ def encode_log(monkeypatch):
         calls.append(len(texts))
         return _fake_encode(texts)
 
-    monkeypatch.setattr(emb, "_probe", lambda force=False: "bge-m3:latest")
+    monkeypatch.setattr(
+        emb, "_probe_model",
+        lambda force=False: ("bge-m3:latest", "test-incremental-digest"),
+    )
     monkeypatch.setattr(emb.Embedder, "encode", spy)
     monkeypatch.setattr(emb, "_instance", None)
     return calls

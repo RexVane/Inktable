@@ -21,6 +21,43 @@ from app.retrieval.pipeline import (
 )
 
 
+def test_comparative_subquery_skips_full_scan(monkeypatch):
+    """Subqueries keep indexed routes but must not rescan every chunk.
+
+    The main query still owns the substring fallback. Repeating that LIKE scan
+    for each comparative subquery adds hundreds of milliseconds per variant on
+    a large library and does not improve the frozen retrieval gates.
+    """
+    from app.retrieval import pipeline as pipeline_mod
+
+    calls = []
+
+    class DummyConnection:
+        def close(self):
+            pass
+
+    def fake_connect(path):
+        assert path == "library.db"
+        return DummyConnection()
+
+    def fake_child_search(*args, **kwargs):
+        calls.append(kwargs)
+        return {"vector": []}
+
+    monkeypatch.setattr("app.db.database.connect", fake_connect)
+    monkeypatch.setattr(pipeline_mod, "child_search", fake_child_search)
+
+    assert pipeline_mod._parallel_subquery_search(
+        "library.db", "实体 问题", 20,
+    ) == {"vector": []}
+    assert calls == [{
+        "limit": 20,
+        "include_hierarchy": False,
+        "vector_query": None,
+        "include_substring": False,
+    }]
+
+
 def test_filename_route_has_explicit_metadata_weight():
     fused = _fuse({"filename:metadata": [(1, 1.0)], "jieba": [(2, 1.0)]})
 

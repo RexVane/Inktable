@@ -21,6 +21,9 @@ import logging
 import os
 import sqlite3
 import struct
+import sys
+import threading
+import ctypes
 
 import numpy as np
 
@@ -28,9 +31,19 @@ from app.index.embedding import DIM
 
 log = logging.getLogger("inktable.vector")
 
-# 个人库通常在十万级分片；超过此阈值才避免一次性载入约 0.5GB 矩阵。
-# 矩阵缓存让比较类查询的多个向量变体复用同一份向量数据。
+# 旧版本用固定的 100k 行数阈值决定是否建矩阵。这个阈值在不同机器上
+# 没有可比性：102,965 条在本机仍然只占约 402 MiB，而 148k 条在低内存
+# 机器上可能触发分页。现在按可用内存和显式预算决定；保留这个名字只是
+# 为了兼容外部诊断脚本，查询路径不再把它当硬上限。
 INMEM_LIMIT = 100_000
+_CACHE_DEFAULT_CAP_BYTES = 1024 * 1024 * 1024
+# The full 148k-row matrix is about 580 MiB resident and needs roughly 760 MiB
+# during construction. Keep a modest headroom so a 16 GiB desktop can warm the
+# cache while Ollama is resident; callers can raise this with the environment
+# variable on memory-constrained machines.
+_CACHE_DEFAULT_RESERVE_BYTES = 256 * 1024 * 1024
+_CACHE_BUILD_OVERHEAD = 1.25
+_CACHE_BUILD_FIXED_BYTES = 32 * 1024 * 1024
 
 
 def ensure_schema(conn: sqlite3.Connection, dim: int = DIM) -> bool:
@@ -77,12 +90,18 @@ def _serialize(v: np.ndarray) -> bytes:
 # 键上再叠加 (库路径, 行数, 最大 rowid)，防守同进程内多个测试库的串扰。
 _matrix_cache: dict = {"key": None, "ids": None, "matrix": None}
 _write_generation = 0
+_matrix_build_lock = threading.Lock()
 
 
 def _invalidate_cache() -> None:
     global _write_generation
     _write_generation += 1
     _matrix_cache["key"] = None
+
+
+def invalidate_cache() -> None:
+    """Invalidate the process cache after a direct chunks_vec rebuild/copy."""
+    _invalidate_cache()
 
 
 def _main_db_path(conn: sqlite3.Connection) -> str:
@@ -93,6 +112,77 @@ def _main_db_path(conn: sqlite3.Connection) -> str:
     except sqlite3.Error:
         pass
     return "?"
+
+
+def _available_memory_bytes() -> int | None:
+    """Return an approximate amount of currently available physical memory.
+
+    This deliberately has no third-party dependency: the API is also bundled
+    into the frozen sidecar.  A missing/failed probe means "unknown", in which
+    case the explicit cache cap remains the safety guard.
+    """
+    if sys.platform == "win32":
+        class _Status(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_uint32),
+                ("dwMemoryLoad", ctypes.c_uint32),
+                ("ullTotalPhys", ctypes.c_uint64),
+                ("ullAvailPhys", ctypes.c_uint64),
+                ("ullTotalPageFile", ctypes.c_uint64),
+                ("ullAvailPageFile", ctypes.c_uint64),
+                ("ullTotalVirtual", ctypes.c_uint64),
+                ("ullAvailVirtual", ctypes.c_uint64),
+                ("ullAvailExtendedVirtual", ctypes.c_uint64),
+            ]
+
+        status = _Status()
+        status.dwLength = ctypes.sizeof(_Status)
+        try:
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                return int(status.ullAvailPhys)
+        except (AttributeError, OSError):
+            pass
+        return None
+
+    try:
+        pages = os.sysconf("SC_AVPHYS_PAGES")
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        if pages > 0 and page_size > 0:
+            return int(pages * page_size)
+    except (AttributeError, OSError, ValueError):
+        pass
+    return None
+
+
+def _env_bytes(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return max(0, int(float(raw) * 1024 * 1024))
+    except ValueError:
+        return default
+
+
+def _matrix_budget_allows(rows: int, dim: int = DIM) -> bool:
+    """Decide whether a full matrix is safe to build on this machine."""
+    if rows <= 0 or _matrix_disabled():
+        return False
+    cap = _env_bytes("INKTABLE_VECTOR_CACHE_MB", _CACHE_DEFAULT_CAP_BYTES)
+    if cap == 0:
+        return False
+    steady = rows * (dim * 4 + 8)  # float32 matrix + int64 row ids
+    required = int(steady * _CACHE_BUILD_OVERHEAD + _CACHE_BUILD_FIXED_BYTES)
+    if required > cap:
+        return False
+    available = _available_memory_bytes()
+    reserve = _env_bytes(
+        "INKTABLE_VECTOR_CACHE_RESERVE_MB",
+        _CACHE_DEFAULT_RESERVE_BYTES,
+    )
+    if available is not None and required > max(0, available - reserve):
+        return False
+    return True
 
 
 def upsert(conn: sqlite3.Connection, rows: list[tuple[int, np.ndarray]]) -> int:
@@ -163,57 +253,67 @@ def _shadow_bulk_vectors(conn: sqlite3.Connection, dim: int = DIM):
         if len(names) != 2:
             return None
 
-        blobs = {
-            row[0]: row[1] for row in conn.execute(
-                f"SELECT rowid, vectors FROM {_VEC_TABLE}_vector_chunks00"
+        # Keep the count and both shadow tables in one snapshot. Iterate the
+        # cursor directly so raw vector blobs are released block by block;
+        # fetchall() would temporarily retain almost a second full matrix.
+        own_snapshot = not conn.in_transaction
+        if own_snapshot:
+            conn.execute("BEGIN")
+        try:
+            expected = count(conn)
+            if expected <= 0:
+                return None
+            stride = dim * 4  # float32
+            ids = np.empty(expected, dtype=np.int64)
+            matrix = np.empty((expected, dim), dtype=np.float32)
+            filled = 0
+            rows = conn.execute(
+                f"""SELECT c.chunk_id, c.size, c.validity, c.rowids, v.vectors
+                    FROM {_VEC_TABLE}_chunks c
+                    JOIN {_VEC_TABLE}_vector_chunks00 v ON v.rowid = c.chunk_id
+                    ORDER BY c.chunk_id"""
             )
-        }
-        meta = list(conn.execute(
-            f"SELECT chunk_id, size, validity, rowids FROM {_VEC_TABLE}_chunks "
-            f"ORDER BY chunk_id"
-        ))
+            for chunk_id, size, validity, rowids, raw in rows:
+                if raw is None or not isinstance(raw, (bytes, bytearray)):
+                    return None
+                size = int(size or 0)
+                if size <= 0:
+                    continue
+                # Validate all three shadow payloads before copying a block.
+                if len(raw) % stride or len(raw) // stride < size:
+                    return None
+                if not isinstance(rowids, (bytes, bytearray)) or len(rowids) < size * 8:
+                    return None
+                if not isinstance(validity, (bytes, bytearray)) or len(validity) * 8 < size:
+                    return None
+                vectors = np.frombuffer(raw, dtype=np.float32).reshape(-1, dim)[:size]
+                row_ids = np.frombuffer(rowids, dtype=np.int64)[:size]
+                valid = np.unpackbits(
+                    np.frombuffer(validity, dtype=np.uint8), bitorder="little",
+                )[:size].astype(bool)
+                take = int(valid.sum())
+                if take:
+                    end = filled + take
+                    if end > expected:
+                        return None
+                    ids[filled:end] = row_ids[valid]
+                    matrix[filled:end] = vectors[valid]
+                    filled = end
+
+            # The reconstructed row count must agree with vec0's own count.
+            if filled != expected:
+                log.warning(
+                    "影子表重建 %d 条与 chunks_vec 的 %d 条不一致，退回 KNN",
+                    filled, expected,
+                )
+                return None
+            return ids, matrix
+        finally:
+            if own_snapshot:
+                conn.rollback()
     except sqlite3.Error as e:
         log.debug("影子表读取失败，退回逐行/KNN：%s", e)
         return None
-
-    stride = dim * 4  # float32
-    id_parts: list[np.ndarray] = []
-    vec_parts: list[np.ndarray] = []
-    for chunk_id, size, validity, rowids in meta:
-        raw = blobs.get(chunk_id)
-        if raw is None or not isinstance(raw, (bytes, bytearray)):
-            return None
-        size = int(size or 0)
-        if size <= 0:
-            continue
-        # 校验三份数据的尺寸互相自洽，任一不符说明布局假设已失效
-        if len(raw) % stride or len(raw) // stride < size:
-            return None
-        if not isinstance(rowids, (bytes, bytearray)) or len(rowids) < size * 8:
-            return None
-        if not isinstance(validity, (bytes, bytearray)) or len(validity) * 8 < size:
-            return None
-        vectors = np.frombuffer(raw, dtype=np.float32).reshape(-1, dim)[:size]
-        ids = np.frombuffer(rowids, dtype=np.int64)[:size]
-        valid = np.unpackbits(
-            np.frombuffer(validity, dtype=np.uint8), bitorder="little",
-        )[:size].astype(bool)
-        if valid.any():
-            id_parts.append(ids[valid])
-            vec_parts.append(vectors[valid])
-
-    if not id_parts:
-        return None
-    ids = np.concatenate(id_parts)
-    matrix = np.concatenate(vec_parts)
-    # 最后一道闸：重建条数必须与 vec0 自己报的行数一致
-    if len(ids) != count(conn):
-        log.warning(
-            "影子表重建 %d 条与 chunks_vec 的 %d 条不一致，退回 KNN",
-            len(ids), count(conn),
-        )
-        return None
-    return ids, matrix
 
 
 def search(
@@ -227,7 +327,7 @@ def search(
     candidate_ids 用于「先过滤后检索」（§12.3b ③）：
     元数据过滤后只在子集里搜，避免召回被无关文件占满。
 
-    无过滤主路径走 sqlite-vec KNN；过滤后的小候选集走内存矩阵乘。
+    主路径优先走内存矩阵；预算不足或影子表布局不兼容时退回 KNN。
     """
     q = np.asarray(query_vec, dtype=np.float32)
     q = q / max(float(np.linalg.norm(q)), 1e-12)
@@ -236,13 +336,12 @@ def search(
     if total == 0:
         return []
 
-    if total <= INMEM_LIMIT:
-        # 无过滤主路径也走矩阵：vec0 KNN 每次 780-980ms，矩阵乘 13ms。
-        # 矩阵可能取不到（影子表布局不符、扩展升级），此时 _search_inmem
-        # 返回 None 而不是空列表 —— "缓存缺失"必须与"确实没有结果"区分开。
-        hits = _search_inmem(conn, q, limit, candidate_ids)
-        if hits is not None:
-            return hits
+    # Always ask the cache first. _cached_matrix() applies the memory budget
+    # only when it must build; an already-resident matrix remains cheap to use
+    # even though allocating it naturally reduced the reported free memory.
+    hits = _search_inmem(conn, q, limit, candidate_ids)
+    if hits is not None:
+        return hits
     return _search_knn(conn, q, limit, candidate_ids)
 
 
@@ -250,7 +349,10 @@ def _load_inmem_matrix(conn, candidate_ids=None, *, allow_slow: bool = False):
     """Load vectors once so several query variants share the same matrix."""
     if candidate_ids:
         # 小候选集优先从整库缓存里切片 —— 逐行取 vec0 约 5ms/行，
-        # 80 个候选就是 400ms，比整块重建全库还慢。
+        # 80 个候选就是 400ms，比整块重建全库还慢。Honor the same
+        # INMEM_LIMIT as search/warmup: the old candidate path accidentally
+        # rebuilt a 400+ MiB full matrix even when the explicit guard said not
+        # to load one for libraries above 100k vectors.
         cached = _cached_matrix(conn)
         if cached is not None:
             ids_all, matrix_all = cached
@@ -295,42 +397,58 @@ def _cached_matrix(conn, *, allow_slow: bool = False):
     stats = conn.execute(
         "SELECT count(*) AS c, coalesce(max(rowid), 0) AS m FROM chunks_vec"
     ).fetchone()
-    key = (_main_db_path(conn), stats["c"], stats["m"], _write_generation)
+    data_version = conn.execute("PRAGMA data_version").fetchone()[0]
+    key = (_main_db_path(conn), stats["c"], stats["m"], data_version,
+           _write_generation)
     if _matrix_cache["key"] == key:
         return _matrix_cache["ids"], _matrix_cache["matrix"]
 
-    built = None if _matrix_disabled() else _shadow_bulk_vectors(conn)
-    if built is None:
-        if not allow_slow:
+    if not _matrix_budget_allows(int(stats["c"])):
+        return None
+    # Single-flight: warmup and the first request must not build two 400–600MB
+    # matrices concurrently. Double-check the key after waiting for the lock.
+    with _matrix_build_lock:
+        stats = conn.execute(
+            "SELECT count(*) AS c, coalesce(max(rowid), 0) AS m FROM chunks_vec"
+        ).fetchone()
+        data_version = conn.execute("PRAGMA data_version").fetchone()[0]
+        key = (_main_db_path(conn), stats["c"], stats["m"], data_version,
+               _write_generation)
+        if _matrix_cache["key"] == key:
+            return _matrix_cache["ids"], _matrix_cache["matrix"]
+        built = None if _matrix_disabled() else _shadow_bulk_vectors(conn)
+        if built is None and allow_slow:
+            ids_list: list[int] = []
+            vecs: list[np.ndarray] = []
+            for row in conn.execute("SELECT rowid, embedding FROM chunks_vec"):
+                ids_list.append(row[0])
+                vecs.append(np.frombuffer(row[1], dtype=np.float32))
+            if ids_list:
+                built = (np.asarray(ids_list), np.vstack(vecs))
+        if built is None:
             # 查询路径绝不在这里做逐行导出：71378 条实测 369.7 秒。
             return None
-        ids_list: list[int] = []
-        vecs: list[np.ndarray] = []
-        for row in conn.execute("SELECT rowid, embedding FROM chunks_vec"):
-            ids_list.append(row[0])
-            vecs.append(np.frombuffer(row[1], dtype=np.float32))
-        if not ids_list:
-            return None
-        built = (np.asarray(ids_list), np.vstack(vecs))
 
-    ids, matrix = built
-    # rowid 升序存放，让候选集切片能用 searchsorted 而不是逐个查找
-    order = np.argsort(ids, kind="stable")
-    ids = ids[order]
-    matrix = matrix[order]
-    # 归一化一次，之后每次查询就是纯矩阵乘。bge-m3 的向量本已接近单位长度，
-    # 这一步对已归一化的向量是恒等变换，同时让分数严格等于余弦。
-    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
-    matrix = matrix / np.maximum(norms, 1e-12)
-    _matrix_cache["ids"] = ids
-    _matrix_cache["matrix"] = matrix
-    _matrix_cache["key"] = key
-    return ids, matrix
+        ids, matrix = built
+        # sqlite-vec rowids normally arrive sorted by chunk block. Sort only
+        # when the extension gives us a non-monotonic layout.
+        if len(ids) > 1 and np.any(ids[1:] < ids[:-1]):
+            order = np.argsort(ids, kind="stable")
+            ids = ids[order]
+            matrix = matrix[order]
+        # Normalize in place to avoid retaining a second full-size matrix.
+        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+        matrix /= np.maximum(norms, 1e-12)
+        _matrix_cache["ids"] = ids
+        _matrix_cache["matrix"] = matrix
+        _matrix_cache["key"] = key
+        return ids, matrix
 
 
 def warmup(conn: sqlite3.Connection) -> bool:
     """预热整库矩阵。首次约 1.1 秒（71k 条），放后台线程避免撞到首个查询。"""
-    if count(conn) == 0 or count(conn) > INMEM_LIMIT:
+    total = count(conn)
+    if total == 0 or not _matrix_budget_allows(total):
         return False
     return _cached_matrix(conn) is not None
 
@@ -383,7 +501,7 @@ def search_many(
     if not query_vecs:
         return []
     total = count(conn)
-    if total == 0 or total > INMEM_LIMIT or candidate_ids:
+    if total == 0 or candidate_ids:
         return [search(conn, query, limit, candidate_ids) for query in query_vecs]
     id_array, matrix = _load_inmem_matrix(conn)
     if id_array is None or len(id_array) == 0:

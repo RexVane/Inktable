@@ -132,6 +132,9 @@ def test_unfiltered_vector_search_uses_matrix_when_available(tmp_path, monkeypat
             vec, "_search_knn",
             lambda *_a, **_k: pytest.fail("矩阵可用时不应退回 KNN"),
         )
+        # Route selection should not depend on the host's momentary free
+        # memory while Ollama/backfill is running beside the test suite.
+        monkeypatch.setattr(vec, "_matrix_budget_allows", lambda _rows: True)
         query = np.zeros(vec.DIM, dtype=np.float32)
         query[1] = 1.0
         hits = vec.search(conn, query, limit=2)
@@ -140,6 +143,128 @@ def test_unfiltered_vector_search_uses_matrix_when_available(tmp_path, monkeypat
         assert hits[1][1] == pytest.approx(0.8, abs=1e-5)
     finally:
         conn.close()
+        vec._invalidate_cache()
+
+
+def test_vector_search_above_legacy_limit_uses_matrix_when_budget_allows(monkeypatch):
+    """The former 100k row cutoff must not force a multi-second KNN scan."""
+    from app.index import vector as vec
+
+    monkeypatch.setattr(vec, "count", lambda _conn: vec.INMEM_LIMIT + 1)
+    monkeypatch.setattr(vec, "_matrix_budget_allows", lambda _rows: True)
+    monkeypatch.setattr(
+        vec, "_search_inmem", lambda *_args, **_kwargs: [(17, 0.99)],
+    )
+    monkeypatch.setattr(
+        vec, "_search_knn", lambda *_args, **_kwargs: pytest.fail("不应走 KNN"),
+    )
+
+    hits = vec.search(object(), np.ones(vec.DIM, dtype=np.float32), limit=5)
+    assert hits == [(17, 0.99)]
+
+
+def test_matrix_budget_respects_available_memory_and_explicit_cap(monkeypatch):
+    from app.index import vector as vec
+
+    monkeypatch.delenv("INKTABLE_VECTOR_NO_MATRIX", raising=False)
+    monkeypatch.setenv("INKTABLE_VECTOR_CACHE_MB", "1024")
+    monkeypatch.setenv("INKTABLE_VECTOR_CACHE_RESERVE_MB", "512")
+    monkeypatch.setattr(vec, "_available_memory_bytes", lambda: 2 * 1024**3)
+    assert vec._matrix_budget_allows(100_001)
+
+    monkeypatch.setattr(vec, "_available_memory_bytes", lambda: 700 * 1024**2)
+    assert not vec._matrix_budget_allows(100_001)
+
+    monkeypatch.setattr(vec, "_available_memory_bytes", lambda: 4 * 1024**3)
+    monkeypatch.setenv("INKTABLE_VECTOR_CACHE_MB", "256")
+    assert not vec._matrix_budget_allows(100_001)
+
+
+def test_candidate_vectors_reuse_existing_cache_above_legacy_limit(monkeypatch):
+    from app.index import vector as vec
+
+    ids = np.asarray([11, 22, 33], dtype=np.int64)
+    matrix = np.eye(3, vec.DIM, dtype=np.float32)
+    monkeypatch.setattr(vec, "_cached_matrix", lambda _conn: (ids, matrix))
+
+    got_ids, got = vec._load_inmem_matrix(object(), [33, 11])
+    assert got_ids.tolist() == [11, 33]
+    assert np.array_equal(got, matrix[[0, 2]])
+
+
+def test_matrix_cache_rebuild_is_single_flight(tmp_path, monkeypatch):
+    """Startup warmup and the first request must not build two full matrices."""
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.index import vector as vec
+
+    path = tmp_path / "single-flight.db"
+    setup = connect(path)
+    init_db(setup)
+    vec.upsert(setup, [(1, np.ones(vec.DIM, dtype=np.float32))])
+    setup.commit()
+    setup.close()
+
+    first = connect(path)
+    second = connect(path)
+    original = vec._shadow_bulk_vectors
+    calls = 0
+    calls_lock = threading.Lock()
+
+    def counted(conn, dim=vec.DIM):
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+        time.sleep(0.1)
+        return original(conn, dim)
+
+    monkeypatch.setattr(vec, "_shadow_bulk_vectors", counted)
+    monkeypatch.setattr(vec, "_matrix_budget_allows", lambda _rows: True)
+    vec._invalidate_cache()
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(vec._cached_matrix, [first, second]))
+        assert calls == 1
+        assert all(result is not None for result in results)
+    finally:
+        first.close()
+        second.close()
+        vec._invalidate_cache()
+
+
+def test_matrix_cache_detects_external_same_row_replacement(tmp_path, monkeypatch):
+    """data_version invalidates a cache even when count/max(rowid) stay equal."""
+    from app.index import vector as vec
+
+    path = tmp_path / "data-version.db"
+    reader = connect(path)
+    init_db(reader)
+    old = np.zeros(vec.DIM, dtype=np.float32)
+    old[0] = 1.0
+    vec.upsert(reader, [(7, old)])
+    reader.commit()
+    monkeypatch.setattr(vec, "_matrix_budget_allows", lambda _rows: True)
+    vec._invalidate_cache()
+    assert vec._cached_matrix(reader)[1][0, 0] == pytest.approx(1.0)
+
+    writer = connect(path)
+    new = np.zeros(vec.DIM, dtype=np.float32)
+    new[1] = 1.0
+    writer.execute("DELETE FROM chunks_vec WHERE rowid = 7")
+    writer.execute(
+        "INSERT INTO chunks_vec(rowid, embedding) VALUES (?, ?)",
+        (7, vec._serialize(new)),
+    )
+    writer.commit()
+    writer.close()
+    try:
+        rebuilt = vec._cached_matrix(reader)[1]
+        assert rebuilt[0, 0] == pytest.approx(0.0)
+        assert rebuilt[0, 1] == pytest.approx(1.0)
+    finally:
+        reader.close()
         vec._invalidate_cache()
 
 

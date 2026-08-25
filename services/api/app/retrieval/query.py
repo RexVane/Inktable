@@ -50,7 +50,11 @@ _NUMERIC_INTENT = re.compile(
 
 def _split_entities(text: str) -> list[str]:
     parts = [part.strip(" ，,。？?的") for part in _CONNECTOR.split(text.strip())]
-    entities = [part for part in parts if 2 <= len(part) <= 24]
+    # Single-letter/model entities are common in comparisons (“A 与 B 的区别”,
+    # “甲和乙分别…”). Requiring two characters silently disabled decomposition
+    # for exactly those canonical forms; connector validation below already
+    # rejects empty fragments.
+    entities = [part for part in parts if 1 <= len(part) <= 24]
     # 全部片段都必须成立才可信；有任何碎片说明切错了边界
     if len(entities) != len([p for p in parts if p]):
         return []

@@ -53,6 +53,12 @@ class _StatusLLM(BaseHTTPRequestHandler):
     status_code = 401
 
     def do_POST(self):
+        # 必须先读完请求体再关闭连接：Windows 下带着未读的 POST body 关
+        # socket 会发 RST（WinError 10053）而不是 FIN，客户端读响应状态行
+        # 时被中止，probe 被间歇性误判成 unreachable（修 flaky）。
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        if length:
+            self.rfile.read(length)
         self.send_response(self.status_code)
         self.send_header("Content-Length", "0")
         self.end_headers()
@@ -65,6 +71,9 @@ class _RawLLM(BaseHTTPRequestHandler):
     body = b"not-json"
 
     def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        if length:
+            self.rfile.read(length)
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(self.body)))
@@ -115,7 +124,9 @@ def db(tmp_path):
     (tmp_path / "盐政.txt").write_text(
         "两淮盐政的稽核制度在乾隆年间经历了三次重大调整与改革。" * 6, encoding="utf-8")
     scan_source(conn, 1, tmp_path)
-    index_pending(conn, limit=10)
+    # QA contract tests exercise retrieval/validation, not a live Ollama daemon.
+    # Build deterministic FTS indexes and let vector search degrade naturally.
+    index_pending(conn, limit=10, embed=False)
     yield conn
     conn.close()
 
@@ -201,16 +212,14 @@ def test_model_probe_rejects_invalid_response(body):
     assert "secret" not in str(result)
 
 
-def test_model_probe_rejects_invalid_endpoint_without_raising():
-    llm.configure("not-a-url", "secret", "model")
-    try:
-        result = llm.probe(timeout=2)
-    finally:
-        llm.configure("", "", "")
-
-    assert result["available"] is False
-    assert result["code"] == "unreachable"
-    assert "secret" not in str(result)
+@pytest.mark.parametrize(
+    "endpoint",
+    ["not-a-url", "file:///etc/passwd", "ftp://example.test/v1", "https://u:p@example.test/v1"],
+)
+def test_model_config_rejects_non_http_or_credentialed_endpoint(endpoint):
+    with pytest.raises(llm.LLMError):
+        llm.configure(endpoint, "secret", "model")
+    assert llm.status()["configured"] is False
 
 
 def test_answered_with_citations(db, scripted):
@@ -335,6 +344,35 @@ def test_semantically_unsupported_citations_retry_then_refuse(
     assert answer.answer == REFUSAL
     assert answer.validation["attempts"] == 3
     assert answer.validation["unsupported_claims"] == 1
+
+
+def test_fabricated_only_citations_refuse_while_uncited_falls_back(
+    db, scripted, monkeypatch,
+):
+    """只有虚构编号的引用（[C9] 不在上下文）也按引用回答处理：语义校验拒绝后
+    拒答。被虚构剔除后当成「无引用」降级成片段列表才是 bug —— §12.4 ③ 的
+    降级只服务于真的没写引用的回答。"""
+    seen = []
+
+    def verify(_question, claims):
+        seen.append(claims)
+        return [False] * len(claims), False, ""
+
+    monkeypatch.setattr(answer_module, "_verify_claim_support", verify)
+    monkeypatch.setattr(answer_module, "_rewrite_for_retrieval", lambda _query: None)
+    scripted(
+        "汝窑天青釉的烧成温度在一千二百五十度上下 [C9]。",
+        "汝窑天青釉的烧成温度在一千二百五十度上下 [C9]。",
+        "汝窑天青釉的烧成温度在一千二百五十度上下 [C9]。",
+    )
+
+    answer = ask(db, "汝窑的烧成温度是多少")
+
+    assert answer.status == "refused"
+    assert answer.answer == REFUSAL
+    assert answer.validation["attempts"] == 3
+    assert answer.validation["unsupported_claims"] == 1
+    assert seen, "虚构编号的引用也应送入语义校验，而不是被剔除短路"
 
 
 def test_explicit_scope_verifier_rejects_generic_policy(monkeypatch):

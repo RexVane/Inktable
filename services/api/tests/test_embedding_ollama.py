@@ -122,12 +122,13 @@ def test_encode_failure_raises_unavailable(fake_ollama, monkeypatch):
         m.encode(["文本"])
 
 
-def test_model_id_is_stable_across_tags(fake_ollama):
+def test_model_id_distinguishes_tags_when_digest_is_unavailable(fake_ollama):
     _FakeOllama.models = ["bge-m3:567m"]
-    emb._probe_cache.update(at=0.0, tag=None)
+    emb._probe_cache.update(at=0.0, tag=None, digest=None)
     m = emb.Embedder()
     assert m.tag == "bge-m3:567m"
-    assert m.model_id == f"ollama-bge-m3-d{emb.DIM}"   # tag 不进 model_id
+    assert "bge-m3-567m" in m.model_id
+    assert m.model_id.endswith(f"-d{emb.DIM}")
 
 
 def test_vec_table_dim_migration(monkeypatch):

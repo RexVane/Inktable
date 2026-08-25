@@ -226,31 +226,39 @@ class LocalStaticReranker:
     ) -> list[RerankOutput]:
         from app.index import embedding as emb
 
-        if not emb.is_available():
-            raise emb.EmbeddingUnavailable("本地精排模型不可用")
-        model = emb.get_embedder()
-        variants = [query, *self.subqueries]
-        # 变体合并成一次批量编码（逐条 encode_one 是 N 次 HTTP 往返）
-        query_vectors = model.encode(variants)
-        # 候选向量优先取索引时已入库的，只对缺失的（刚入库还没回填）现场编码
-        rows: list[np.ndarray | None] = []
-        missing: list[int] = []
-        for index, item in enumerate(candidates):
-            v = self.chunk_vectors.get(item.chunk_id)
-            rows.append(v)
-            if v is None:
-                missing.append(index)
-        if missing:
-            encoded = model.encode([
-                emb.embed_text_for(candidates[i].text, candidates[i].section_path)
-                for i in missing
-            ])
-            for pos, i in enumerate(missing):
-                rows[i] = encoded[pos]
-        vectors = np.stack(rows)
-        # 每个候选对所有查询变体的最大余弦
-        semantic = (vectors @ query_vectors.T).max(axis=1)
-        variant_terms = [extract_query_terms(v) for v in variants]
+        # 本地打分器不依赖现场编码也能工作：Ollama 不可用时语义特征退化为
+        # 中性值，词法/元数据特征（IDF 覆盖、邻近、精确、数值、类型、文件名）
+        # 全部照常计算。检索不该因为精排模型掉线就整体降级回 RRF ——
+        # 这批特征本身就是确定性本地信号（"local static" 的由来）。
+        semantic: np.ndarray | None = None
+        vectors: np.ndarray | None = None
+        try:
+            model = emb.get_embedder()
+            variants = [query, *self.subqueries]
+            # 变体合并成一次批量编码（逐条 encode_one 是 N 次 HTTP 往返）
+            query_vectors = model.encode(variants)
+            # 候选向量优先取索引时已入库的，只对缺失的（刚入库还没回填）现场编码
+            rows: list[np.ndarray | None] = []
+            missing: list[int] = []
+            for index, item in enumerate(candidates):
+                v = self.chunk_vectors.get(item.chunk_id)
+                rows.append(v)
+                if v is None:
+                    missing.append(index)
+            if missing:
+                encoded = model.encode([
+                    emb.embed_text_for(candidates[i].text, candidates[i].section_path)
+                    for i in missing
+                ])
+                for pos, i in enumerate(missing):
+                    rows[i] = encoded[pos]
+            vectors = np.stack(rows)
+            # 每个候选对所有查询变体的最大余弦
+            semantic = (vectors @ query_vectors.T).max(axis=1)
+        except emb.EmbeddingUnavailable:
+            semantic = None
+            vectors = None
+        variant_terms = [extract_query_terms(v) for v in [query, *self.subqueries]]
         # 比较类问题的词法特征只看实体子查询：全查询覆盖会奖励
         # "两个实体都顺带提到"的综述文档，压过真正回答问题的实体文档
         lexical_terms = variant_terms[1:] if len(variant_terms) > 1 else variant_terms
@@ -268,9 +276,11 @@ class LocalStaticReranker:
                 self._proximity(terms, haystack) for terms in lexical_terms
             )
             exact = 1.0 if any(
-                v.strip().lower() in haystack for v in variants
+                v.strip().lower() in haystack for v in [query, *self.subqueries]
             ) else 0.0
-            semantic_score = (float(semantic[index]) + 1.0) / 2.0
+            semantic_score = (
+                (float(semantic[index]) + 1.0) / 2.0 if semantic is not None else 0.0
+            )
             rrf_score = item.rrf_score / max(max_rrf, 1e-12)
             # 答案类型特征：问数值的查询里，含数字的分片更可能是答案所在
             numeric = 1.0 if (
@@ -302,22 +312,24 @@ class LocalStaticReranker:
         # 跨内容近重复软降权：同一段话的多个文件副本只有最高分那份
         # 保持原分，其余按比例降权（text_hash 只拦得住完全同文，编辑过
         # 的副本要靠向量相似度识别）。软惩罚，不淘汰任何候选（K3）。
+        # 向量不可用（Ollama 掉线）时跳过本步 —— 无向量就没有近重复判据。
         scores = {output.chunk_id: output.score for output in outputs}
-        order = sorted(range(len(candidates)),
-                       key=lambda i: -scores[candidates[i].chunk_id])
-        kept: list[int] = []
-        for i in order:
-            is_dup = any(
-                candidates[j].content_id != candidates[i].content_id
-                and float(vectors[i] @ vectors[j]) >= NEARDUP_COSINE
-                for j in kept
-            )
-            if is_dup:
-                scores[candidates[i].chunk_id] *= NEARDUP_PENALTY
-            else:
-                kept.append(i)
-        outputs = [RerankOutput(output.chunk_id, scores[output.chunk_id])
-                   for output in outputs]
+        if vectors is not None:
+            order = sorted(range(len(candidates)),
+                           key=lambda i: -scores[candidates[i].chunk_id])
+            kept: list[int] = []
+            for i in order:
+                is_dup = any(
+                    candidates[j].content_id != candidates[i].content_id
+                    and float(vectors[i] @ vectors[j]) >= NEARDUP_COSINE
+                    for j in kept
+                )
+                if is_dup:
+                    scores[candidates[i].chunk_id] *= NEARDUP_PENALTY
+                else:
+                    kept.append(i)
+            outputs = [RerankOutput(output.chunk_id, scores[output.chunk_id])
+                       for output in outputs]
         return sorted(outputs, key=lambda item: item.score, reverse=True)
 
 
@@ -714,9 +726,15 @@ def run_rerank(conn, query: str, candidates, *,
     ranked = _demote_redundant_coverage(query, selected, ranked)
 
     by_id = {candidate.chunk_id: candidate for candidate in candidates}
+    # Candidates excluded only by the rerank input caps still participate as a
+    # tail. Keep that tail deterministic and RRF-ordered rather than preserving
+    # incidental SQL/load order.
     ranked.extend(
         RerankOutput(chunk_id, by_id[chunk_id].rrf_score)
-        for chunk_id in remainder if chunk_id in by_id
+        for chunk_id in sorted(
+            (cid for cid in remainder if cid in by_id),
+            key=lambda cid: (-by_id[cid].rrf_score, cid),
+        )
     )
     return RerankResult(
         ranked=ranked,

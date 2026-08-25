@@ -74,15 +74,19 @@ def test_read_providers_parses_codex_and_claude(tmp_path):
     assert codex["name"] == "中转A"
     assert codex["endpoint"] == "https://relay.example.com/v1"
     assert codex["model"] == "gpt-5.5"
-    assert codex["api_key"] == "sk-codex"
+    assert "api_key" not in codex
+    assert codex["provider_id"]
     assert codex["is_current"] is True
     assert codex["openai_native"] is True
 
     claude = r["providers"][1]
     assert claude["endpoint"] == "https://b.example.com/v1"
     assert claude["model"] == "claude-opus-5"
-    assert claude["api_key"] == "sk-claude"
+    assert "api_key" not in claude
+    assert claude["provider_id"]
     assert claude["openai_native"] is False
+    assert "sk-codex" not in json.dumps(r)
+    assert "sk-claude" not in json.dumps(r)
 
 
 def test_read_providers_missing_db(tmp_path):
