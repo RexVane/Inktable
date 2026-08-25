@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 
 import pytest
 
@@ -222,3 +223,54 @@ def test_prompt_clause_matches_parser_format():
     assert "C1: 原文片段" in clause
     body, quotes = split_block(f"x [C1]\n{QUOTE_BLOCK_MARK}\nC1: 原文片段\n")
     assert quotes == {"C1": "原文片段"}
+
+
+# ---------------------------------------------------- Windows 云占位检测修复
+
+def test_windows_cloud_placeholder_is_detected():
+    """`is_dataless` 原先只看 macOS 的 st_flags，Windows 上恒为 False。
+
+    后果不是「少一个优化」：云端未下载的文件一路走到读取，`open()` 抛
+    `OSError [Errno 22]`，被记成 `hash_failed`。真实库里 624 个 WPS 云盘文件
+    （326 PDF + 257 DOCX）就是这样静默丢掉的 —— 用户看到的是「索引坏了」，
+    实际是「文件没下载」，两者处置完全不同。
+    """
+    from app.domain.identity import (
+        FILE_ATTRIBUTE_OFFLINE,
+        FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS,
+        FILE_ATTRIBUTE_RECALL_ON_OPEN,
+        is_cloud_placeholder,
+    )
+
+    class FakeStat:
+        def __init__(self, **kw):
+            for k, v in kw.items():
+                setattr(self, k, v)
+
+    if sys.platform == "win32":
+        # 实测那个 WPS 文件正是 0x400020 = RECALL_ON_DATA_ACCESS | ARCHIVE
+        assert is_cloud_placeholder(FakeStat(st_file_attributes=0x400020)) is True
+        for bit in (FILE_ATTRIBUTE_OFFLINE, FILE_ATTRIBUTE_RECALL_ON_OPEN,
+                    FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS):
+            assert is_cloud_placeholder(FakeStat(st_file_attributes=bit)) is True
+        # 普通本地文件（ARCHIVE 位）不是占位
+        assert is_cloud_placeholder(FakeStat(st_file_attributes=0x20)) is False
+        # 缺字段不能抛，也不能误判成占位
+        assert is_cloud_placeholder(FakeStat()) is False
+    else:
+        from app.domain.identity import SF_DATALESS
+        assert is_cloud_placeholder(FakeStat(st_flags=SF_DATALESS)) is True
+        assert is_cloud_placeholder(FakeStat(st_flags=0)) is False
+        assert is_cloud_placeholder(FakeStat()) is False
+
+
+def test_hash_failed_records_are_not_short_circuited_as_unchanged():
+    """failed 记录必须在下次扫描被重试，否则占位检测修好了也没用。
+
+    `register_file` 的「未变化」短路条件里显式排除了 `HASH_FAILED`；这条
+    断言守住它 —— 少了它，那 624 条会因为 size/mtime 没变而被永远跳过。
+    """
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parents[1]
+           / "app" / "watcher" / "scanner.py").read_text(encoding="utf-8")
+    assert 'row["error_code"] != HASH_FAILED' in src

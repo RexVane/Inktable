@@ -263,3 +263,71 @@ provider 故障触发 `--max-consecutive-provider-failures`）。这个模型**�
 所以正确拒答率无从判断，而那恰恰是放长回答最该担心的一项（更长的输出更容易
 在该拒答时夹带事实）。门槛仍以 §4.1 的完整复验为准。
 
+
+---
+
+## 5. 2026-08-26：真因是 B:\devcache（97.1%），不是 .md 样板
+
+用户报「快 10 万个文件」「检索效果和知识库很差」。先量再改，盘点结果推翻了
+从界面截图得到的第一印象（我原以为主因是哈希命名的 .html 缓存 —— 那类实际
+只有 64 个）。
+
+`scripts/audit_corpus_noise.py` / `scripts/audit_devcache_share.py`（只读）：
+
+| | 数量 | 占已登记 |
+|---|---:|---:|
+| 已登记文件 | 110,211 | 100% |
+| `.html` | 103,958 | 94.3% |
+| **`B:\devcache` 下** | **107,026** | **97.1%** |
+| ├ rustup toolchains（stable + nightly 两套 `share/doc/rust/html`） | 92,090 | 83.6% |
+| ├ gradle wrapper / caches | 11,905 | 10.8% |
+| ├ gomodcache / cargo registry / uv-cache | ~2,700 | 2.4% |
+| 哈希命名（>=16 位十六进制主名） | 64 | 0.06% |
+
+`B:\devcache` 是开发工具缓存根目录，下面**只有**工具链产物：rustup 的两套
+文档树（内容相同，这正是 17,807 个 content 有多副本的来源）、gradle/go/cargo/uv
+的下载缓存。BM25 的分母里 97% 是这些东西 —— 真资料的排名被稀释，这就是
+「检索效果差」的机制。
+
+**处置**：`scripts/exclude_dirs.py --add "B:/devcache"`。只作用于索引层
+（`state='ignored'`），磁盘一个文件都没动，取消排除后重新扫描即恢复；扫描端
+把排除根并进 `prune_roots`，下次扫描不会再登记。
+
+排除前先用 SQLite backup API 做了一致快照（穿过 WAL）：
+`backups/library-pre-devcache-exclude-20260826.db`（1,805 MB，`quick_check=ok`，
+含 114,186 条 files 记录）。
+
+**核对结果**（`scripts/verify_exclusion.py` / `verify_no_collateral.py`）：
+
+- 可见文件 110,211 → **3,185**；devcache 残留 **0**
+- 剩余构成正是真资料：`.md` 1,491、`.txt` 604、`.pdf` 406、`.docx` 404
+- 真资料目录被连带排除的文件数 **0**（Documents 898、微信 697、QQ 58、
+  OneDrive 171 全部保留）
+- **gold 证据 content 29/29 仍可见** —— 这条最关键：若 gold 资料被排掉，
+  评测会凭空变好（正确答案不在库里，"没找到"反而不算错），指标就失去意义
+- 可见活跃分片 244,611 → **46,075**
+
+## 6. 附带发现：Windows 云占位检测从未生效，静默丢掉 624 个真文档
+
+核对 WPSDrive 时发现候选列表 753 个、可见只有 129 个。差额不是排除造成的
+（连带排除为 0），而是 **624 个记录处于 `state='failed'`，`error_code='hash_failed'`**，
+其中 326 个 PDF、257 个 DOCX —— 正是用户最在意的那类资料。
+
+根因：`app/domain/identity.py` 的 `is_dataless` 只看 `st_flags & SF_DATALESS`，
+而那是 **macOS/BSD** 的位。Windows 的 `os.stat()` 没有 `st_flags` 字段，
+`getattr(st, "st_flags", 0)` **恒为 0** —— 占位检测在 Windows 上从来没有生效。
+于是云端未下载的文件一路走到读取，`open()` 抛
+`OSError [Errno 22] Invalid argument`，被记成「哈希失败」。
+
+用户看到的是「索引坏了」，实际是「文件没下载」，两者处置完全不同：前者要修
+代码，后者只需在 WPS 里把文件下载到本地。
+
+实测那个文件的属性是 `0x400020` =
+`FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | FILE_ATTRIBUTE_ARCHIVE`。修复把判断
+收进 `is_cloud_placeholder(st)`，Windows 侧检查三个位（`OFFLINE` /
+`RECALL_ON_OPEN` / `RECALL_ON_DATA_ACCESS`），macOS 侧保持 `SF_DATALESS`。
+
+修复后 `identify()` 对该文件返回 `is_dataless=True`，扫描会走
+`state='cloud_placeholder'` 分支而不再尝试读取。既有的 624 条会在下次扫描被
+重试 —— `register_file` 的「未变化」短路显式排除了 `HASH_FAILED`，有测试守着
+这一点（少了它，那 624 条会因 size/mtime 没变而被永远跳过）。

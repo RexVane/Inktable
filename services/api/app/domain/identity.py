@@ -48,8 +48,41 @@ _libc = ctypes.CDLL("libc.dylib") if sys.platform == "darwin" else None
 # st_dev → volume_uuid。进程内缓存，避免每个文件都调 diskutil（208ms）
 _volume_cache: dict[int, str] = {}
 
-# iCloud/Dropbox 占位文件标志：文件在云端未下载（§7.8）
+# iCloud/Dropbox 占位文件标志：文件在云端未下载（§7.8）。**仅 macOS**：
+# 这是 BSD 的 st_flags 位，Windows 的 os.stat() 根本没有 st_flags 字段。
 SF_DATALESS = 0x40000000
+
+# Windows 的云占位标志（OneDrive / WPS 云盘 / Dropbox 都用这套）。
+#
+# 实测教训：`is_dataless` 原先只看 `st_flags & SF_DATALESS`，而 Windows 上
+# `getattr(st, "st_flags", 0)` **恒为 0** —— 占位检测在 Windows 上从来没有
+# 生效过。于是云端未下载的文件一路走到读取，`open()` 抛
+# `OSError [Errno 22] Invalid argument`，被记成 `hash_failed`。真实库里
+# 624 个 WPS 云盘文件（326 个 PDF + 257 个 DOCX）就是这样静默丢掉的：
+# 用户以为「索引坏了」，实际是「文件没下载」，两者的处置完全不同。
+#
+# 三个位都要看：OFFLINE 是传统的 HSM 归档位；RECALL_ON_OPEN 表示打开即召回；
+# RECALL_ON_DATA_ACCESS 是现代云同步客户端用的（实测那个 WPS 文件正是
+# 0x400020 = RECALL_ON_DATA_ACCESS | ARCHIVE）。
+FILE_ATTRIBUTE_OFFLINE = 0x1000
+FILE_ATTRIBUTE_RECALL_ON_OPEN = 0x40000
+FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS = 0x400000
+_WIN_CLOUD_PLACEHOLDER = (
+    FILE_ATTRIBUTE_OFFLINE
+    | FILE_ATTRIBUTE_RECALL_ON_OPEN
+    | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
+)
+
+
+def is_cloud_placeholder(st) -> bool:
+    """文件是否是「云端占位、本地无数据」。
+
+    读它会触发下载（可能是几百 MB，也可能直接失败）。两个平台各有一套标志，
+    统一在这里判断，调用方不必关心平台差异。
+    """
+    if sys.platform == "win32":
+        return bool(getattr(st, "st_file_attributes", 0) & _WIN_CLOUD_PLACEHOLDER)
+    return bool(getattr(st, "st_flags", 0) & SF_DATALESS)
 
 
 def _mount_point(path: Path) -> str | None:
@@ -122,8 +155,9 @@ def identify(path: Path | str) -> FileIdentity:
         inode=st.st_ino,
         size=st.st_size,
         mtime=st.st_mtime,
-        # iCloud 占位文件：读它会触发从云端下载整个文件（§7.8）
-        is_dataless=bool(getattr(st, "st_flags", 0) & SF_DATALESS),
+        # 云端占位文件：读它会触发从云端下载整个文件（§7.8）。
+        # 两个平台的标志不同，判断收在 is_cloud_placeholder 里。
+        is_dataless=is_cloud_placeholder(st),
     )
 
 
