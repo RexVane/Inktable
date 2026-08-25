@@ -248,3 +248,27 @@ test('window control overlay is theme-driven and renderer colors are validated',
   assert.match(renderer, /color: hexFromCss\(cs\.getPropertyValue\('--shell'\)\)/);
   assert.match(renderer, /symbolColor: hexFromCss\(cs\.getPropertyValue\('--ink'\)\)/);
 });
+
+test('journal routes are allowlisted and remain read-mostly', () => {
+  const guard = loadRouteGuard();
+  // 调查日志的三个入口必须能走通，否则界面上的「历史」是死按钮
+  for (const [method, p] of [
+    ['GET', '/journal'],
+    ['GET', '/journal?q=%E9%94%81&limit=30'],
+    ['GET', '/journal/related?question=x'],
+    ['POST', '/journal/remove'],
+  ]) {
+    assert.ok(guard.isAllowedApiRequest(method, p),
+      `${method} ${p} 应被放行`);
+  }
+  // 不存在的动词/路径不能因为前缀相同就被放行
+  for (const [method, p] of [
+    ['POST', '/journal'],
+    ['GET', '/journal/remove'],
+    ['DELETE', '/journal'],
+    ['GET', '/journal/../settings/llm'],
+  ]) {
+    assert.ok(!guard.isAllowedApiRequest(method, p),
+      `${method} ${p} 不应被放行`);
+  }
+});

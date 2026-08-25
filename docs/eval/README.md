@@ -179,3 +179,46 @@ pre-v7 baselines.
 Evaluation labels are frozen before M2. Change a gold annotation only when the
 source library changes or the original annotation is demonstrably wrong; do
 not adjust it to make a retrieval implementation score better.
+
+## 2026-08-26: verbatim-quote verification (diagnostic only)
+
+A fifth post-generation check asks the model to append a `===引文===` block
+mapping each used `[Cn]` to a verbatim excerpt, then verifies that excerpt
+appears in **the cited chunk** (`app/qa/quotes.py`). This targets the gap
+between "exact citation integrity 100%" (a format property) and "Gold-evidence
+citation recall 68.93%" (a content property): a model can cite the right file
+while stating a number that file does not contain, and the `[Cn]` stays
+well-formed. Enforcement is **off by default**
+(`INKTABLE_QUOTE_ENFORCE=1` strips citations whose quote fails), because
+changing answer behaviour needs a 65-case QA baseline and that re-verification
+is still blocked on provider availability.
+
+**Local probe (`output/probe-quote-cost-20260826.json`) — inconclusive, and
+reported as such.** Local Ollama `qwen3:8b`, isolated eval DB, 10
+gold-answerable cases, only variable = the quote clause:
+
+| arm | answered | refused | other | P50 |
+|---|---:|---:|---:|---:|
+| no quote block | 1 | 8 | 1 | 17.3 s |
+| with quote block | 1 | 7 | 2 | 18.6 s |
+
+The clause did not change the answered count, but the baseline answered only
+1 of 10, so **this sample has no power to detect a change**. The probe script
+now prints that limitation instead of a reassuring "no regression". Retrieval
+was verified healthy for these queries (120 candidates, no degradation), so the
+refusals come from the model: `qwen3:8b` (8B, Q4) does not follow the strict
+one-fact-per-line + mandatory-`[Cn]` + refuse-without-direct-evidence contract.
+It is adequate for abstract generation, not for cited answering.
+
+Of the 5 quotes the model did emit, **0 verified** — consistent with a model
+that is not copying source text, and the concrete reason enforcement stays off:
+turning it on with this model would strip every citation.
+
+## 2026-08-26: investigation journal is not an evaluation surface
+
+The new `journal` table records successful Q&A for recall by the user. It is
+deliberately excluded from retrieval and from context assembly, so it does not
+affect any metric in this document. A test asserts that `retrieval/*` and
+`qa/answer.py` never import it: journal text is model output, and feeding it
+back as evidence would let a later answer cite an earlier answer while the four
+hard checks still see a well-formed citation.

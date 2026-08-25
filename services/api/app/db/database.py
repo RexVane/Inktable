@@ -207,6 +207,11 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _add_column(conn, "chunks", "start_offset INTEGER")
     _add_column(conn, "chunks", "end_offset INTEGER")
     _add_column(conn, "chunks", "index_version INTEGER NOT NULL DEFAULT 1")
+    # Document 层的检索用主题摘要（可为 NULL）。summary_text 是 full_text[:1000]
+    # 的确定性截断，永远可用；abstract 由本机 Ollama 生成，缺失时文档路的
+    # 索引文本与改动前逐字一致 —— 因此这一列是纯增量，不需要开关。
+    _add_column(conn, "document_representations", "abstract TEXT")
+    _add_column(conn, "document_representations", "abstract_model TEXT")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_chunks_version "
         "ON chunks(content_id, index_version, ordinal)"

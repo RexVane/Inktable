@@ -112,6 +112,23 @@ def build_hierarchy(doc, chunks, fallback_title: str) -> HierarchyDraft:
     )
 
 
+def document_index_text(title: str, abstract: str | None, summary_text: str) -> str:
+    """documents_fts 的索引文本 —— 摘要在前，截断在后。
+
+    单独抽成函数，因为**索引管线与摘要回填脚本必须逐字用同一份拼法**：
+    回填时若拼法与首次入库不同，同一篇文档在两条路径下会得到不同的索引
+    文本，检索结果就随「这篇是新入库的还是回填过的」而变。
+
+    abstract 缺失（未装模型 / 生成失败）时结果与未引入该列时逐字一致，
+    所以这一列是纯增量，不需要功能开关。
+    """
+    parts = [title]
+    if abstract:
+        parts.append(abstract)
+    parts.append(summary_text)
+    return segment_for_index("\n".join(parts))
+
+
 def insert_hierarchy(conn, content_id: int, version: int, hierarchy: HierarchyDraft):
     rep_id = conn.execute(
         """INSERT INTO document_representations
@@ -122,11 +139,12 @@ def insert_hierarchy(conn, content_id: int, version: int, hierarchy: HierarchyDr
          hierarchy.full_text, hierarchy.text_hash, len(hierarchy.full_text),
          hierarchy.structure_confidence),
     ).lastrowid
+    # 入库路径不同步生成摘要：一次 LLM 调用要 5-13 秒，挂在入库上会把
+    # 「投放文件 → 约 3.5 秒可搜」这条实测指标破坏掉。摘要由回填任务补，
+    # 补上之前文档路的行为与改动前一致。
     conn.execute(
         "INSERT INTO documents_fts(rowid, text) VALUES (?, ?)",
-        (rep_id, segment_for_index(
-            f"{hierarchy.title}\n{hierarchy.summary_text}"
-        )),
+        (rep_id, document_index_text(hierarchy.title, None, hierarchy.summary_text)),
     )
 
     ids: dict[tuple[str, ...], int] = {}

@@ -312,9 +312,36 @@ def _remember_trace(trace: dict) -> None:
             _TRACE_CACHE.popitem(last=False)
 
 
+def _record_journal(answer, question: str, book_id: int | None) -> None:
+    """把成功的回答沉淀进调查日志。
+
+    只记 status == 'answered'：拒答、降级（degraded_to_retrieval）与通用路由
+    都没有「基于库内资料得出的结论」可沉淀，记下来只会让下次找回命中一堆
+    查不到。
+
+    日志失败绝不影响问答返回 —— 它是事后沉淀，不在关键路径上。
+    """
+    if getattr(answer, "status", None) != "answered":
+        return
+    if getattr(answer, "mode", None) == "general":
+        return
+    try:
+        from app.qa import journal
+        content_ids = [c.get("content_id") for c in (answer.citations or [])]
+        conn = db()
+        with conn:
+            journal.record(
+                conn, question, answer.answer,
+                content_ids=[i for i in content_ids if i],
+                book_id=book_id,
+                model=str((answer.validation or {}).get("model") or ""),
+            )
+    except Exception as exc:  # noqa: BLE001 - 沉淀失败不能拖垮问答
+        log.warning("调查日志写入失败：%s", exc)
+
+
 def _empty_database_status() -> dict:
-    return {
-        "quick_check": {"ok": None, "checked_at": None},
+    return {        "quick_check": {"ok": None, "checked_at": None},
         "backup": {
             "ok": None, "path": None, "error": "",
             "checked_at": None, "skipped": False,
@@ -934,6 +961,7 @@ def post_ask(req: AskRequest) -> dict:
             raise HTTPException(status_code=502, detail=str(e)) from e
     trace = a.trace
     _remember_trace(trace)
+    _record_journal(a, q, req.book_id)
     return {
         "status": a.status, "answer": a.answer, "citations": a.citations,
         "retrieved": a.retrieved, "hedge": a.hedge, "validation": a.validation,
@@ -999,6 +1027,7 @@ def post_ask_stream(req: AskRequest):
                         )
                         trace = answer.trace
                         _remember_trace(trace)
+                        _record_journal(answer, q, req.book_id)
                         result = {
                             "status": answer.status, "answer": answer.answer,
                             "citations": answer.citations,
@@ -2019,6 +2048,48 @@ def retry_scanned() -> dict:
         "hash_recovered": hash_recovered,
         "hash_failed": hash_failed,
     }
+
+
+class JournalDeleteRequest(BaseModel):
+    journal_id: int | None = None
+    clear: bool = False
+
+
+@app.get("/journal", dependencies=[Depends(require_token)])
+def get_journal(q: str = "", limit: int = 20) -> dict:
+    """找回过往调查。
+
+    这是**导航**接口：返回的 content_ids 指向真实资料，让用户跳回原文。
+    答案文本是模型上次的输出，界面必须标明这一点，不能让它看起来像原文。
+    """
+    from app.qa import journal
+    with _read_lock():
+        conn = db()
+        items = journal.search(conn, q, limit=limit)
+        total = conn.execute("SELECT COUNT(*) FROM journal").fetchone()[0]
+    return {"items": items, "total": int(total), "query": q}
+
+
+@app.get("/journal/related", dependencies=[Depends(require_token)])
+def get_journal_related(question: str, limit: int = 3) -> dict:
+    """新问题的「你之前问过」提示（保守判据，见 journal.related）。"""
+    from app.qa import journal
+    with _read_lock():
+        items = journal.related(db(), question, limit=limit)
+    return {"items": items}
+
+
+@app.post("/journal/remove", dependencies=[Depends(require_token)])
+def post_journal_remove(req: JournalDeleteRequest) -> dict:
+    """删一条或清空。日志是用户自己的记录，必须能删。"""
+    from app.qa import journal
+    conn = db()
+    with conn:
+        if req.clear:
+            return {"removed": journal.clear(conn)}
+        if req.journal_id is None:
+            raise HTTPException(status_code=400, detail="缺少 journal_id")
+        return {"removed": 1 if journal.delete(conn, req.journal_id) else 0}
 
 
 @app.get("/reports/weekly", dependencies=[Depends(require_token)])

@@ -161,6 +161,13 @@ CREATE TABLE IF NOT EXISTS document_representations (
     index_version        INTEGER NOT NULL,
     title                TEXT NOT NULL DEFAULT '',
     summary_text         TEXT NOT NULL DEFAULT '',
+    -- 检索用主题摘要（本机 Ollama 生成，可为 NULL）。summary_text 是
+    -- full_text[:1000] 的截断，只带正文开头的词；abstract 带的是**主题**
+    -- 词汇，让「哪份资料讲了 X」这类查询能在文档路上命中。两者一起进
+    -- documents_fts，abstract 在前。缺失时索引文本与未引入本列时一致。
+    abstract             TEXT,
+    -- 生成它的模型标识。换模型后可据此判断哪些摘要需要重生成。
+    abstract_model       TEXT,
     full_text            TEXT NOT NULL DEFAULT '',
     text_hash            TEXT NOT NULL,
     token_count          INTEGER NOT NULL DEFAULT 0,
@@ -312,6 +319,34 @@ CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS sections_fts USING fts5(
+    text, content='', contentless_delete=1, tokenize='unicode61'
+);
+
+-- 调查日志：把每次成功问答的结论沉淀下来，让「我上次查过这个」能被找回。
+--
+-- **它是导航面，不是证据面。** journal.answer 是模型自己的输出，不是库内
+-- 原文。绝不把它当证据喂回 LLM 上下文 —— 那样模型可能引用"自己上次说的
+-- 话"而不是原文，H8 的证据链就断了。它只用来回答「我以前问过什么、当时
+-- 引了哪些文件」，引用仍指向真实 content。
+--
+-- 只记 status='answered' 的回答：拒答没有结论可沉淀，记下来只会让下次
+-- 检索命中一堆"查不到"。
+CREATE TABLE IF NOT EXISTS journal (
+    id           INTEGER PRIMARY KEY,
+    question     TEXT NOT NULL,
+    answer       TEXT NOT NULL,
+    -- 回答引用到的 content id（JSON 数组）。存 content 而非 chunk：分片会
+    -- 随重建索引换 id，content 的身份跨重建稳定。
+    content_ids  TEXT NOT NULL DEFAULT '[]',
+    -- 提问时的检索范围，回看时能还原上下文；文件书被删则置空。
+    book_id      INTEGER REFERENCES books(id) ON DELETE SET NULL,
+    model        TEXT NOT NULL DEFAULT '',
+    created_at   REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_journal_created ON journal(created_at DESC);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS journal_fts USING fts5(
     text, content='', contentless_delete=1, tokenize='unicode61'
 );
 """

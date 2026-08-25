@@ -18,6 +18,13 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from app.qa import llm
+from app.qa.quotes import (
+    enforcing as quote_enforcing,
+    failing_tags as quote_failing_tags,
+    prompt_clause as quote_prompt_clause,
+    split_block as split_quote_block,
+    verify as verify_quotes,
+)
 from app.retrieval.pipeline import (
     assemble_context,
     compress_evidence,
@@ -172,6 +179,7 @@ def build_messages(question: str, pieces: list[ContextPiece]) -> list[dict]:
         "   · 相关主题、相同实体或相似词不等于答案。资料必须直接包含问题所问的"
         "数值、步骤、关系或结论，不能依靠常识补全。\n"
         "   · 不同资料矛盾时才分别列出各自记载并分别引用；除此之外不要扩大回答范围。\n"
+        + quote_prompt_clause() +
         f"   · 任一必要事实缺少直接证据，或资料只沾边但没有回答所问内容时，"
         f"只输出「{REFUSAL}」这一句话，不得推测。\n"
         f"2) 与本地资料无关的通用问题（寒暄、常识、写作、翻译、代码等）→ "
@@ -660,6 +668,21 @@ def _generate(
         cleaned, rec = validate(raw, pieces)
         validation.update(rec)
 
+        # ⑤ 逐字引文核验（默认只诊断）。必须在 validate 之后、_cited_tags
+        # 之前：引文块自己带 `C1:` 字样，留在正文里会被当成引用标记。
+        raw_body, raw_quotes = split_quote_block(cleaned)
+        if raw_quotes:
+            cleaned = raw_body
+            quote_report = verify_quotes(
+                raw_quotes, {p.tag: p.text for p in pieces})
+            validation["quotes"] = quote_report
+            if quote_enforcing():
+                bad = quote_failing_tags(quote_report)
+                for tag in bad:
+                    cleaned = re.sub(rf"\s*\[{re.escape(tag)}\]", "", cleaned)
+                if bad:
+                    validation["quote_removed"] = sorted(bad)
+
         if cleaned == REFUSAL:
             return Answer(status="refused", answer=REFUSAL,
                           hedge=conf.hedge, validation=validation, trace=trace)
@@ -765,6 +788,8 @@ def _generate(
 def _citation_dict(p: ContextPiece) -> dict:
     return {
         "tag": p.tag, "chunk_id": p.chunk_id, "file_id": p.file_id,
+        # content_id 跨重建索引稳定（chunk_id 会换），调查日志按它记引用。
+        "content_id": p.content_id,
         "file_name": p.file_name, "file_path": p.file_path,
         "page": p.page, "section_path": p.section_path,
         "snippet": p.snippet,

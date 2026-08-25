@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-+bogcxA9rN61l4U27NYWKv0PEc6ckm34si88nWr7EMQ=' 'sha256-p+zDa0IYhmyvF0WU5VeKl3mfYcGMOJ04AqucLGltWw4='; style-src 'self' 'unsafe-inline'; connect-src 'none'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-+bogcxA9rN61l4U27NYWKv0PEc6ckm34si88nWr7EMQ=' 'sha256-50kKtustgRlEt2bB1ocN9osOidTEMeoIYPYSZRRtjto='; style-src 'self' 'unsafe-inline'; connect-src 'none'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'" />
 <title>Inktable</title>
 <style>
   /* 结构性 reset —— 全部视觉规则集中在 workbench.css，避免两处定义漂移 */
@@ -106,7 +106,7 @@
         </section>
         <div class="splitter" id="splitQa" role="separator" aria-orientation="vertical"></div>
         <aside class="qa-panel" id="qaPanel" aria-label="知识问答">
-          <div class="panel-head qa-head"><span class="panel-title">知识问答</span><button class="qa-clear" id="qaClear" type="button" title="清空本次会话的问答">清空</button><button class="model-state" id="modelState" type="button">未配置模型</button></div>
+          <div class="panel-head qa-head"><span class="panel-title">知识问答</span><button class="qa-clear" id="qaJournal" type="button" title="找回过往调查（本地记录）">历史</button><button class="qa-clear" id="qaClear" type="button" title="清空本次会话的问答">清空</button><button class="model-state" id="modelState" type="button">未配置模型</button></div>
           <div class="answer-rows" id="answerRows"><div class="qa-empty"><div><div class="empty-mark"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3m.08 4h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></div><div class="empty-title">询问你的知识库</div><div class="empty-meta">回答会附带可定位的原文引用</div></div></div></div>
           <div class="qa-composer">
             <div class="composer-box">
@@ -1944,7 +1944,74 @@ function bindSeg(id, onPick) {
   });
 }
 
-// ---- 主题引擎（七套，移植自 nebula 的 for_system_appearance）----
+// ---- 调查日志（找回过往问答）----
+// 它是**导航**面：把你带回原始资料，不是把上次的回答当资料。界面必须说清
+// 「这是上次模型的回答」，否则用户会把它当成原文引用。
+var journalOpen = false;
+
+function journalItemHtml(item) {
+  var files = (item.content_ids || []).length;
+  return '<div class="jr" data-id="' + item.id + '">' +
+    '<div class="jr-q">' + esc(item.question) + '</div>' +
+    '<div class="jr-meta"><span>' + esc(fmtDate(item.created_at)) + '</span>' +
+    (files ? '<span class="jr-cites">引用 ' + files + ' 份资料</span>' : '') +
+    (item.model ? '<span class="jr-model">' + esc(item.model) + '</span>' : '') +
+    '<button class="jr-del" data-del="' + item.id + '" type="button" title="删除这条">×</button>' +
+    '</div>' +
+    '<div class="jr-a">' + esc(item.answer) + '</div></div>';
+}
+
+async function renderJournal(query) {
+  var rows = document.getElementById('answerRows');
+  var params = new URLSearchParams();
+  if (query) params.set('q', query);
+  params.set('limit', '30');
+  var d;
+  try {
+    d = await api('/journal?' + params.toString());
+  } catch (e) {
+    rows.innerHTML = '<div class="qa-empty"><div><div class="empty-title">读取调查日志失败</div>' +
+      '<div class="empty-meta">' + esc(e.message) + '</div></div></div>';
+    return;
+  }
+  var items = d.items || [];
+  var head = '<div class="jr-head"><span class="jr-title">过往调查 · ' +
+    (d.total || 0) + ' 条</span>' +
+    '<input class="jr-search" id="jrSearch" placeholder="在过往调查里找…" value="' +
+    esc(query || '') + '" />' +
+    '<button class="jr-back" id="jrBack" type="button">返回问答</button></div>' +
+    '<div class="jr-note">下面是**你上次得到的回答**，不是原文。点引用数看当时引了哪些资料。</div>';
+  rows.innerHTML = head + (items.length
+    ? items.map(journalItemHtml).join('')
+    : '<div class="qa-empty"><div><div class="empty-title">' +
+      (query ? '没有匹配的过往调查' : '还没有调查记录') +
+      '</div><div class="empty-meta">成功回答后会自动记下来</div></div></div>');
+
+  document.getElementById('jrBack').onclick = function () {
+    journalOpen = false;
+    renderQaThread();
+  };
+  var search = document.getElementById('jrSearch');
+  var timer = null;
+  search.oninput = function () {
+    clearTimeout(timer);
+    timer = setTimeout(function () { renderJournal(search.value.trim()); }, 220);
+  };
+  rows.querySelectorAll('.jr-del').forEach(function (btn) {
+    btn.onclick = async function (ev) {
+      ev.stopPropagation();
+      try {
+        await api('/journal/remove', {
+          method: 'POST',
+          body: JSON.stringify({ journal_id: Number(btn.dataset.del) }),
+        });
+        renderJournal(search.value.trim());
+      } catch (e) { toast('删除失败：' + e.message); }
+    };
+  });
+}
+
+
 // 每套主题是一个"家族成员"：跟随系统时在同家族的亮/暗成员之间折算，
 // 而不是把用户的选择改掉。Nebula 是刻意独立的深色主题，系统转浅色时
 // 借用 Silver 作最接近的中性对偶，但偏好本身仍记为 nebula —— 系统转回
@@ -2466,6 +2533,11 @@ async function onSourceAction(btn) {
 document.getElementById('gear').onclick = function () { sheetOpen(true); };
 document.getElementById('backToList').onclick = function () { showListPage(); };
 document.getElementById('qaClear').onclick = function () { resetQaThread(); };
+document.getElementById('qaJournal').onclick = function () {
+  journalOpen = !journalOpen;
+  if (journalOpen) renderJournal('');
+  else renderQaThread();
+};
 document.getElementById('modelState').onclick = function () {
   if (!llmInfo.configured) return sheetOpen(true, 'model');
   return testModelConnection();

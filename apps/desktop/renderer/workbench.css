@@ -2607,3 +2607,115 @@ body.resizing * {
 body.resizing .content-layout {
   transition: none;
 }
+
+/* ---------- 14. 调查日志 ---------- */
+/* 过往问答的找回面。它显示的是**上次模型的回答**，不是原文 —— 所以视觉上
+   要与问答气泡有别：不做气泡、压低对比、并在顶部明说。把它做得像引用卡片
+   会让人误以为那是资料原文。 */
+
+.jr-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0 8px;
+}
+
+.jr-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.jr-search {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--inset);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.jr-search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.jr-back {
+  padding: 0 9px;
+  height: 26px;
+  border-radius: var(--radius-ctl);
+  background: var(--hover);
+  color: var(--text-2);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.jr-back:hover {
+  background: var(--active);
+  color: var(--text);
+}
+
+.jr-note {
+  margin-bottom: 10px;
+  padding: 6px 9px;
+  border-radius: var(--radius-ctl);
+  background: var(--amber-soft);
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.jr {
+  margin-bottom: 10px;
+  padding: 9px 11px;
+  border-radius: var(--radius-ctl);
+  background: var(--card-lift);
+  box-shadow: 0 0 0 1px var(--hairline);
+}
+
+.jr-q {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.jr-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 5px 0 6px;
+  color: var(--text-3);
+  /* 日期、份数这类「机器读」的值走 mono（与 .count 同一条语义裁定） */
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.jr-del {
+  margin-left: auto;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-ctl);
+  color: var(--text-3);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.jr-del:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* 回答正文压低对比并限高：它是线索，不是要在这里重读一遍的内容 */
+.jr-a {
+  max-height: 4.5em;
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}

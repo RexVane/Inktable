@@ -428,13 +428,13 @@ ipcMain.handle('sidecar:info', () => (sidecarInfo ? { port: sidecarInfo.port } :
 ipcMain.handle('sidecar:get-status', () => lastSidecarStatus);
 
 const API_ROUTE_RULES = [
-  ['GET', /^\/(?:health|categories|books|stats|sources|watch\/status|index\/status|settings\/(?:ocr|qa|llm)|integrations\/ccswitch|reports\/weekly)(?:\?[^#]*)?$/],
+  ['GET', /^\/(?:health|categories|books|stats|sources|watch\/status|index\/status|settings\/(?:ocr|qa|llm)|integrations\/ccswitch|reports\/weekly|journal|journal\/related)(?:\?[^#]*)?$/],
   ['GET', /^\/files(?:\?[^#]*)?$/],
   // 文件树是 /files/tree（两段），不是 /files/{id}/tree；正文读取带分页查询参数。
   // file_id 是整数主键，收窄成 [0-9]+ 而非宽松的 [^/]+。
   ['GET', /^\/files\/tree(?:\?[^#]*)?$/],
   ['GET', /^\/files\/[0-9]+\/(?:detail|content)(?:\?[^#]*)?$/],
-  ['POST', /^\/(?:settings\/llm\/test|ask(?:\/stream)?|files\/(?:remove|classify)|books\/add|classify\/auto_ext|search|sources\/(?:discover|discover_deep|preview|enable|disable|remove|add|auto_preserve|preserve_all)|watch\/start|index\/(?:run|embed_backfill|retry_scanned)|settings\/(?:ocr|qa))$/],
+  ['POST', /^\/(?:settings\/llm\/test|ask(?:\/stream)?|files\/(?:remove|classify)|books\/add|classify\/auto_ext|search|sources\/(?:discover|discover_deep|preview|enable|disable|remove|add|auto_preserve|preserve_all)|watch\/start|index\/(?:run|embed_backfill|retry_scanned)|settings\/(?:ocr|qa)|journal\/remove)$/],
 ];
 const MAX_API_BODY_BYTES = 1024 * 1024;
 const MAX_STREAM_PAYLOAD_BYTES = 256 * 1024;
