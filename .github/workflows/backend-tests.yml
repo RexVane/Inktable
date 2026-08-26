@@ -1,14 +1,16 @@
-name: Backend tests
+name: Inktable tests
 
 on:
   push:
     branches: [main]
     paths:
       - "services/api/**"
+      - "apps/desktop/**"
       - ".github/workflows/backend-tests.yml"
   pull_request:
     paths:
       - "services/api/**"
+      - "apps/desktop/**"
       - ".github/workflows/backend-tests.yml"
   workflow_dispatch:
 
@@ -16,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: backend-tests-${{ github.ref }}
+  group: inktable-tests-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -55,3 +57,29 @@ jobs:
           PYTHONHASHSEED: "0"
           INKTABLE_OLLAMA_URL: "http://127.0.0.1:9"
         run: uv run pytest -q
+
+  desktop:
+    name: Node 22 · desktop tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: apps/desktop
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run desktop tests
+        run: npm test
