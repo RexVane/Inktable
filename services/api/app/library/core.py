@@ -171,9 +171,10 @@ def _candidate_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     when a preservation copy exists. The title prefers the active document
     representation, then the newest visible file name.
 
-    Paths are intentionally not copied into ``library_items``. They are
-    mutable physical metadata and are always resolved through ``files`` when
-    the UI needs them.
+    Retrieval-only document abstracts are intentionally *not* returned here.
+    They are index hints, not user-facing Library summaries. Paths are also not
+    copied into ``library_items``; mutable physical metadata is resolved through
+    ``files`` when the UI needs it.
     """
     preferred_cond = visible_files_condition("f2", "s2")
     exists_cond = visible_files_condition("vf", "vs")
@@ -185,8 +186,6 @@ def _candidate_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
             c.active_index_version,
             COALESCE(NULLIF(dr.title, ''), f.name, '') AS title,
             COALESCE(f.ext, '') AS ext,
-            dr.abstract AS abstract,
-            dr.abstract_model AS abstract_model,
             dr.text_hash AS document_text_hash
         FROM contents c
         LEFT JOIN document_representations dr
@@ -223,6 +222,10 @@ def sync_library_items(conn: sqlite3.Connection, *, now: float | None = None) ->
     ``init_db`` must already have created the Library schema. This operation is
     idempotent and transaction-neutral: it never commits or rolls back on the
     caller's behalf.
+
+    ``document_representations.abstract`` is deliberately excluded. That field
+    is retrieval-only and may contain keyword-dense text unsuitable for display.
+    A Library item becomes ``ready`` only after explicit Library enrichment.
     """
     ts = time.time() if now is None else now
     created = 0
@@ -239,28 +242,19 @@ def sync_library_items(conn: sqlite3.Connection, *, now: float | None = None) ->
             "SELECT * FROM library_items WHERE content_id = ?",
             (row["content_id"],),
         ).fetchone()
-        summary = (row["abstract"] or "").strip()
-        abstract_model = row["abstract_model"]
-        inferred_status = "ready" if summary else "pending"
 
         if existing is None:
             conn.execute(
                 """
                 INSERT INTO library_items (
-                    content_id, title, item_type, summary, enrichment_status,
-                    enrichment_model, input_hash, enriched_at, created_at,
-                    updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    content_id, title, item_type, input_hash, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     row["content_id"],
                     row["title"],
                     _item_type(row["ext"]),
-                    summary,
-                    inferred_status,
-                    abstract_model,
                     current_hash,
-                    ts if summary else None,
                     ts,
                     ts,
                 ),
@@ -270,12 +264,33 @@ def sync_library_items(conn: sqlite3.Connection, *, now: float | None = None) ->
 
         hash_changed = existing["input_hash"] != current_hash
         status = existing["enrichment_status"]
-        if hash_changed and status in {"ready", "running"}:
+
+        # Compatibility cleanup for the brief v3 development window where the
+        # retrieval-only document abstract was copied into Library summary and
+        # incorrectly marked ready. Genuine Library enrichment always carries a
+        # prompt_version, so this cleanup is narrow and deterministic.
+        legacy_abstract_bootstrap = (
+            status == "ready"
+            and not existing["prompt_version"]
+            and bool((existing["summary"] or "").strip())
+        )
+        if legacy_abstract_bootstrap:
+            conn.execute(
+                """
+                UPDATE library_items
+                SET summary = '', language = '', category_id = NULL,
+                    enrichment_status = 'pending', enrichment_model = NULL,
+                    enrichment_error = NULL, enriched_at = NULL
+                WHERE id = ?
+                """,
+                (existing["id"],),
+            )
+            status = "pending"
+
+        if hash_changed and status in {"ready", "running", "failed"}:
             status = "stale"
             stale += 1
 
-        # Existing explicit enrichment wins over the older document abstract.
-        # The abstract is only used to bootstrap a new item.
         conn.execute(
             """
             UPDATE library_items
