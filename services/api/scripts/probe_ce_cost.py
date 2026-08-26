@@ -54,7 +54,6 @@ def real_documents(n: int) -> list[str]:
 def bench(label: str, docs: list[str], repeats: int = 5) -> float:
     from app.retrieval import cross_encoder as ce
 
-    ce.get_runtime.cache_clear() if hasattr(ce.get_runtime, "cache_clear") else None
     runtime = ce.get_runtime()
     runtime.score(QUERY, docs[:2])          # 预热，别把首次图优化算进去
     times = []
@@ -66,6 +65,21 @@ def bench(label: str, docs: list[str], repeats: int = 5) -> float:
     print("%-46s 中位 %7.1fms  最好 %7.1fms  → %5.1fms/对"
           % (label, med, best, med / max(1, len(docs))))
     return med
+
+
+def _fresh_runtime() -> None:
+    """丢掉上一轮的 ONNX 会话再建新的。
+
+    少了这一步，每换一组环境变量就多留一个活着的 session，每个都带
+    intra_op 条线程 —— 扫到网格后半段时线程数已经严重超订，测出来的会是
+    「越往后越慢」，而那是探针自己造成的，不是被测配置的性质。
+    """
+    import gc
+
+    from app.retrieval import cross_encoder as ce
+
+    ce._runtime = None
+    gc.collect()
 
 
 def main() -> int:
@@ -98,6 +112,7 @@ def main() -> int:
 
         from app.retrieval import cross_encoder as ce
         importlib.reload(ce)
+        _fresh_runtime()
         results[label] = bench(label, docs)
 
     base = results["默认（threads=14, batch=8, max_tokens=384）"]

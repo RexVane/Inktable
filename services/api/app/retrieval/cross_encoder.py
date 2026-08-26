@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import os
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -22,6 +23,103 @@ MODEL_SIZE = 279_252_659
 TOKENIZER_SIZE = 17_082_798
 
 
+@dataclass(frozen=True)
+class ModelSpec:
+    """一个可选的 CE 模型及其资产指纹。
+
+    做成注册表而不是硬编码一套常量，是因为「换更便宜的 CE」是已知的下一步
+    优化方向（见 docs/RETRIEVAL-PERF.md §5.8），而换模型必须能与旧模型同库
+    对照评测 —— 硬编码就只能改代码切换，没法并排跑。
+    """
+
+    key: str
+    model_id: str
+    repo: str
+    model_file: str
+    model_remote: str
+    model_sha256: str
+    model_size: int
+    tokenizer_sha256: str
+    tokenizer_size: int
+    tokenizer_file: str = "tokenizer.json"
+    tokenizer_remote: str = "tokenizer.json"
+    note: str = ""
+
+
+MODELS: dict[str, ModelSpec] = {
+    "bge-base": ModelSpec(
+        key="bge-base",
+        model_id=MODEL_ID,
+        repo=MODEL_REPO,
+        model_file=MODEL_FILE,
+        model_remote="onnx/model_int8.onnx",
+        model_sha256=MODEL_SHA256,
+        model_size=MODEL_SIZE,
+        tokenizer_sha256=TOKENIZER_SHA256,
+        tokenizer_size=TOKENIZER_SIZE,
+        note="12 层 / hidden 768，279MB",
+    ),
+    "mminilm-l12-h384": ModelSpec(
+        key="mminilm-l12-h384",
+        model_id="mmarco-mminilmv2-l12-h384-quint8",
+        repo="cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
+        model_file="model_quint8.onnx",
+        # avx2 版而不是 avx512_vnni：本机是 i7-14700HX，消费级 Raptor Lake
+        # 没有 AVX-512（Intel 从 12 代起在消费线禁用），选 avx512 变体会退化。
+        model_remote="onnx/model_quint8_avx2.onnx",
+        model_sha256=(
+            "6c2513767fb63d008a4377bef7a7a3555433d9436342bb53e35a3a72ffc52d4b"
+        ),
+        model_size=118_620_016,
+        tokenizer_sha256=(
+            "62c24cdc13d4c9952d63718d6c9fa4c287974249e16b7ade6d5a85e7bbb75626"
+        ),
+        tokenizer_size=17_082_660,
+        note="12 层 / hidden 384，119MB；mMARCO 多语言蒸馏",
+    ),
+}
+
+
+def active_spec() -> ModelSpec:
+    """当前生效的 CE 模型。
+
+    显式指定（`INKTABLE_RERANK_MODEL`）优先；否则**按偏好顺序挑已装上的那个**。
+
+    「挑已装上的」这条不能省：若默认写死成新模型，已经装了旧模型的用户会因为
+    新模型不存在而让 `is_available()` 返回 False，`auto` 静默退回一级本地打分器
+    —— 表现是「升级之后检索变差了」，而没有任何报错。
+    """
+    key = os.environ.get("INKTABLE_RERANK_MODEL", "").strip()
+    if key:
+        return MODELS.get(key, MODELS[_PREFERRED[0]])
+    for candidate in _PREFERRED:
+        if _spec_installed(MODELS[candidate]):
+            return MODELS[candidate]
+    return MODELS[_PREFERRED[0]]
+
+
+def _spec_installed(spec: ModelSpec) -> bool:
+    root = _spec_dir(spec)
+    return (root / spec.model_file).is_file() and (root / spec.tokenizer_file).is_file()
+
+
+def _spec_dir(spec: ModelSpec) -> Path:
+    override = os.environ.get("INKTABLE_RERANK_MODEL_DIR", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return APP_DIR / "models" / spec.model_id
+
+
+# 偏好顺序：小模型在前。实测（真实库 65 题，同一套门控配置）两者质量打平
+# （R@5 都是 96.2%、nDCG 90.2% / 90.3%），但 mMiniLM 每对约 17ms 对 69ms、
+# 磁盘 119MB 对 279MB —— 在弱 CPU 上这个差距决定 Rerank P95 过不过门槛。
+#
+# 但要记住 bge 更**稳**：把头部换成纯融合序 K=26 时 bge 仍是 96.2%，
+# mMiniLM 掉到 94.3%。也就是说 mMiniLM 依赖「向量配额把头部收窄」这个条件。
+# 评测集扩大后若 mMiniLM 退化，用 INKTABLE_RERANK_MODEL=bge-base 一个变量切回。
+_PREFERRED = ("mminilm-l12-h384", "bge-base")
+
+
 class CrossEncoderUnavailable(RuntimeError):
     pass
 
@@ -35,22 +133,29 @@ def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
 
 
 def model_dir() -> Path:
-    override = os.environ.get("INKTABLE_RERANK_MODEL_DIR", "").strip()
-    return Path(override).expanduser() if override else APP_DIR / "models" / MODEL_ID
+    return _spec_dir(active_spec())
 
 
 def is_available() -> bool:
-    root = model_dir()
-    return (root / MODEL_FILE).is_file() and (root / TOKENIZER_FILE).is_file()
+    """任意一个注册模型装上了就算可用。
+
+    不是「默认模型装上了」—— 那会让装了旧模型的用户在换默认之后静默降级。
+    """
+    if os.environ.get("INKTABLE_RERANK_MODEL", "").strip():
+        return _spec_installed(active_spec())
+    return any(_spec_installed(spec) for spec in MODELS.values())
 
 
 class OnnxCrossEncoder:
     model_id = MODEL_ID
 
     def __init__(self, root: Path | None = None):
+        spec = active_spec()
+        self.spec = spec
+        self.model_id = spec.model_id
         root = root or model_dir()
-        model_path = root / MODEL_FILE
-        tokenizer_path = root / TOKENIZER_FILE
+        model_path = root / spec.model_file
+        tokenizer_path = root / spec.tokenizer_file
         if not model_path.is_file() or not tokenizer_path.is_file():
             raise CrossEncoderUnavailable(
                 "Cross-Encoder model is not installed; run scripts/install_reranker.py"
