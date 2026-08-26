@@ -16,6 +16,8 @@ import sqlite3
 import time
 from collections.abc import Iterable, Sequence
 
+from app.db.visibility import visible_files_condition
+
 
 LIBRARY_SCHEMA = """
 CREATE TABLE IF NOT EXISTS library_items (
@@ -98,15 +100,21 @@ def _item_type(ext: str | None) -> str:
 
 
 def _candidate_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """Return one deterministic user-facing representation per content.
+    """Return one deterministic user-facing representation per visible content.
 
-    The title prefers the active document representation, then the newest live
-    file name.  We intentionally do not copy paths into ``library_items``:
-    paths are mutable physical metadata and are always resolved through
-    ``files`` when the UI needs them.
+    Visibility is exactly the same contract used by search/QA: disabled
+    sources and ignored files are hidden; missing files remain visible only
+    when a preservation copy exists.  The title prefers the active document
+    representation, then the newest visible file name.
+
+    Paths are intentionally not copied into ``library_items``.  They are
+    mutable physical metadata and are always resolved through ``files`` when
+    the UI needs them.
     """
+    preferred_cond = visible_files_condition("f2", "s2")
+    exists_cond = visible_files_condition("vf", "vs")
     return conn.execute(
-        """
+        f"""
         SELECT
             c.id AS content_id,
             c.sha256 AS input_hash,
@@ -122,8 +130,9 @@ def _candidate_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
           ON f.id = (
               SELECT f2.id
               FROM files f2
+              LEFT JOIN sources s2 ON s2.id = f2.source_id
               WHERE f2.content_id = c.id
-                AND f2.state NOT IN ('ignored', 'excluded')
+                AND {preferred_cond}
               ORDER BY
                   CASE WHEN f2.state = 'registered' THEN 0 ELSE 1 END,
                   COALESCE(f2.mtime, 0) DESC,
@@ -131,9 +140,11 @@ def _candidate_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
               LIMIT 1
           )
         WHERE EXISTS (
-            SELECT 1 FROM files visible
-            WHERE visible.content_id = c.id
-              AND visible.state NOT IN ('ignored', 'excluded')
+            SELECT 1
+            FROM files vf
+            LEFT JOIN sources vs ON vs.id = vf.source_id
+            WHERE vf.content_id = c.id
+              AND {exists_cond}
         )
         ORDER BY c.id
         """
@@ -141,7 +152,7 @@ def _candidate_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 
 def sync_library_items(conn: sqlite3.Connection, *, now: float | None = None) -> dict[str, int]:
-    """Synchronize one ``library_item`` for every currently represented content.
+    """Synchronize one ``library_item`` for every currently visible content.
 
     This operation is idempotent and deliberately cheap enough to run after a
     scan/index batch.  Content hash changes mark prior enrichment stale instead
