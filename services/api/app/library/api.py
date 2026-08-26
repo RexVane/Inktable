@@ -12,6 +12,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.library.core import sync_library_items
+from app.library.enrichment import run_enrichment_batch, status as enrichment_status
 from app.library.query import library_item_detail, library_page, library_stats
 
 
@@ -58,6 +59,11 @@ def create_library_router(
     def get_stats() -> dict:
         return library_stats(db_provider())
 
+    @router.get("/enrichment/status")
+    def get_enrichment_status() -> dict:
+        """Local-only model capability; no document content is sent here."""
+        return enrichment_status()
+
     @router.post("/sync")
     def post_sync() -> dict:
         # Sync is deterministic metadata maintenance. It never touches the
@@ -72,5 +78,19 @@ def create_library_router(
                 conn.rollback()
                 raise
         return result
+
+    @router.post("/enrich")
+    def post_enrich(limit: int = Query(3, ge=1, le=10)) -> dict:
+        """Explicitly run a bounded local-Ollama enrichment batch.
+
+        This route never falls through to the cloud QA provider. The request is
+        the user's explicit action authorizing local model processing; indexing
+        by itself does not send document excerpts anywhere.
+        """
+        return run_enrichment_batch(
+            db_provider,
+            write_lock,
+            limit=limit,
+        )
 
     return router
