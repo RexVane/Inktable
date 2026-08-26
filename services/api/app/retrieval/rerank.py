@@ -31,7 +31,11 @@ SOFT_PER_CONTENT = 12
 # 融合顺序里最深的 gold 落在第 25 位（P19/P20 两道改写类问题），K 小于 25
 # 就有题永远进不了二级重排。53 题里 49 题的 gold 在前 4 位，只有 4 题需要
 # 这个深度 —— 但正是那 4 题在拉低 MRR/nDCG。
-CASCADE_PAIRS = _env_int("INKTABLE_CASCADE_PAIRS", 26, 4, 80)
+CASCADE_PAIRS = _env_int("INKTABLE_CASCADE_PAIRS", 20, 4, 80)
+# 上面那段「K 小于 25 就有题进不了二级重排」只在**纯融合序**截头部时成立。
+# 头部按向量路分配一部分名额后（CASCADE_VEC_SHARE），同一批 gold 浅得多：
+# A09 向量第 1 位、P19 向量第 3 位。所以默认从 26 降到 20 —— 这是 Rerank P95
+# 进 1,500ms 门槛的必要条件，且实测不牺牲 Recall@5。
 # 变体多到把 per-variant 预算压得过浅时的下限：低于这个深度，CE 连
 # 融合顺序的头部都盖不住，级联就没有意义了，宁可超一点延迟。
 CASCADE_MIN_HEAD = _env_int("INKTABLE_CASCADE_MIN_HEAD", 8, 4, 40)
@@ -75,10 +79,11 @@ CASCADE_LEX_FULL = _env_int("INKTABLE_CASCADE_LEX_FULL", 45, 5, 100) / 100.0
 # 高于修好组最高 0.874 并不成立），所以这不是一条干净的分界线 —— 取 0.45 是因为
 # 它本来就是 `CASCADE_LEX_FULL`「本地完全可信」的那个点，不是为了刷指标挑的。
 # n=13，扩大评测集后必须重验。
-CASCADE_LEX_GATE = _env_int("INKTABLE_CASCADE_LEX_GATE", 0, 0, 100) / 100.0
-# CE 头部名额里分给「向量路名次」的比例。0 = 关闭（默认，纯融合序，行为逐字
-# 不变）。50 = 对半分。见 CascadeReranker._split_head 的实测依据。
-CASCADE_VEC_SHARE = _env_int("INKTABLE_CASCADE_VEC_SHARE", 0, 0, 90) / 100.0
+CASCADE_LEX_GATE = _env_int("INKTABLE_CASCADE_LEX_GATE", 45, 0, 100) / 100.0
+# CE 头部名额里分给「向量路名次」的比例。0 = 关闭（纯融合序）。
+# 默认 25：实测下界 —— 要同时装下 U02（融合第 12 位）与 P19（向量第 3 位），
+# K=20 时需要 15 个融合名额 + 5 个向量名额。见 _split_head 的实测依据。
+CASCADE_VEC_SHARE = _env_int("INKTABLE_CASCADE_VEC_SHARE", 25, 0, 90) / 100.0
 
 # 送进 CE 的单个候选文本上限（字符）。分片正文实测 p50 383 字、p90 956 字，
 # 而 CE 截断在 384 token —— 长分片是从**开头**截的，答案落在后半段就直接
@@ -719,6 +724,22 @@ def run_rerank(conn, query: str, candidates, *,
         or "auto"
     )
     fallback = RrfOnlyReranker()
+    if mode == "auto":
+        # `auto` = 装了 CE 资产就走门控级联，没装就走一级本地打分器。
+        #
+        # 门控级联在真实库 65 题上四条发布门槛全过（Recall@5 96.2%、
+        # nDCG 90.3%、搜索 P95 1,529/1,651ms、Rerank P95 891/900ms），而纯本地
+        # 是 92.5% / 87.6%。代价只有中位数约 100ms（搜索 P50 532→631ms），
+        # P95 几乎不动 —— 因为 53 题里只有 4 题的词法证据弱到需要 CE。
+        #
+        # 没装资产时行为与改动前逐字一致，用户不会因为缺一个 279MB 模型而
+        # 拿到降级的检索；要退回旧行为用 `INKTABLE_RERANKER=local`。
+        try:
+            from app.retrieval import cross_encoder as _ce
+
+            mode = "cascade" if _ce.is_available() else "local"
+        except Exception:  # noqa: BLE001 - 探测失败就按没装处理
+            mode = "local"
     if mode in {"off", "rrf", "disabled"}:
         selected = [
             RerankInput(

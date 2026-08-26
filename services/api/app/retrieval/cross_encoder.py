@@ -78,10 +78,18 @@ class OnnxCrossEncoder:
             providers=["CPUExecutionProvider"],
         )
         self.tokenizer = Tokenizer.from_file(str(tokenizer_path))
+        # 192 而不是 384：实测（scripts/probe_ce_cost.py，真实分片正文，26 对）
+        # 纯打分从 1,798ms 降到 1,434ms，**而质量还升了** —— 65 题上
+        # nDCG 89.5% → 90.3%、MRR 86.9% → 88.1%，Recall@5 保持 96.2%。
+        #
+        # 这与 RETRIEVAL-PERF §5.1「截短正文会掉质量」不矛盾：那次动的是
+        # `_focus_window` 的窗口宽度（420→300 字，换了一个居中位置不同的窗口），
+        # 这里保持 420 字窗口不变，只截 tokenizer。窗口本就以查询词为中心，
+        # 前半段已含最密集的证据；再往后是稀释信号的长尾。
         try:
-            max_length = int(os.environ.get("INKTABLE_RERANK_MAX_TOKENS", "384"))
+            max_length = int(os.environ.get("INKTABLE_RERANK_MAX_TOKENS", "192"))
         except ValueError:
-            max_length = 384
+            max_length = 192
         self.tokenizer.enable_truncation(max_length=max(64, min(max_length, 512)))
         self.tokenizer.enable_padding(pad_id=1, pad_token="<pad>")
         self.input_names = {item.name for item in self.session.get_inputs()}

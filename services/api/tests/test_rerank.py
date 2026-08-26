@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -511,7 +512,13 @@ def test_focus_window_prefers_query_dense_region():
     assert rerank._focus_window("短文本", ["短"], 100) == "短文本"
 
 
-def test_auto_uses_selected_local_reranker_without_cross_encoder(monkeypatch):
+def test_auto_falls_back_to_local_when_cross_encoder_is_not_installed(monkeypatch):
+    """没装 CE 资产时 `auto` 必须是纯本地，且不算降级。
+
+    用户不该因为缺一个 279MB 的模型就拿到打了 `degraded` 标记的检索 ——
+    那个标记是给「本该可用却失败了」用的。这里显式钉死 `is_available`，
+    否则测试结果会取决于跑测试的机器上恰好有没有那个文件。
+    """
     conn = _db()
 
     def reject_cross(*_args, **_kwargs):
@@ -520,12 +527,66 @@ def test_auto_uses_selected_local_reranker_without_cross_encoder(monkeypatch):
     try:
         monkeypatch.setenv("INKTABLE_RERANKER", "auto")
         monkeypatch.setattr(rerank, "CrossEncoderReranker", reject_cross)
+        monkeypatch.setattr(
+            "app.retrieval.cross_encoder.is_available", lambda: False,
+        )
         result = rerank.run_rerank(conn, "问题", _candidates())
     finally:
         conn.close()
 
     assert result.model_id == "local-static-v3"
     assert result.degraded is False
+
+
+def test_auto_uses_gated_cascade_when_cross_encoder_is_installed(monkeypatch):
+    """装了 CE 资产时 `auto` 走门控级联 —— 但仍然不能走被否掉的纯 cross。
+
+    门控级联在真实库 65 题上四条门槛全过（R@5 96.2% / nDCG 90.3% /
+    搜索 P95 1.5-1.7s / Rerank P95 0.9s），纯 cross 与裸 cascade 都不过。
+    """
+    conn = _db()
+
+    def reject_cross(*_args, **_kwargs):
+        raise AssertionError("auto must not instantiate a rejected Cross-Encoder candidate")
+
+    class FakeRuntime:
+        model_id = "fake-cross"
+
+        def score(self, _query, documents):
+            return np.zeros(len(documents), dtype=np.float32)
+
+    try:
+        monkeypatch.setenv("INKTABLE_RERANKER", "auto")
+        monkeypatch.setattr(rerank, "CrossEncoderReranker", reject_cross)
+        monkeypatch.setattr(
+            "app.retrieval.cross_encoder.is_available", lambda: True,
+        )
+        monkeypatch.setattr(
+            "app.retrieval.cross_encoder.get_runtime", lambda: FakeRuntime(),
+        )
+        result = rerank.run_rerank(conn, "问题", _candidates())
+    finally:
+        conn.close()
+
+    assert result.model_id.startswith(("cascade:", "cascade-lex-skip:"))
+    assert result.degraded is False
+
+
+def test_shipped_cascade_defaults_match_the_measured_configuration():
+    """默认值就是过门槛的那套实测配置 —— 改动其一必须重跑 65 题。
+
+    这四个数字是一起测出来的：门控 0.45 决定哪些查询进 CE，向量配额 25% 与
+    K=20 决定头部够不够深（U02 融合第 12 位、P19 向量第 3 位），
+    max_tokens=192 决定单对成本。任何一个被顺手改掉，门槛结论就不再成立。
+    """
+    from app.retrieval import cross_encoder as ce
+
+    assert rerank.CASCADE_LEX_GATE == 0.45
+    assert rerank.CASCADE_VEC_SHARE == 0.25
+    assert rerank.CASCADE_PAIRS == 20
+    assert ce.__file__  # 默认 max_tokens 写在运行时构造里，见下
+    src = Path(ce.__file__).read_text(encoding="utf-8")
+    assert '"INKTABLE_RERANK_MAX_TOKENS", "192"' in src
 
 
 def test_local_reranker_lexical_only_without_embedding_model(monkeypatch):
