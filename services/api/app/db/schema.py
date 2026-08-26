@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 PRAGMA journal_mode = WAL;
@@ -281,7 +281,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS journal_fts USING fts5(
 );
 """
 
-# Keep the AI Library SQL in the domain package. CREATE statements and the v3
+# Keep the AI Library SQL in the domain package. CREATE statements and the v4
 # backfill are deliberately separate so ordinary read helpers never mutate the
 # database just because an item was viewed.
 from app.library.core import LIBRARY_BOOTSTRAP_SQL, LIBRARY_SCHEMA
