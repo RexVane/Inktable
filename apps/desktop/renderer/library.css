@@ -27,6 +27,22 @@
   box-shadow: var(--shadow-sm);
 }
 
+/* Knowledge mode and physical-tree mode are mutually exclusive. The selector
+   follows the mode button itself, so there is no second JS state to drift. */
+#navPanel:has(#libraryModeLibrary.on) #nav { display: none; }
+#navPanel:has(#libraryModeLibrary.on)::after {
+  content: "AI 知识馆是文件系统之上的派生知识层。原始文件不会被移动、复制或改名。";
+  display: block;
+  margin: 12px;
+  padding: 12px;
+  border-radius: var(--radius-pop);
+  background: var(--wash-surface);
+  color: var(--text-3);
+  font-size: 10px;
+  line-height: 1.6;
+  user-select: text;
+}
+
 .library-surface {
   min-height: 0;
   flex: 1;
