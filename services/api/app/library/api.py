@@ -14,6 +14,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.library.core import sync_library_items
 from app.library.enrichment import run_enrichment_batch, status as enrichment_status
 from app.library.query import library_item_detail, library_page, library_stats
+from app.library.relations import (
+    DEFAULT_CHUNKS_PER_ITEM,
+    DEFAULT_LIMIT as DEFAULT_RELATION_LIMIT,
+    DEFAULT_MIN_SCORE,
+    DEFAULT_TOP_K,
+    MAX_CHUNKS_PER_ITEM,
+    MAX_LIMIT as MAX_RELATION_LIMIT,
+    MAX_TOP_K,
+    apply_relation_plan,
+    build_relation_plan,
+)
 
 
 LibraryStatus = Literal["pending", "running", "ready", "failed", "stale"]
@@ -92,5 +103,51 @@ def create_library_router(
             write_lock,
             limit=limit,
         )
+
+    @router.post("/relations/rebuild")
+    def rebuild_relations(
+        limit: int = Query(DEFAULT_RELATION_LIMIT, ge=2, le=MAX_RELATION_LIMIT),
+        top_k: int = Query(DEFAULT_TOP_K, ge=1, le=MAX_TOP_K),
+        min_score: float = Query(DEFAULT_MIN_SCORE, ge=-1.0, le=1.0),
+        chunks_per_item: int = Query(
+            DEFAULT_CHUNKS_PER_ITEM, ge=1, le=MAX_CHUNKS_PER_ITEM,
+        ),
+    ) -> dict:
+        """Rebuild conservative related-document edges from existing vectors.
+
+        Only the short Library sync and final edge apply hold the global write
+        lock. Sampling vectors and computing document-centroid similarities run
+        outside it, so relation rebuilding cannot freeze watcher/index writes.
+        """
+        with write_lock:
+            conn = db_provider()
+            try:
+                sync_result = sync_library_items(conn)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        plan = build_relation_plan(
+            db_provider(),
+            limit=limit,
+            top_k=top_k,
+            min_score=min_score,
+            chunks_per_item=chunks_per_item,
+        )
+
+        with write_lock:
+            conn = db_provider()
+            try:
+                result = apply_relation_plan(conn, plan)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return {
+            **result,
+            "planned_relations": len(plan.edges),
+            "library_sync": sync_result,
+        }
 
     return router
