@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -11,7 +12,7 @@ from app.library.api import create_library_router
 from app.library.core import sync_library_items
 
 
-def _app():
+def _app(*, with_lock: bool = False):
     conn = database.connect(":memory:")
     database.init_db(conn)
     conn.execute(
@@ -39,6 +40,8 @@ def _app():
 
     lock = threading.Lock()
     app.include_router(create_library_router(lambda: conn, lock, auth))
+    if with_lock:
+        return app, conn, lock
     return app, conn
 
 
@@ -126,5 +129,63 @@ def test_library_enrich_route_delegates_bounded_batch(monkeypatch) -> None:
 
         too_large = client.post('/library/enrich?limit=11')
         assert too_large.status_code == 422
+    finally:
+        conn.close()
+
+
+def test_relation_rebuild_computes_outside_write_lock(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+    app, conn, lock = _app(with_lock=True)
+
+    def fake_build(_conn, *, limit, top_k, min_score, chunks_per_item):
+        # The expensive vector/CPU phase must not hold the global writer lock.
+        acquired = lock.acquire(blocking=False)
+        assert acquired, 'relation planning unexpectedly holds the write lock'
+        lock.release()
+        seen.update({
+            'limit': limit,
+            'top_k': top_k,
+            'min_score': min_score,
+            'chunks_per_item': chunks_per_item,
+        })
+        return SimpleNamespace(edges=((1, 2, 0.9),))
+
+    def fake_apply(_conn, plan):
+        # The short database apply phase must be serialized.
+        assert lock.acquire(blocking=False) is False
+        assert len(plan.edges) == 1
+        return {
+            'processed': 2,
+            'vectorized': 2,
+            'relations': 1,
+            'stale_skipped': 0,
+            'total_visible': 2,
+            'truncated': False,
+            'top_k': 2,
+            'min_score': 0.7,
+            'chunks_per_item': 4,
+            'source': 'embedding-centroid-v1',
+        }
+
+    monkeypatch.setattr(library_api, 'build_relation_plan', fake_build)
+    monkeypatch.setattr(library_api, 'apply_relation_plan', fake_apply)
+    try:
+        client = TestClient(app)
+        response = client.post(
+            '/library/relations/rebuild?limit=10&top_k=2&min_score=0.7&chunks_per_item=4'
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body['relations'] == 1
+        assert body['planned_relations'] == 1
+        assert seen == {
+            'limit': 10,
+            'top_k': 2,
+            'min_score': 0.7,
+            'chunks_per_item': 4,
+        }
+
+        invalid = client.post('/library/relations/rebuild?top_k=25')
+        assert invalid.status_code == 422
     finally:
         conn.close()
