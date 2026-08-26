@@ -354,3 +354,115 @@ sidecar 才会包含这些改动。
 
 新增测试 10 条（影子表重建与删除、矩阵/KNN 退化、级联截断与融合、
 焦点窗口、空查询守卫），后端 266 → 276 passed。
+
+
+十二、2026-08-19 至 08-26 的变化（前面第四/六/七/八节已被本节取代）
+
+本节之前的内容停在 2026-08-18。下面这些数字与结论覆盖它。
+
+1. 发布门槛口径已改（2026-08-19）
+
+第八节说「唯一未通过项是 Rerank 相对 RRF +15%」——该门槛已废止。高基线下
++15% 等价于要求 nDCG 绝对值 97%，数学上失真。docs/PLAN.md §10.3 现行门槛是
+绝对多目标：
+
+  nDCG@10 ≥ 90%   Recall@5 ≥ 95%   Recall@20 回退 ≤ 2pp   Rerank P95 ≤ 1.5s
+
+2. 桌面界面整体改为 nebula 风格
+
+统一外壳 + 单张悬浮圆角卡；层级靠明度而非描边；七套主题（nebula / steel /
+coal / moss / silver / limestone / linen）带选择器，标题栏 overlay 颜色随主题；
+文件库与知识问答两侧加抽屉开关；圆角收敛为卡 14 / 浮层 12 / 控件 8 三档。
+桌面测试 15 → 25 条。
+
+3. 借鉴 marginalia 三项（用户点选 A / B / D）
+
+  A 文档主题摘要   app/index/abstract.py + scripts/backfill_abstracts.py
+                   已就绪但**未对真实库 20,882 篇跑全量回填**（串行 8.7-23h），
+                   400 篇探针上文档路 MRR 0.5761→0.5931，证据不足
+  B 调查日志       app/qa/journal.py，右栏「历史」；有测试禁止 retrieval/* 与
+                   qa/answer.py import 它（journal 存模型输出，当证据会断 H8）
+  D 逐字引文核验   app/qa/quotes.py，默认只诊断。INKTABLE_QUOTE_ENFORCE 仍关：
+                   本地 qwen3:8b 对 10 道 gold 可答题拒答 8-9 道，基线 1/10
+                   没有统计功效，等一个能跟住引用协议的 provider 复验 65 题
+
+4. 语料噪声真因：B:\devcache 占已登记文件 97.1%（107,026 / 110,211）
+
+rustup 的 stable+nightly 两套 share/doc/rust/html（92,090，内容相同）、
+gradle caches、gomodcache、cargo、uv-cache。BM25 分母里 97% 是工具链产物。
+用 scripts/exclude_dirs.py 排除（只改索引层 state='ignored'，磁盘不动，可逆）。
+可见文件 110,211 → 3,185。gold 证据 29/29 仍可见（这条每次排除后必查）。
+
+附带修掉：is_dataless 只看 macOS 的 st_flags，Windows 上恒为 False，
+云占位检测从未生效 —— 624 个 WPS 云盘文件（326 PDF + 257 DOCX）被记成
+hash_failed 静默丢掉。已改为 is_cloud_placeholder(st) 查 Windows 三个位。
+那 624 个要在 WPS 里下载到本地才能入库。
+
+5. 剪掉已排除内容的索引行（scripts/prune_excluded_index.py）
+
+排除只改 files.state，索引行仍在：81.2% 的 chunks/FTS 行属于已排除内容。
+剪掉 141,878 个分片，库 1,805MB → 941MB。判据是「该 content 每一份副本都是
+ignored」，不是「没有可见副本」——后者会连带剪掉 3,246 篇 state='missing'
+（外置盘拔了/云盘没下载）的真文档，而剪索引没有唤醒路径。
+备份 backups/library-pre-prune-20260826.db。
+
+质量上是中性的：65 题里只 3 题动名次。真正收益是延迟与体积。
+
+6. 当前真实库与评测（取代第四、六、七节）
+
+  files      registered 3,185 / ignored 107,026 / missing 3,351 /
+             cloud_placeholder 624
+  chunks     116,795（其中 56,735 属 missing 内容，刻意保留等文件回来）
+  库体积     1,053MB
+
+  53 道可评估题，route_limit=120，degraded=0：
+
+                        local-static-v3（生产默认）   cascade K=26
+  Recall@5                    92.5%                      94.3%     门槛 95%
+  Recall@20                   98.1%                     100.0%     回退 ≤2pp
+  Gold Ev@50                  94.8%                      94.8%     门槛 90%
+  nDCG@10                     87.6%                      88.7%     门槛 90%
+  搜索 P95                   1,372ms                   3,537ms     ≤2,500ms
+  Rerank P95                   103ms                   2,728ms     ≤1,500ms
+
+7. 门槛现状：两种 reranker 都不过，且差的门槛不同
+
+  local-static-v3   差两条质量门槛（nDCG 1.7pp、R@5 2.5pp），延迟宽裕 14 倍
+  cascade           把 R@20 补回 100%、改写类 8/11→10/11，但质量仍不过，
+                    且两条延迟门槛也不过
+
+docs/RETRIEVAL-PERF.md §5 那张表（cascade R@5 96.2% / nDCG 92.2%）是**冻结
+快照**口径，不是生产可达值，见 §5.5 的真实库复测。深度墙复测：最深 gold 仍在
+第 25 位，K=26 不能降；真实库每对约 105ms，压到 1,500ms 需 K≈14（丢 3 道 gold）。
+CE 运行时已排除为瓶颈（14 线程是 28 核实测最优、批 8 分桶）。
+
+继续推进需要更便宜的强重排（更小/蒸馏 CE）或扩大评测集——53 题里受影响只有
+6 题，权重调优在这个样本量上与噪声不可区分。都是新的取模型/标注决策。
+
+8. 已证伪的捷径（不要重试）
+
+  document-first 取文档头部重排      nDCG 到 90.1% 但 Gold Ev@50 崩到 51%
+  LLM 文档摘要提升端到端             文档路权重仅 0.25，摊薄到零点几个百分点
+  剪索引以求质量                     只有 3/65 题动名次
+  cascade 切生产默认                 四条门槛过一条都不算
+  CE 候选正文 420→300 字省延迟       nDCG 92.2%→88.5%，比 local-static 还低
+
+9. 打包（2026-08-26 重出）
+
+  Inktable-0.3.0-Setup-x64.exe   194,854,395 bytes
+    SHA-256 FE7D4F32221B110C528053F1D969683D641B52CDC3BEC1128D7983779238D66E
+  inktable-sidecar.exe            95,711,954 bytes
+    SHA-256 4C9CD9FB1C464201900E78A5C0F1CBC56DAE21A51695843E4B25A577F7BCF1A9
+
+构建产物与包内副本逐字节一致；app.asar 内确认为 nebula 新界面。
+冻结 sidecar headless 冒烟（scripts/smoke_packaged_sidecar.py）全绿：
+sqlite-vec v0.1.9、FTS5、中文检索探针 7/7、嵌入 bge-m3 dim=1024、
+OCR windows-media-ocr。
+
+**仍无代码签名**：Get-AuthenticodeSignature 对安装包与 Inktable.exe 均返回
+NotSigned，首次运行会有 SmartScreen 警告。这一项要付费代码签名证书。
+
+10. 回归
+
+  后端 336 passed（8/18 时 276）
+  桌面 25 passed（8/18 时 15）
