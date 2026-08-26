@@ -4,7 +4,7 @@ import sqlite3
 
 from app.db import database
 from app.db.schema import SCHEMA_VERSION
-from app.library.core import sync_library_items
+from app.library.core import compute_input_hash, sync_library_items
 
 
 def test_schema_v3_creates_ai_library_tables() -> None:
@@ -54,7 +54,8 @@ def test_v2_database_upgrades_to_v3_without_touching_physical_files() -> None:
         database.init_db(conn)
 
         # v3 bootstrap happens during normal init_db(), before any explicit
-        # Library sync or LLM work.
+        # Library sync or LLM work. Its input_hash is only an identity seed;
+        # the first sync upgrades it to the active-document-aware hash.
         bootstrapped = conn.execute(
             "SELECT content_id, title, item_type, input_hash FROM library_items"
         ).fetchone()
@@ -65,8 +66,6 @@ def test_v2_database_upgrades_to_v3_without_touching_physical_files() -> None:
             "input_hash": "sha-v2-upgrade",
         }
 
-        # Rich deterministic metadata is then an idempotent refresh, not a
-        # second identity creation.
         result = sync_library_items(conn, now=10)
         conn.commit()
         assert database.get_setting(conn, "db_schema_version") == "3"
@@ -79,7 +78,7 @@ def test_v2_database_upgrades_to_v3_without_touching_physical_files() -> None:
             "content_id": 1,
             "title": "os.pdf",
             "item_type": "pdf",
-            "input_hash": "sha-v2-upgrade",
+            "input_hash": compute_input_hash("sha-v2-upgrade", 1, None),
         }
         physical = conn.execute(
             "SELECT path, name, content_id FROM files WHERE id=1"
