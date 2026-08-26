@@ -198,10 +198,43 @@
   与两套 chunk FTS、29,434 个 sqlite-vec rowid 双向一致；2,510 个
   Document 和 15,071 个 Section 的 FTS rowid 双向一致，关系孤儿为 0。
 
+## 重新打包验收（2026-08-26）
+
+8/16 那份安装包早于 nebula 界面、marginalia 三项借鉴与语料/索引治理，已过时。
+本次按同一条 `npm run dist` 路径重出，产物与实测：
+
+- Windows NSIS：`dist/Inktable-0.3.0-Setup-x64.exe`，194,854,395 bytes，
+  SHA-256 `FE7D4F32221B110C528053F1D969683D641B52CDC3BEC1128D7983779238D66E`。
+- Windows sidecar：95,711,954 bytes，SHA-256
+  `4C9CD9FB1C464201900E78A5C0F1CBC56DAE21A51695843E4B25A577F7BCF1A9`；
+  `services/api/dist` 的构建产物与 `win-unpacked/resources/sidecar/` 内副本
+  **逐字节一致**（两边 SHA-256 相同）。
+- 冻结 sidecar headless 冒烟（`scripts/smoke_packaged_sidecar.py`，隔离数据
+  目录起进程、读它自报的端口与令牌、打 `/health`）：`frozen=true`、
+  `status=ok`，sqlite-vec v0.1.9、FTS5、中文检索探针 **7/7（missed=[]）**、
+  嵌入 `ollama-bge-m3` dim=1024 已加载、OCR `windows-media-ocr` 可用。
+  必须用隔离数据目录：sidecar 启动即 `acquire_single_instance_lock()`，
+  不隔离会与正在运行的应用抢锁而失败，看起来像「打包坏了」。
+  该冒烟里 `reranker.available=false` 是**正确行为**而非缺陷 —— CE 资产装在
+  用户数据目录的 `models/` 下，临时数据目录里当然没有。
+- 包内界面已确认是新版：`app.asar` 里 `nebula` 24 处、`limestone` 8 处、
+  `--radius-card` 7 处、`toggleDrawer` 5 处、`renderJournal` 4 处。
+- 回归：后端 336 项、桌面 25 项全绿。
+
+**签名仍然没有**：`electron-builder` 日志里那几行 `signing with signtool.exe`
+是尝试，没有证书就什么也没签。实测
+`Get-AuthenticodeSignature` 对安装包与 `Inktable.exe` 均返回 **NotSigned**，
+用户首次运行会看到 SmartScreen 警告。这一项要一张付费代码签名证书，
+不是构建配置能解决的。
+
 ## 已知限制
 
-- ONNX Cross-Encoder 已实装并冻结评测，但相对 RRF 的 MRR/nDCG 提升仅
-  约 7.95%/7.85%，未达到 +15% 选型门槛，因此不切换生产默认。
+- ONNX Cross-Encoder 已实装并冻结评测。**+15% 相对门槛已于 2026-08-19 废止**
+  （高基线下等价于要求 nDCG 绝对值 97%，数学上失真），改为绝对多目标口径。
+  按新口径在**真实库**复测 `cascade`：R@5 94.3%（门槛 95%）、
+  nDCG 88.7%（门槛 90%）、Rerank P95 2728ms（门槛 1500ms）、
+  搜索 P95 3537ms（门槛 2500ms）—— 四条门槛过一条都不算，因此仍不切生产默认。
+  详见 `docs/RETRIEVAL-PERF.md` §5.5，注意 §5 那张表是冻结快照口径。
 - Anthropic 中转是否兼容 OpenAI 协议因站而异，以「检测连接」实测为准。
 - 飞书/钉钉/企业微信路径规则未在真机验证（本机未安装），
   探测失败会静默跳过，不影响其余来源。
