@@ -110,7 +110,8 @@ function rendererRequests() {
   }
   for (const m of renderer.matchAll(/apiStream\('([^']+)'/g)) found.set(m[1], 'POST');
   const literal = [...found].filter(([p]) => !p.includes('+') && !p.endsWith('/'));
-  // 运行期拼接出来的路径用代表性实例覆盖
+  // 运行期拼接出来的路径用代表性实例覆盖；Library 路由在 UI 完成前也先
+  // 锁进安全契约，防止后端接通但主进程代理误拦。
   return [
     ...literal,
     ['/files/123/detail', 'GET'],
@@ -119,6 +120,14 @@ function rendererRequests() {
     ['/files/tree', 'GET'],
     ['/files/tree?dir=%2Ftmp', 'GET'],
     ['/reports/weekly?force=true', 'GET'],
+    ['/library/items?limit=100&offset=0', 'GET'],
+    ['/library/items/123', 'GET'],
+    ['/library/stats', 'GET'],
+    ['/library/enrichment/status', 'GET'],
+    ['/library/relations/status', 'GET'],
+    ['/library/sync', 'POST'],
+    ['/library/enrich?limit=3', 'POST'],
+    ['/library/relations/rebuild?limit=1000&top_k=8&min_score=0.6&chunks_per_item=16', 'POST'],
   ];
 }
 
@@ -142,6 +151,11 @@ test('proxy allowlist rejects traversal, absolute, and unlisted routes', () => {
     ['GET', '/admin'],
     ['PUT', '/stats'],
     ['DELETE', '/files'],
+    ['GET', '/library/items/abc'],
+    ['GET', '/library/admin'],
+    ['POST', '/library/items'],
+    ['DELETE', '/library/sync'],
+    ['GET', '/library/relations/rebuild'],
     // 密钥必须走主进程 safeStorage，渲染层不得直接投递明文密钥
     ['POST', '/settings/llm'],
     // 仅主进程在数据迁移时自行调用
@@ -218,7 +232,7 @@ test('development and packaged sidecar launch modes stay separated', () => {
   assert.match(main, /app\.isPackaged/);
   assert.match(main, /path\.join\(process\.resourcesPath, 'sidecar', exeName\)/);
   assert.match(main, /\.venv/);
-  assert.match(main, /args: \['-u', '-m', 'app\.main'\]/);
+  assert.match(main, /args: \['-u', '-m', 'app\.entrypoint'\]/);
   assert.match(main, /cwd: apiRoot/);
   assert.match(main, /spawn\(launch\.command, launch\.args, \{/);
   assert.match(main, /windowsHide: process\.platform === 'win32'/);
