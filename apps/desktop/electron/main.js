@@ -120,7 +120,7 @@ function resolveSidecarPath() {
     ? path.resolve(process.env.INKTABLE_PYTHON)
     : path.join(apiRoot, '.venv', process.platform === 'win32' ? 'Scripts' : 'bin', pythonName);
   if (!fs.existsSync(command)) return null;
-  return { command, args: ['-u', '-m', 'app.main'], cwd: apiRoot };
+  return { command, args: ['-u', '-m', 'app.entrypoint'], cwd: apiRoot };
 }
 
 function startSidecar() {
@@ -434,6 +434,11 @@ const API_ROUTE_RULES = [
   // file_id 是整数主键，收窄成 [0-9]+ 而非宽松的 [^/]+。
   ['GET', /^\/files\/tree(?:\?[^#]*)?$/],
   ['GET', /^\/files\/[0-9]+\/(?:detail|content)(?:\?[^#]*)?$/],
+  // AI Library 只放行当前 UI 需要的精确路由；不要用 /library/.* 这种宽白名单。
+  ['GET', /^\/library\/items(?:\?[^#]*)?$/],
+  ['GET', /^\/library\/items\/[0-9]+$/],
+  ['GET', /^\/library\/(?:stats|enrichment\/status|relations\/status)$/],
+  ['POST', /^\/library\/(?:sync|enrich|relations\/rebuild)(?:\?[^#]*)?$/],
   ['POST', /^\/(?:settings\/llm\/test|ask(?:\/stream)?|files\/(?:remove|classify)|books\/add|classify\/auto_ext|search|sources\/(?:discover|discover_deep|preview|enable|disable|remove|add|auto_preserve|preserve_all)|watch\/start|index\/(?:run|embed_backfill|retry_scanned)|settings\/(?:ocr|qa)|journal\/remove)$/],
 ];
 const MAX_API_BODY_BYTES = 1024 * 1024;
