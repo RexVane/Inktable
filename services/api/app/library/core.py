@@ -12,6 +12,7 @@ mutating user files.
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 import time
 from collections.abc import Iterable, Sequence
@@ -83,8 +84,9 @@ CREATE INDEX IF NOT EXISTS idx_library_relations_target
 
 
 # Executed only by the normal database initialization path. It gives existing
-# v2 libraries stable AI-Library identities immediately after upgrading to v3,
-# while richer deterministic metadata is refreshed by ``sync_library_items``.
+# v2 libraries stable AI-Library identities immediately after upgrading to v3.
+# ``input_hash`` is temporarily seeded from the content sha; the first normal
+# sync upgrades it to the active-document-aware hash below.
 LIBRARY_BOOTSTRAP_SQL = """
 INSERT OR IGNORE INTO library_items
     (content_id, title, input_hash, created_at, updated_at)
@@ -123,6 +125,25 @@ def ensure_library_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(LIBRARY_SCHEMA)
 
 
+def compute_input_hash(
+    content_sha: str,
+    active_index_version: int | None,
+    document_text_hash: str | None,
+) -> str:
+    """Version enrichment against what the model actually reads.
+
+    File bytes alone are insufficient: OCR/parser upgrades can rebuild the
+    active document representation without changing the source file SHA.  The
+    active index generation and its document text hash therefore participate in
+    the identity of model input.
+    """
+    payload = (
+        f"{content_sha}\0{int(active_index_version or 0)}\0"
+        f"{document_text_hash or ''}"
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _item_type(ext: str | None) -> str:
     ext = (ext or "").lower().lstrip(".")
     return {
@@ -154,11 +175,13 @@ def _candidate_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         f"""
         SELECT
             c.id AS content_id,
-            c.sha256 AS input_hash,
+            c.sha256 AS content_sha,
+            c.active_index_version,
             COALESCE(NULLIF(dr.title, ''), f.name, '') AS title,
             COALESCE(f.ext, '') AS ext,
             dr.abstract AS abstract,
-            dr.abstract_model AS abstract_model
+            dr.abstract_model AS abstract_model,
+            dr.text_hash AS document_text_hash
         FROM contents c
         LEFT JOIN document_representations dr
           ON dr.content_id = c.id
@@ -192,8 +215,8 @@ def sync_library_items(conn: sqlite3.Connection, *, now: float | None = None) ->
     """Synchronize one ``library_item`` for every currently visible content.
 
     This operation is idempotent and deliberately cheap enough to run after a
-    scan/index batch. Content hash changes mark prior enrichment stale instead
-    of silently treating model output as current. Invisible items are kept in
+    scan/index batch. Active document changes mark prior enrichment stale even
+    when the original file bytes did not change. Invisible items are kept in
     storage but hidden by all read APIs, so disabling/re-enabling a source does
     not destroy AI metadata.
     """
@@ -204,6 +227,11 @@ def sync_library_items(conn: sqlite3.Connection, *, now: float | None = None) ->
     stale = 0
 
     for row in _candidate_rows(conn):
+        current_hash = compute_input_hash(
+            row["content_sha"],
+            row["active_index_version"],
+            row["document_text_hash"],
+        )
         existing = conn.execute(
             "SELECT * FROM library_items WHERE content_id = ?",
             (row["content_id"],),
@@ -228,7 +256,7 @@ def sync_library_items(conn: sqlite3.Connection, *, now: float | None = None) ->
                     summary,
                     inferred_status,
                     abstract_model,
-                    row["input_hash"],
+                    current_hash,
                     ts if summary else None,
                     ts,
                     ts,
@@ -237,9 +265,9 @@ def sync_library_items(conn: sqlite3.Connection, *, now: float | None = None) ->
             created += 1
             continue
 
-        hash_changed = existing["input_hash"] != row["input_hash"]
+        hash_changed = existing["input_hash"] != current_hash
         status = existing["enrichment_status"]
-        if hash_changed and status == "ready":
+        if hash_changed and status in {"ready", "running"}:
             status = "stale"
             stale += 1
 
@@ -255,7 +283,7 @@ def sync_library_items(conn: sqlite3.Connection, *, now: float | None = None) ->
             (
                 row["title"],
                 _item_type(row["ext"]),
-                row["input_hash"],
+                current_hash,
                 status,
                 ts,
                 existing["id"],
@@ -324,6 +352,25 @@ def list_library_items(
     ).fetchall()
 
 
+def _current_input_hash(conn: sqlite3.Connection, item_id: int) -> str | None:
+    row = conn.execute(
+        """SELECT c.sha256 AS content_sha, c.active_index_version,
+                  dr.text_hash AS document_text_hash
+           FROM library_items li
+           JOIN contents c ON c.id = li.content_id
+           LEFT JOIN document_representations dr
+             ON dr.content_id = c.id
+            AND dr.index_version = c.active_index_version
+           WHERE li.id = ?""",
+        (item_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return compute_input_hash(
+        row["content_sha"], row["active_index_version"], row["document_text_hash"]
+    )
+
+
 def update_enrichment(
     conn: sqlite3.Connection,
     item_id: int,
@@ -336,13 +383,18 @@ def update_enrichment(
     input_hash: str,
     now: float | None = None,
 ) -> bool:
-    """Persist validated model output only if it matches the current content.
+    """Persist validated model output only if it matches current model input.
 
-    A worker may finish after a file changed. ``input_hash`` makes that race
-    explicit: stale model output is rejected instead of overwriting the newer
-    library item.
+    The check is independent of a prior ``sync_library_items`` call: it derives
+    the active document hash directly from ``contents`` + the active document
+    representation before writing. Callers still serialize writes with the
+    application's single-writer lock so this validation and update are one
+    logical apply step.
     """
     ensure_library_schema(conn)
+    if _current_input_hash(conn, item_id) != input_hash:
+        return False
+
     ts = time.time() if now is None else now
     cursor = conn.execute(
         """
