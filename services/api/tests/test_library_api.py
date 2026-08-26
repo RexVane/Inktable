@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.db import database
+import app.library.api as library_api
 from app.library.api import create_library_router
 from app.library.core import sync_library_items
 
@@ -92,5 +93,38 @@ def test_library_api_validates_status_and_missing_item() -> None:
         assert invalid.status_code == 422
         missing = client.get('/library/items/999')
         assert missing.status_code == 404
+    finally:
+        conn.close()
+
+
+def test_library_enrich_route_delegates_bounded_batch(monkeypatch) -> None:
+    seen: dict[str, int] = {}
+
+    def fake_run(db_provider, write_lock, *, limit: int):
+        assert db_provider() is conn
+        assert write_lock is not None
+        seen['limit'] = limit
+        return {
+            'available': True,
+            'provider': 'local_ollama',
+            'model': 'fake',
+            'prompt_version': 'library-enrichment-v1',
+            'claimed': 2,
+            'ready': 2,
+            'failed': 0,
+            'stale': 0,
+        }
+
+    monkeypatch.setattr(library_api, 'run_enrichment_batch', fake_run)
+    app, conn = _app()
+    try:
+        client = TestClient(app)
+        response = client.post('/library/enrich?limit=4')
+        assert response.status_code == 200
+        assert response.json()['ready'] == 2
+        assert seen['limit'] == 4
+
+        too_large = client.post('/library/enrich?limit=11')
+        assert too_large.status_code == 422
     finally:
         conn.close()
