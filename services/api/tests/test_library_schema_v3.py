@@ -28,7 +28,7 @@ def test_v2_database_upgrades_to_v3_without_touching_physical_files() -> None:
     conn = database.connect(":memory:")
     try:
         # Build the current SQL surface once, then emulate a database last
-        # opened by the v2 application.  The upgrade contract is additive:
+        # opened by the v2 application. The upgrade contract is additive:
         # physical file rows remain intact and the derived library layer is
         # rebuilt from them.
         database.init_db(conn)
@@ -52,11 +52,26 @@ def test_v2_database_upgrades_to_v3_without_touching_physical_files() -> None:
         conn.commit()
 
         database.init_db(conn)
+
+        # v3 bootstrap happens during normal init_db(), before any explicit
+        # Library sync or LLM work.
+        bootstrapped = conn.execute(
+            "SELECT content_id, title, item_type, input_hash FROM library_items"
+        ).fetchone()
+        assert dict(bootstrapped) == {
+            "content_id": 1,
+            "title": "os.pdf",
+            "item_type": "document",
+            "input_hash": "sha-v2-upgrade",
+        }
+
+        # Rich deterministic metadata is then an idempotent refresh, not a
+        # second identity creation.
         result = sync_library_items(conn, now=10)
         conn.commit()
-
         assert database.get_setting(conn, "db_schema_version") == "3"
-        assert result["created"] == 1
+        assert result["created"] == 0
+        assert result["refreshed"] == 1
         item = conn.execute(
             "SELECT content_id, title, item_type, input_hash FROM library_items"
         ).fetchone()
