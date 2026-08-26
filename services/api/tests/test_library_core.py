@@ -80,7 +80,7 @@ def _content(conn: sqlite3.Connection, *, cid: int, sha: str, name: str, ext: st
     )
 
 
-def test_sync_creates_one_item_per_content_and_is_idempotent() -> None:
+def test_sync_creates_pending_item_without_exposing_retrieval_abstract() -> None:
     conn = _db()
     sha = "a" * 64
     _content(conn, cid=1, sha=sha, name="操作系统.pdf", ext="pdf")
@@ -100,9 +100,39 @@ def test_sync_creates_one_item_per_content_and_is_idempotent() -> None:
     row = conn.execute("SELECT * FROM library_items").fetchone()
     assert row["title"] == "操作系统"
     assert row["item_type"] == "pdf"
-    assert row["summary"] == "进程、内存与文件系统"
-    assert row["enrichment_status"] == "ready"
+    assert row["summary"] == ""
+    assert row["enrichment_status"] == "pending"
+    assert row["enrichment_model"] is None
+    assert row["prompt_version"] is None
     assert row["input_hash"] == compute_input_hash(sha, 1, "doc-v1")
+
+
+def test_sync_cleans_legacy_abstract_bootstrap_from_v3_development_build() -> None:
+    conn = _db()
+    sha = "a" * 64
+    _content(conn, cid=1, sha=sha, name="legacy.pdf", ext="pdf")
+    conn.execute(
+        "INSERT INTO document_representations(content_id,index_version,title,text_hash) "
+        "VALUES (1,1,'legacy','doc-v1')"
+    )
+    sync_library_items(conn, now=10)
+    item_id = conn.execute("SELECT id FROM library_items").fetchone()[0]
+    conn.execute(
+        """UPDATE library_items
+           SET summary='检索关键词摘要', enrichment_status='ready',
+               enrichment_model='qwen3:8b', enriched_at=11
+           WHERE id=?""",
+        (item_id,),
+    )
+
+    result = sync_library_items(conn, now=20)
+    row = conn.execute("SELECT * FROM library_items WHERE id=?", (item_id,)).fetchone()
+
+    assert result["refreshed"] == 1
+    assert row["summary"] == ""
+    assert row["enrichment_status"] == "pending"
+    assert row["enrichment_model"] is None
+    assert row["enriched_at"] is None
 
 
 def test_reindex_same_file_marks_existing_enrichment_stale() -> None:
