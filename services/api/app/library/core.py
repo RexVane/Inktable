@@ -20,7 +20,8 @@ from collections.abc import Iterable, Sequence
 from app.db.visibility import visible_content_exists, visible_files_condition
 
 
-# CREATE-only by design. Read APIs must never backfill rows as a side effect.
+# CREATE-only by design. Read APIs and domain writes must never backfill schema
+# as a side effect; normal application startup owns schema initialization.
 LIBRARY_SCHEMA = """
 CREATE TABLE IF NOT EXISTS library_items (
     id                 INTEGER PRIMARY KEY,
@@ -121,7 +122,12 @@ WHERE EXISTS (
 
 
 def ensure_library_schema(conn: sqlite3.Connection) -> None:
-    """Create the rebuildable AI Library tables if they do not exist."""
+    """Explicitly create AI Library tables for isolated tests/tools.
+
+    ``sqlite3.executescript`` may commit an open transaction, so production
+    business functions deliberately never call this helper. ``init_db`` owns
+    schema creation before request handling begins.
+    """
     conn.executescript(LIBRARY_SCHEMA)
 
 
@@ -133,7 +139,7 @@ def compute_input_hash(
     """Version enrichment against what the model actually reads.
 
     File bytes alone are insufficient: OCR/parser upgrades can rebuild the
-    active document representation without changing the source file SHA.  The
+    active document representation without changing the source file SHA. The
     active index generation and its document text hash therefore participate in
     the identity of model input.
     """
@@ -212,15 +218,12 @@ def _candidate_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 
 def sync_library_items(conn: sqlite3.Connection, *, now: float | None = None) -> dict[str, int]:
-    """Synchronize one ``library_item`` for every currently visible content.
+    """Synchronize one item per currently visible content.
 
-    This operation is idempotent and deliberately cheap enough to run after a
-    scan/index batch. Active document changes mark prior enrichment stale even
-    when the original file bytes did not change. Invisible items are kept in
-    storage but hidden by all read APIs, so disabling/re-enabling a source does
-    not destroy AI metadata.
+    ``init_db`` must already have created the Library schema. This operation is
+    idempotent and transaction-neutral: it never commits or rolls back on the
+    caller's behalf.
     """
-    ensure_library_schema(conn)
     ts = time.time() if now is None else now
     created = 0
     refreshed = 0
@@ -387,11 +390,9 @@ def update_enrichment(
 
     The check is independent of a prior ``sync_library_items`` call: it derives
     the active document hash directly from ``contents`` + the active document
-    representation before writing. Callers still serialize writes with the
-    application's single-writer lock so this validation and update are one
-    logical apply step.
+    representation before writing. Caller serializes writes with Inktable's
+    single-writer lock.
     """
-    ensure_library_schema(conn)
     if _current_input_hash(conn, item_id) != input_hash:
         return False
 
@@ -427,7 +428,6 @@ def mark_library_item_stale(
     error: str | None = None,
     now: float | None = None,
 ) -> None:
-    ensure_library_schema(conn)
     ts = time.time() if now is None else now
     conn.execute(
         """
@@ -444,13 +444,12 @@ def replace_library_item_tags(
     item_id: int,
     tags: Sequence[tuple[int, str, float | None]],
 ) -> None:
-    """Replace an item's controlled-vocabulary tags atomically.
+    """Replace an item's controlled-vocabulary tags in the caller transaction.
 
     ``tags`` contains ``(tag_id, source, confidence)`` tuples. Tag creation and
     alias resolution intentionally live outside this primitive so the model
     cannot create uncontrolled vocabulary through this function.
     """
-    ensure_library_schema(conn)
     conn.execute("DELETE FROM library_item_tags WHERE library_item_id = ?", (item_id,))
     conn.executemany(
         """
@@ -471,7 +470,6 @@ def set_related_items(
     now: float | None = None,
 ) -> None:
     """Replace ``related_to`` edges produced by one relation source."""
-    ensure_library_schema(conn)
     ts = time.time() if now is None else now
     conn.execute(
         """
