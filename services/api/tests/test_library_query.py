@@ -45,6 +45,9 @@ def test_disabled_source_hides_item_without_destroying_ai_metadata() -> None:
     conn, os_item, _ = _seed()
     try:
         assert [r["id"] for r in list_library_items(conn)]
+        input_hash = conn.execute(
+            "SELECT input_hash FROM library_items WHERE id=?", (os_item,)
+        ).fetchone()[0]
         assert update_enrichment(
             conn,
             os_item,
@@ -53,7 +56,7 @@ def test_disabled_source_hides_item_without_destroying_ai_metadata() -> None:
             language="zh-CN",
             model="test-model",
             prompt_version="v1",
-            input_hash="sha-os",
+            input_hash=input_hash,
             now=40,
         )
         conn.commit()
