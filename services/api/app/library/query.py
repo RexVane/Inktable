@@ -5,7 +5,49 @@ from __future__ import annotations
 import sqlite3
 
 from app.db.visibility import visible_content_exists, visible_files_condition
-from app.library.core import get_library_item
+from app.library.core import get_library_item, list_library_items
+
+
+def library_page(
+    conn: sqlite3.Connection,
+    *,
+    status: str | None = None,
+    category_id: int | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> dict:
+    """Return a stable paged list plus a matching visible total."""
+    visible = visible_content_exists("li.content_id", "vf", "vs")
+    clauses = [visible]
+    params: list[object] = []
+    if status:
+        clauses.append("li.enrichment_status = ?")
+        params.append(status)
+    if category_id is not None:
+        clauses.append("li.category_id = ?")
+        params.append(category_id)
+    total = int(
+        conn.execute(
+            f"SELECT COUNT(*) FROM library_items li WHERE {' AND '.join(clauses)}",
+            params,
+        ).fetchone()[0]
+    )
+    items = [
+        dict(row)
+        for row in list_library_items(
+            conn,
+            status=status,
+            category_id=category_id,
+            limit=limit,
+            offset=offset,
+        )
+    ]
+    return {
+        "total": total,
+        "items": items,
+        "offset": max(0, int(offset)),
+        "has_more": max(0, int(offset)) + len(items) < total,
+    }
 
 
 def library_item_detail(conn: sqlite3.Connection, item_id: int) -> dict | None:
@@ -94,9 +136,18 @@ def library_stats(conn: sqlite3.Connection) -> dict:
                 WHERE {visible}"""
         ).fetchone()[0]
     )
+
+    source_visible = visible_content_exists("src.content_id", "svf", "svs")
+    target_visible = visible_content_exists("dst.content_id", "tvf", "tvs")
     related = int(
         conn.execute(
-            "SELECT COUNT(*) FROM library_relations WHERE relation_type = 'related_to'"
+            f"""SELECT COUNT(*)
+                FROM library_relations rel
+                JOIN library_items src ON src.id = rel.source_item_id
+                JOIN library_items dst ON dst.id = rel.target_item_id
+                WHERE rel.relation_type = 'related_to'
+                  AND {source_visible}
+                  AND {target_visible}"""
         ).fetchone()[0]
     )
     return {
