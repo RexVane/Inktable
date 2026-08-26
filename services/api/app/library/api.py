@@ -24,6 +24,7 @@ from app.library.relations import (
     MAX_TOP_K,
     apply_relation_plan,
     build_relation_plan,
+    relation_status,
 )
 
 
@@ -74,6 +75,11 @@ def create_library_router(
     def get_enrichment_status() -> dict:
         """Local-only model capability; no document content is sent here."""
         return enrichment_status()
+
+    @router.get("/relations/status")
+    def get_relation_status() -> dict:
+        """Read-only freshness/coverage state for derived relation edges."""
+        return relation_status(db_provider())
 
     @router.post("/sync")
     def post_sync() -> dict:
