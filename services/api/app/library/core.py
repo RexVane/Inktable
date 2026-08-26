@@ -1,11 +1,11 @@
 """Core data model for the Inktable AI Library.
 
-This module intentionally contains no LLM calls.  It turns the existing
+This module intentionally contains no LLM calls. It turns the existing
 filesystem/content index into a rebuildable knowledge layer:
 
     files -> contents -> library_items
 
-``files`` and ``contents`` remain the source of truth.  Library metadata is
+``files`` and ``contents`` remain the source of truth. Library metadata is
 purely derived and can be dropped/rebuilt without moving, renaming, copying or
 mutating user files.
 """
@@ -19,6 +19,7 @@ from collections.abc import Iterable, Sequence
 from app.db.visibility import visible_content_exists, visible_files_condition
 
 
+# CREATE-only by design. Read APIs must never backfill rows as a side effect.
 LIBRARY_SCHEMA = """
 CREATE TABLE IF NOT EXISTS library_items (
     id                 INTEGER PRIMARY KEY,
@@ -78,11 +79,13 @@ CREATE TABLE IF NOT EXISTS library_relations (
 
 CREATE INDEX IF NOT EXISTS idx_library_relations_target
     ON library_relations(target_item_id, relation_type);
+"""
 
--- Schema-v3 bootstrap: an upgraded existing library immediately gets one
--- derived item per currently visible content.  Rich fields are filled by
--- ``sync_library_items`` / the future enrichment worker; this SQL only makes
--- the identity layer available during normal init_db().
+
+# Executed only by the normal database initialization path. It gives existing
+# v2 libraries stable AI-Library identities immediately after upgrading to v3,
+# while richer deterministic metadata is refreshed by ``sync_library_items``.
+LIBRARY_BOOTSTRAP_SQL = """
 INSERT OR IGNORE INTO library_items
     (content_id, title, input_hash, created_at, updated_at)
 SELECT
@@ -116,7 +119,7 @@ WHERE EXISTS (
 
 
 def ensure_library_schema(conn: sqlite3.Connection) -> None:
-    """Create/backfill the rebuildable AI Library schema idempotently."""
+    """Create the rebuildable AI Library tables if they do not exist."""
     conn.executescript(LIBRARY_SCHEMA)
 
 
@@ -138,10 +141,10 @@ def _candidate_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
     Visibility is exactly the same contract used by search/QA: disabled
     sources and ignored files are hidden; missing files remain visible only
-    when a preservation copy exists.  The title prefers the active document
+    when a preservation copy exists. The title prefers the active document
     representation, then the newest visible file name.
 
-    Paths are intentionally not copied into ``library_items``.  They are
+    Paths are intentionally not copied into ``library_items``. They are
     mutable physical metadata and are always resolved through ``files`` when
     the UI needs them.
     """
@@ -189,8 +192,8 @@ def sync_library_items(conn: sqlite3.Connection, *, now: float | None = None) ->
     """Synchronize one ``library_item`` for every currently visible content.
 
     This operation is idempotent and deliberately cheap enough to run after a
-    scan/index batch.  Content hash changes mark prior enrichment stale instead
-    of silently treating model output as current.  Invisible items are kept in
+    scan/index batch. Content hash changes mark prior enrichment stale instead
+    of silently treating model output as current. Invisible items are kept in
     storage but hidden by all read APIs, so disabling/re-enabling a source does
     not destroy AI metadata.
     """
@@ -264,7 +267,7 @@ def sync_library_items(conn: sqlite3.Connection, *, now: float | None = None) ->
 
 
 def get_library_item(conn: sqlite3.Connection, item_id: int) -> sqlite3.Row | None:
-    ensure_library_schema(conn)
+    """Read one visible item. Database initialization guarantees the schema."""
     visible = visible_content_exists("li.content_id", "vf", "vs")
     return conn.execute(
         f"""
@@ -289,7 +292,7 @@ def list_library_items(
     limit: int = 100,
     offset: int = 0,
 ) -> list[sqlite3.Row]:
-    ensure_library_schema(conn)
+    """List visible items without mutating schema or metadata."""
     limit = max(1, min(int(limit), 500))
     offset = max(0, int(offset))
     visible = visible_content_exists("li.content_id", "vf", "vs")
