@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 import threading
 
+import pytest
+
 from app.db import database
 from app.library.core import sync_library_items
+import app.library.enrichment as enrichment
 from app.library.enrichment import PROMPT_VERSION, claim_items, run_enrichment_batch
 
 
@@ -52,6 +55,18 @@ def _seed():
     sync_library_items(conn, now=10)
     conn.commit()
     return conn
+
+
+def _valid_result() -> str:
+    return json.dumps(
+        {
+            "summary": "这是一份操作系统笔记，重点整理进程、内存、文件系统与死锁条件。",
+            "language": "zh",
+            "category_id": 1,
+            "tag_ids": [2, 1],
+        },
+        ensure_ascii=False,
+    )
 
 
 def test_enrichment_writes_summary_controlled_category_and_tags_without_path_leak() -> None:
@@ -161,4 +176,38 @@ def test_running_claim_is_only_recovered_after_lease_expires() -> None:
     expired = claim_items(conn, limit=1, now=300, lease_seconds=150)
     assert len(expired) == 1
     assert expired[0].item_id == item_id
+    conn.close()
+
+
+def test_summary_and_tags_apply_in_one_transaction(monkeypatch) -> None:
+    """A tag-write failure must not leave a ready summary without its tags."""
+    conn = _seed()
+
+    def explode_tags(*_args, **_kwargs):
+        raise RuntimeError("tag write failed")
+
+    monkeypatch.setattr(enrichment, "replace_library_item_tags", explode_tags)
+
+    with pytest.raises(RuntimeError, match="tag write failed"):
+        run_enrichment_batch(
+            lambda: conn,
+            threading.Lock(),
+            limit=1,
+            generate_fn=lambda _prompt: _valid_result(),
+            model="fake-local-model",
+        )
+
+    # The claim itself was intentionally committed before the model call, so a
+    # crashed apply remains leased as running. The failed apply transaction,
+    # however, must be fully rolled back: no summary/category/model/tag half-state.
+    item = conn.execute("SELECT * FROM library_items WHERE content_id=1").fetchone()
+    assert item["enrichment_status"] == "running"
+    assert item["summary"] == ""
+    assert item["category_id"] is None
+    assert item["enrichment_model"] is None
+    assert item["prompt_version"] is None
+    assert conn.execute(
+        "SELECT COUNT(*) FROM library_item_tags WHERE library_item_id=?",
+        (item["id"],),
+    ).fetchone()[0] == 0
     conn.close()
