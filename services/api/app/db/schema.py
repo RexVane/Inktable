@@ -281,12 +281,12 @@ CREATE VIRTUAL TABLE IF NOT EXISTS journal_fts USING fts5(
 );
 """
 
-# Keep the AI Library schema in one domain-owned place while making it part of
-# normal database initialization.  Old v2 applications now correctly reject a
-# database upgraded to v3 instead of opening it with incomplete semantics.
-from app.library.core import LIBRARY_SCHEMA
+# Keep the AI Library SQL in the domain package. CREATE statements and the v3
+# backfill are deliberately separate so ordinary read helpers never mutate the
+# database just because an item was viewed.
+from app.library.core import LIBRARY_BOOTSTRAP_SQL, LIBRARY_SCHEMA
 
-SCHEMA = f"{SCHEMA}\n{LIBRARY_SCHEMA}"
+SCHEMA = f"{SCHEMA}\n{LIBRARY_SCHEMA}\n{LIBRARY_BOOTSTRAP_SQL}"
 
 DEFAULT_SETTINGS = {
     "db_schema_version": str(SCHEMA_VERSION),
