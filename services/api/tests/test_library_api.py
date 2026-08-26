@@ -45,7 +45,7 @@ def _app(*, with_lock: bool = False):
     return app, conn
 
 
-def test_library_list_detail_and_stats_routes() -> None:
+def test_library_list_detail_stats_and_relation_status_routes() -> None:
     app, conn = _app()
     try:
         client = TestClient(app)
@@ -63,6 +63,13 @@ def test_library_list_detail_and_stats_routes() -> None:
         stats = client.get('/library/stats')
         assert stats.status_code == 200
         assert stats.json()['total'] == 1
+
+        relation_state = client.get('/library/relations/status')
+        assert relation_state.status_code == 200
+        assert relation_state.json()['total_visible'] == 1
+        assert relation_state.json()['relations'] == 0
+        assert relation_state.json()['stale_relations'] == 0
+        assert relation_state.json()['needs_rebuild'] is False
     finally:
         conn.close()
 
