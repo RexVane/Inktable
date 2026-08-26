@@ -98,7 +98,33 @@ def remove_exclusion(conn: sqlite3.Connection, path: str | Path) -> dict:
         conn.execute(
             f"UPDATE files SET state = 'registered' WHERE id IN ({marks})", batch,
         )
-    return {"path": canonical, "files_restored": len(restored)}
+    requeued = _requeue_pruned_contents(conn, restored)
+    return {"path": canonical, "files_restored": len(restored),
+            "contents_requeued": requeued}
+
+
+def _requeue_pruned_contents(conn: sqlite3.Connection, file_ids: list[int]) -> int:
+    """把索引行已被剪掉的内容重新排进解析队列。
+
+    `scripts/prune_excluded_index.py` 会删掉被排除内容的 chunks/FTS/向量行，
+    并把 `contents.parse_state` 记成 `excluded`。取消排除时若不做这一步，
+    文件会以「已索引」的身份恢复（chunk_count=0、没有任何分片），既搜不到也
+    永远不会被重新索引 —— 表现为「这个目录我明明取消排除了却搜不到」。
+
+    只动 `excluded` 状态：没被剪过的内容分片还在，不该重新解析一遍。
+    """
+    total = 0
+    for batch in _batches(file_ids, 400):
+        marks = ",".join("?" * len(batch))
+        cur = conn.execute(
+            f"""UPDATE contents SET parse_state = 'pending'
+                WHERE parse_state = 'excluded'
+                  AND id IN (SELECT content_id FROM files
+                             WHERE id IN ({marks}) AND content_id IS NOT NULL)""",
+            batch,
+        )
+        total += cur.rowcount or 0
+    return total
 
 
 def _batches(values: list, size: int):

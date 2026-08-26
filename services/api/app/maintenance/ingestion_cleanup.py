@@ -19,6 +19,7 @@ from typing import Callable, Iterable
 
 from app.discovery.sources import Source, discover_system
 from app.index.embedding import DIM
+from app.index.hierarchy import document_index_text
 from app.index.pipeline import cleanup_orphan_contents, count_orphan_contents
 from app.index.search import segment_for_index
 from app.watcher.policy import resolve_source_policy
@@ -255,12 +256,17 @@ def _populate_empty_virtual_indexes(
         progress("chunks_fts", len(chunks), len(chunks))
 
     documents = conn.execute(
-        "SELECT id, title, summary_text FROM document_representations ORDER BY id"
+        "SELECT id, title, abstract, summary_text FROM document_representations "
+        "ORDER BY id"
     ).fetchall()
     conn.executemany(
         "INSERT INTO documents_fts(rowid, text) VALUES (?, ?)",
         [
-            (row["id"], segment_for_index(f"{row['title']}\n{row['summary_text']}"))
+            # 必须走 document_index_text：直接拼 title+summary_text 会把已回填的
+            # abstract 从索引里悄悄抹掉，于是「跑一次清理」== 「撤销一次回填」，
+            # 而两者在日志里毫无关联，排查时几乎不可能联想到。
+            (row["id"], document_index_text(
+                row["title"], row["abstract"], row["summary_text"]))
             for row in documents
         ],
     )

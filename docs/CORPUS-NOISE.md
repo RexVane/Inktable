@@ -331,3 +331,99 @@ provider 故障触发 `--max-consecutive-provider-failures`）。这个模型**�
 `state='cloud_placeholder'` 分支而不再尝试读取。既有的 624 条会在下次扫描被
 重试 —— `register_file` 的「未变化」短路显式排除了 `HASH_FAILED`，有测试守着
 这一点（少了它，那 624 条会因 size/mtime 没变而被永远跳过）。
+
+
+## 7. 2026-08-26（同日续）：剪掉已排除内容的索引行
+
+排除只把 `files.state` 置成 `ignored`，索引行原样留在库里。审计
+（`scripts/audit_index_residue.py`，只读）：
+
+| 表 | 总行数 | 属于已排除内容 | 占比 |
+|---|---:|---:|---:|
+| chunks / chunks_fts / chunks_fts_tri | 244,688 | 198,613 | 81.2% |
+| chunks_vec | 181,989 | 135,914 | 74.7% |
+
+`cleanup_ingestion_noise.py` 处理不了这批：它的判据是「content 没有任何 files
+行」（孤儿），而被排除的文件 files 行仍在，所以干跑恒为 `removals=0`。
+
+### 7.1 两个假设，都被实测否掉
+
+先前把这件事归成「省 1.8GB 磁盘」，归错了。检索代码里确实有两处会被残留影响：
+
+1. `bm25()` 的 IDF 与长度归一化用的是**整张 FTS 表**的统计量。可见性过滤写在
+   `WHERE` 里，但分数是先算出来的 —— 81% 的噪声还在分母里。
+2. 向量路是「先 KNN、后过滤」（`app/index/search.py::_vector_search`），超取
+   上限 3 倍。残留占 74.7% 时 top-3k 大部分会被过滤掉，**有效深度**下降。
+
+由此预测「剪掉之后 nDCG 明显上升、paraphrase 类题目受益最大」。**预测错了。**
+65 题 A/B（同一份快照，剪枝前后各跑两遍，结果可复现）里只有 **3 题**动了名次：
+
+    F28  rank 2 → 1     （nDCG/MRR 的涨幅全部来自这一题）
+    A09  rank 15 → 16
+    P19  rank 20 → 22   （Recall@20 的 −1.9pp 就是这一题掉出 top-20）
+
+paraphrase 仍是 8/11，向量路照样返回满深度 20。也就是说：**剪枝是质量中性的**，
+上面两条机制真实存在但量级远小于预期。把它当作质量手段是我的误判。
+
+### 7.2 判据必须是「每份副本都被排除」，不是「没有可见副本」
+
+第一版判据写的是「没有可见副本」。它多剪掉 56,735 个分片 —— 属于 **3,246 篇
+真文档**，它们不可见的原因是 `state='missing'`（外置盘拔了、云盘文件没下载），
+不是被排除。
+
+这是**静默永久失踪**：剪掉索引行没有对应的唤醒路径（只有「取消排除」会
+requeue），盘插回来之后内容仍是 `parse_state='excluded'`、零分片，而且不报错。
+
+判据收窄为「该 content 的**每一份**副本都是 `ignored`」。排除是用户的显式决定，
+`missing` 与「源被禁用」都是过渡态，只对显式决定动手。两个判据的实测差别不只
+是安全性 —— 宽判据的 nDCG 是 **87.3%（比不剪还低 0.3pp）**，窄判据是 88.3%：
+把真文档从 BM25 统计量里拿掉反而伤了排序。
+
+### 7.3 实测（真实库快照，65 题，route_limit=120，degraded=0）
+
+| 指标 | 剪枝前 | 剪枝后 | 门槛 |
+|---|---:|---:|---:|
+| nDCG@10 | 87.6% | **88.3%** | ≥90%（缺口 2.4→1.7pp）|
+| MRR@10 | 85.0% | 86.0% | — |
+| Recall@5 | 92.5% | 92.5% | ≥95%（缺口仍 2.5pp）|
+| Recall@20 | 100.0% | **98.1%** | 回退 ≤2pp（用掉 1.9pp）|
+| Recall@50 | 100% | 100% | — |
+| Gold Ev@50 | 94.8% | 94.8% | ≥90% |
+| 搜索 P95 | 1,846 / 2,609ms | **1,561 / 1,509ms** | ≤2,500ms |
+| rerank P95 | 137 / 154ms | 108 / 105ms | ≤1,500ms |
+| 65 题全量 | 102s | 63s | — |
+| 库体积 | 1,805MB | **941MB** | — |
+
+延迟给的是两次独立运行的两个值：应用在后台扫描时同一份语料的 P95 能从
+1,846ms 漂到 2,609ms（一度越过 2,500ms 门槛）。剪枝后两次分别是 1,561 /
+1,509ms，波动明显收窄 —— 这是本次改动**唯一有实际分量**的收益，加上体积减半。
+
+**代价要记清**：Recall@20 掉了 1.9pp（P19 从 20 名掉到 22 名），把「回退 ≤2pp」
+的额度几乎用光。该题在 @50 仍能召回。
+
+### 7.4 落地与回滚
+
+`scripts/prune_excluded_index.py`，默认干跑；动真实库强制 `--backup`（会跑
+`backup_is_restorable`：可打开 + schema 齐全 + `integrity_check`），并要求先退出
+应用（`acquire_single_instance_lock`，避免并发写）。
+
+保留 `files` 与 `contents` 行，只删索引行（chunks / 三个 FTS / chunks_vec /
+document_representations / sections / index_versions），并把
+`contents.parse_state` 记成 `excluded`。**不能记成 `pending`**：
+`index_pending()` 的队列查询不看 `state='ignored'`，一旦记成 pending，10.7 万个
+被排除的文件会立刻回到索引队列，排除的收益当场清零。`remove_exclusion()` 里新增
+`_requeue_pruned_contents()`，取消排除时把 `excluded` 改回 `pending`，下次扫描
+重新解析与嵌入（代价是重算，不是丢失）。
+
+每批一个 savepoint。核心不变式：**可见分片集合在删除前后逐 id 相同** ——
+断言写在 `prune()` 里，不匹配就退出并提示用回滚。比「gold 还在」更强：少一个
+可见分片就等于把正确答案从库里拿掉，评测会因此「变好」而失去意义。
+
+实测：删 141,878 个分片，可见 46,075 个逐 id 不变，`quick_check=ok`，
+库 1,805→941MB。真实库已执行，备份在
+`backups/library-pre-prune-20260826.db`（1,805MB，已验证可恢复）。
+回滚就是用它覆盖 `library.db`。
+
+顺带修掉一个静默回退：`_populate_empty_virtual_indexes()` 重建 `documents_fts`
+时直接拼 `title + summary_text`，会把已回填的 `abstract` 抹掉 —— 「跑一次清理」
+等于「撤销一次回填」，而两者在日志里毫无关联。改为走 `document_index_text()`。
