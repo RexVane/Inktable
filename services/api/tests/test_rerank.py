@@ -449,6 +449,49 @@ def test_lexical_gate_still_runs_cross_encoder_without_lexical_evidence(monkeypa
     assert model.model_id.startswith("cascade:")
 
 
+def test_vector_share_is_off_by_default_and_head_stays_fusion_order(monkeypatch):
+    """默认头部必须仍是纯融合序前 N 个 —— 引入配额不改默认路径。"""
+    monkeypatch.setattr(rerank, "CASCADE_VEC_SHARE", 0.0)
+    model = _cascade_with(monkeypatch, ce_logits=[0.0] * 8,
+                          local_scores={i: 0.0 for i in range(1, 9)})
+    items = [rerank.RerankInput(i, i, "t", "", 1.0 / i, vector_rank=9 - i)
+             for i in range(1, 9)]
+    head, tail = model._split_head(items, 3)
+    assert [i.chunk_id for i in head] == [1, 2, 3]
+    assert [i.chunk_id for i in tail] == [4, 5, 6, 7, 8]
+
+
+def test_vector_share_reserves_head_slots_for_vector_route(monkeypatch):
+    """配额打开时向量路名次靠前的候选必须挤进头部。
+
+    实测依据：门控挑进 CE 的题里 A09 的 gold 在融合序第 24 位、向量序第 1 位。
+    只按融合序截头部 K 就下不来，Rerank P95 也就压不到门槛内。
+    """
+    monkeypatch.setattr(rerank, "CASCADE_VEC_SHARE", 0.5)
+    model = _cascade_with(monkeypatch, ce_logits=[0.0] * 8,
+                          local_scores={i: 0.0 for i in range(1, 9)})
+    # 融合序 1..8；chunk 8 在融合序最后，但向量路第 1
+    items = [rerank.RerankInput(i, i, "t", "", 1.0 / i,
+                                vector_rank=1 if i == 8 else (10 - i))
+             for i in range(1, 9)]
+    head, tail = model._split_head(items, 4)
+    ids = [i.chunk_id for i in head]
+    assert 8 in ids, "向量路第 1 的候选必须进头部"
+    assert 1 in ids, "融合序第 1 的候选不能被挤掉"
+    assert len(head) == 4
+    assert set(ids) & {i.chunk_id for i in tail} == set()
+
+
+def test_vector_share_fills_quota_from_fusion_when_vector_route_is_empty(monkeypatch):
+    """向量路不可用（模型未装）时配额不能浪费，头部要按融合序补满。"""
+    monkeypatch.setattr(rerank, "CASCADE_VEC_SHARE", 0.5)
+    model = _cascade_with(monkeypatch, ce_logits=[0.0] * 6,
+                          local_scores={i: 0.0 for i in range(1, 7)})
+    items = [rerank.RerankInput(i, i, "t", "", 1.0 / i) for i in range(1, 7)]
+    head, _ = model._split_head(items, 4)
+    assert [i.chunk_id for i in head] == [1, 2, 3, 4]
+
+
 def test_focus_window_prefers_query_dense_region():
     """长分片必须按查询词密度取窗口，而不是从开头硬切。
 

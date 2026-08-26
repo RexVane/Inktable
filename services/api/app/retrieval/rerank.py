@@ -76,6 +76,9 @@ CASCADE_LEX_FULL = _env_int("INKTABLE_CASCADE_LEX_FULL", 45, 5, 100) / 100.0
 # 它本来就是 `CASCADE_LEX_FULL`「本地完全可信」的那个点，不是为了刷指标挑的。
 # n=13，扩大评测集后必须重验。
 CASCADE_LEX_GATE = _env_int("INKTABLE_CASCADE_LEX_GATE", 0, 0, 100) / 100.0
+# CE 头部名额里分给「向量路名次」的比例。0 = 关闭（默认，纯融合序，行为逐字
+# 不变）。50 = 对半分。见 CascadeReranker._split_head 的实测依据。
+CASCADE_VEC_SHARE = _env_int("INKTABLE_CASCADE_VEC_SHARE", 0, 0, 90) / 100.0
 
 # 送进 CE 的单个候选文本上限（字符）。分片正文实测 p50 383 字、p90 956 字，
 # 而 CE 截断在 384 token —— 长分片是从**开头**截的，答案落在后半段就直接
@@ -148,6 +151,10 @@ class RerankInput:
     rrf_score: float
     ext: str = ""
     file_name: str = ""
+    # 该候选在向量路里的名次（1 起，0 = 向量路没命中它）。级联给 CE 分配头部
+    # 名额时要用：门控挑出的是词法无能的改写类查询，而它们的 gold 本来就该由
+    # 向量路找到 —— 只按融合序截头部会把这批 gold 压在第 24-25 位。
+    vector_rank: int = 0
 
 
 @dataclass(frozen=True)
@@ -415,6 +422,50 @@ class CascadeReranker:
         return max(1, min(CASCADE_MIN_HEAD, total) if per_variant < CASCADE_MIN_HEAD
                    else min(per_variant, total))
 
+    def _split_head(self, candidates: list[RerankInput], head_size: int):
+        """选出交给 CE 的头部。
+
+        默认纯融合序（`INKTABLE_CASCADE_VEC_SHARE=0`，行为逐字不变）。
+        置为 >0 时把该比例的名额分给**向量路名次**，其余仍按融合序。
+
+        为什么要分：实测（`scripts/probe_gated_head_order.py`，真实库）在门控
+        挑进 CE 的那批题上，同一个 gold 在两种次序下的位置差得很远 ——
+
+            A09  融合第 24 位 / 向量第  1 位
+            P19  融合第 25 位 / 向量第  3 位
+            M09  融合第  1 位 / 向量第 45 位
+            U02  融合第 12 位 / 向量第 32 位
+
+        谁也不能单独用（M09 会丢），但各给一半名额就能用远小于 26 的 K 同时
+        覆盖前三题。这是 Rerank P95 唯一一条不牺牲 Recall@5 的降本路径。
+        名额对半分是按机理定的（门控选中的正是词法无能、该由向量路负责的
+        查询），不是照着 gold 位置挑出来的。
+        """
+        if CASCADE_VEC_SHARE <= 0 or head_size >= len(candidates):
+            return candidates[:head_size], candidates[head_size:]
+        vec_quota = max(1, int(round(head_size * CASCADE_VEC_SHARE)))
+        fuse_quota = max(1, head_size - vec_quota)
+
+        picked: dict[int, RerankInput] = {}
+        for item in candidates[:fuse_quota]:
+            picked[item.chunk_id] = item
+        by_vector = sorted(
+            (item for item in candidates if item.vector_rank > 0),
+            key=lambda item: item.vector_rank,
+        )
+        for item in by_vector:
+            if len(picked) >= head_size:
+                break
+            picked.setdefault(item.chunk_id, item)
+        # 名额没用满（向量路命中太少）时按融合序补齐，不浪费预算
+        for item in candidates:
+            if len(picked) >= head_size:
+                break
+            picked.setdefault(item.chunk_id, item)
+        head = [item for item in candidates if item.chunk_id in picked]
+        tail = [item for item in candidates if item.chunk_id not in picked]
+        return head, tail
+
     def rerank(
         self, query: str, candidates: list[RerankInput],
     ) -> list[RerankOutput]:
@@ -431,8 +482,7 @@ class CascadeReranker:
         # 头部按**融合顺序**截取，不按本地分：本地打分器在改写类问题上
         # 会把 gold 压下去（覆盖/邻近特征全为 0），用它截断等于把 CE
         # 最该救的那批题提前淘汰掉。
-        head = candidates[:head_size]
-        tail = candidates[head_size:]
+        head, tail = self._split_head(candidates, head_size)
 
         # 文件名与标题路径始终完整保留 —— 它们短，且是元数据类问题的
         # 主要信号；只有正文按查询词密度取窗口。
@@ -631,6 +681,9 @@ def _load_inputs(conn, candidates) -> tuple[list[RerankInput], list[int]]:
             rrf_score=by_id[chunk_id].rrf_score,
             ext=row["ext"] or "",
             file_name=row["file_name"] or "",
+            vector_rank=(
+                getattr(by_id[chunk_id], "route_ranks", None) or {}
+            ).get("vector", 0),
         ))
     remainder = [chunk_id for chunk_id in ordered_ids if chunk_id not in selected_ids]
     return selected, remainder
