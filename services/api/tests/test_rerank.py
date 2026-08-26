@@ -366,6 +366,89 @@ def test_cascade_keeps_local_score_when_lexical_evidence_is_strong(monkeypatch):
     assert [item.chunk_id for item in ranked] == [1, 2], "词法证据强时本地分应能翻转轻微的 CE 偏好"
 
 
+def test_lexical_gate_is_off_by_default(monkeypatch):
+    """默认必须逐字保持原行为：门控关时 CE 照常参与。
+
+    这条守的是「新增旋钮不改默认路径」。少了它，一次默认值手滑就会让所有
+    改写类问题静默失去 CE，而指标要跑完整套 65 题才看得出来。
+    """
+    monkeypatch.setattr(rerank, "CASCADE_LEX_GATE", 0.0)
+    model = _cascade_with(
+        monkeypatch,
+        ce_logits=[0.0, 5.0],
+        local_scores={1: 1.0, 2: 0.0},
+    )
+    inputs = [
+        rerank.RerankInput(1, 1, "命中查询词的正文", "", 1.0,
+                           file_name="命中查询词.md"),
+        rerank.RerankInput(2, 2, "另一份文档", "", 0.5),
+    ]
+    ranked = model.rerank("命中查询词", inputs)
+    assert [item.chunk_id for item in ranked] == [2, 1], "门控关时 CE 应仍生效"
+    assert model.model_id.startswith("cascade:")
+
+
+def test_lexical_gate_skips_cross_encoder_when_evidence_is_strong(monkeypatch):
+    """词法证据强时整个跳过 CE —— 并且 trace 必须说实话。
+
+    跳过后实际生效的模型就是一级本地打分器，`model_id` 仍报 `cascade:` 是
+    谎报：排查「为什么这题名次和纯本地一样」时会找错方向。
+    """
+    monkeypatch.setattr(rerank, "CASCADE_LEX_GATE", 0.45)
+
+    called: list[int] = []
+
+    class FakeRuntime:
+        model_id = "fake-cross"
+
+        def score(self, _query, documents):
+            called.append(len(documents))
+            return np.asarray([0.0] * len(documents), dtype=np.float32)
+
+    monkeypatch.setattr(
+        "app.retrieval.cross_encoder.get_runtime", lambda: FakeRuntime(),
+    )
+    monkeypatch.setattr(
+        rerank.LocalStaticReranker, "rerank",
+        lambda _self, _q, cands: [
+            rerank.RerankOutput(item.chunk_id, 1.0 if item.chunk_id == 1 else 0.0)
+            for item in cands
+        ],
+    )
+    model = rerank.CascadeReranker(rerank.LocalStaticReranker())
+    inputs = [
+        rerank.RerankInput(1, 1, "计算机网络课程设计成绩单的评分与名单",
+                           "成绩单", 1.0,
+                           file_name="计算机网络课程设计成绩单.pdf"),
+        rerank.RerankInput(2, 2, "另一份无关文档", "", 0.5),
+    ]
+    ranked = model.rerank("计算机网络课程设计成绩单", inputs)
+    assert called == [], "词法证据强时不该调用 CE"
+    assert [item.chunk_id for item in ranked] == [1, 2]
+    assert model.model_id == "cascade-lex-skip:local-static-v3"
+
+
+def test_lexical_gate_still_runs_cross_encoder_without_lexical_evidence(monkeypatch):
+    """查询词一个都不出现时必须照常进 CE —— 门控不能把改写类也挡掉。
+
+    真实库实测里 CE 的两个最大收益（P19 第 23→3、A09 第 16→4）都在这个
+    区间；挡掉它们等于把 Recall@5 从 96.2% 退回 92.5%。
+    """
+    monkeypatch.setattr(rerank, "CASCADE_LEX_GATE", 0.45)
+    model = _cascade_with(
+        monkeypatch,
+        ce_logits=[-4.0, 4.0],
+        local_scores={1: 1.0, 2: 0.0},
+    )
+    inputs = [
+        rerank.RerankInput(1, 1, "完全无关的正文", "", 1.0),
+        rerank.RerankInput(2, 2, "路径穿越的防护做法", "", 0.5),
+    ]
+    ranked = model.rerank("怎样防止用户用相对路径跑出自己的文件目录", inputs)
+    assert [item.chunk_id for item in ranked] == [2, 1]
+    assert model.model_id.startswith("cascade:")
+
+
 def test_focus_window_prefers_query_dense_region():
     """长分片必须按查询词密度取窗口，而不是从开头硬切。
 

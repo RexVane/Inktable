@@ -65,6 +65,17 @@ CASCADE_W_RRF = _env_int("INKTABLE_CASCADE_W_RRF", 8, 0, 100) / 100.0
 # 它针对的失效模式（改写类问题上本地特征全零）有明确机理，而 53 题里只有
 # 2-3 题落在这个模式上，样本量不足以判定；评测集扩大后应重新验证。
 CASCADE_LEX_FULL = _env_int("INKTABLE_CASCADE_LEX_FULL", 45, 5, 100) / 100.0
+# 词法门控：候选头部的最强 IDF 加权词覆盖 ≥ 该值时**整个跳过 CE**，直接用一级
+# 本地排名。0 = 关闭（默认，行为与不引入该门控逐字一致）。
+#
+# 判据来自 `scripts/probe_lexical_gate.py` 在真实库上的分布实测（53 题）：
+# CE 帮上大忙的三题（P19 0.403 / U02 0.323 / A09 0.319）全部落在 0.45 以下，
+# 而 CE 弄坏的六题（A06 1.000 / X07 1.000 / F27 0.888 / M08 0.800 / S20 0.799
+# / U04 0.533）全部在 0.53 以上。**注意两组整体是有重叠的**（弄坏组最低 0.533
+# 高于修好组最高 0.874 并不成立），所以这不是一条干净的分界线 —— 取 0.45 是因为
+# 它本来就是 `CASCADE_LEX_FULL`「本地完全可信」的那个点，不是为了刷指标挑的。
+# n=13，扩大评测集后必须重验。
+CASCADE_LEX_GATE = _env_int("INKTABLE_CASCADE_LEX_GATE", 0, 0, 100) / 100.0
 
 # 送进 CE 的单个候选文本上限（字符）。分片正文实测 p50 383 字、p90 956 字，
 # 而 CE 截断在 384 token —— 长分片是从**开头**截的，答案落在后半段就直接
@@ -395,7 +406,8 @@ class CascadeReranker:
         self.local = local
         self.subqueries = tuple(subqueries)
         self.pairs_budget = pairs_budget or CASCADE_PAIRS
-        self.model_id = f"cascade:{local.model_id}+{self.runtime.model_id}"
+        self.base_model_id = f"cascade:{local.model_id}+{self.runtime.model_id}"
+        self.model_id = self.base_model_id
 
     def _head_size(self, variant_count: int, total: int) -> int:
         # 变体越多，单个候选越贵，头部就要越浅，保住最坏情况的延迟
@@ -437,6 +449,24 @@ class CascadeReranker:
             ) if part)
             for item in head
         ]
+        haystacks = [
+            f"{item.section_path}\n{item.text}".lower() for item in head
+        ]
+        # 本次查询的词法置信度：候选池里最强的 IDF 加权词覆盖。
+        # 纯字符串操作，相对 CE 的每对数十毫秒可忽略 —— 所以它可以放在 CE
+        # 之前当门控用，而不只是事后调权重。
+        lexical_confidence = max(
+            (self.local._weighted_coverage(focus_terms, haystack)
+             for haystack in haystacks),
+            default=0.0,
+        )
+        # 词法信号足够强时整个跳过 CE。实测 CE 在这个区间只会把本地已经排第 1
+        # 的 exact / metadata 题挤下去，同时每题白付 2-3 秒。
+        if CASCADE_LEX_GATE > 0 and lexical_confidence >= CASCADE_LEX_GATE:
+            self.model_id = f"cascade-lex-skip:{self.local.model_id}"
+            return local_ranked
+        self.model_id = self.base_model_id
+
         raw = np.stack([
             self.runtime.score(variant, documents) for variant in variants
         ]).max(axis=0)
@@ -444,16 +474,6 @@ class CascadeReranker:
         max_rrf = max((item.rrf_score for item in candidates), default=1.0)
         max_local = max(
             (local_scores.get(item.chunk_id, 0.0) for item in head), default=1.0,
-        )
-        haystacks = [
-            f"{item.section_path}\n{item.text}".lower() for item in head
-        ]
-        # 本次查询的词法置信度：候选池里最强的 IDF 加权词覆盖。
-        # 纯字符串操作，相对 CE 的每对数十毫秒可忽略。
-        lexical_confidence = max(
-            (self.local._weighted_coverage(focus_terms, haystack)
-             for haystack in haystacks),
-            default=0.0,
         )
         trust_local = min(1.0, lexical_confidence / max(CASCADE_LEX_FULL, 1e-6))
         w_local = CASCADE_W_LOCAL * trust_local
