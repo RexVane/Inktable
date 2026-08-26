@@ -81,6 +81,24 @@ CREATE TABLE IF NOT EXISTS library_relations (
 
 CREATE INDEX IF NOT EXISTS idx_library_relations_target
     ON library_relations(target_item_id, relation_type);
+
+-- Derived relation edges are only trustworthy for the exact Library input
+-- versions they were computed from. Keep the version snapshot in a companion
+-- table so old relations can be hidden immediately after OCR/parser/index
+-- changes without changing the compact edge table or the future manual-edge
+-- model. Rows cascade with their parent relation.
+CREATE TABLE IF NOT EXISTS library_relation_versions (
+    source_item_id    INTEGER NOT NULL,
+    target_item_id    INTEGER NOT NULL,
+    relation_type     TEXT NOT NULL DEFAULT 'related_to',
+    source_input_hash TEXT NOT NULL,
+    target_input_hash TEXT NOT NULL,
+    created_at        REAL NOT NULL,
+    PRIMARY KEY (source_item_id, target_item_id, relation_type),
+    FOREIGN KEY (source_item_id, target_item_id, relation_type)
+        REFERENCES library_relations(source_item_id, target_item_id, relation_type)
+        ON DELETE CASCADE
+);
 """
 
 
@@ -395,7 +413,7 @@ def update_enrichment(
     *,
     summary: str,
     category_id: int | None,
-    language: str = "",
+    language: str = '',
     model: str,
     prompt_version: str,
     input_hash: str,
@@ -481,7 +499,7 @@ def set_related_items(
     item_id: int,
     related: Iterable[tuple[int, float | None]],
     *,
-    source: str = "embedding",
+    source: str = 'embedding',
     now: float | None = None,
 ) -> None:
     """Replace ``related_to`` edges produced by one relation source."""
