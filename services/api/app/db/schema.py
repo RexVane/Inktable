@@ -1,73 +1,66 @@
 """数据库 schema —— PLAN §9。
 
-核心设计：**files 与 contents 分离**（§9 contents 表）。
+核心设计：files 与 contents 分离；AI Library 是可重建的派生知识层。
 
-    N 个 files : 1 个 contents
+    N 个 files : 1 个 contents : 1 个 library_item
 
-一份内容被存了 5 处，chunks 只建一次、向量只算一次。且任一 file 存活，
-content 与其 chunks 就保留 —— 原件被微信清理掉，副本仍然可检索。
-v5 之前 chunks 直接挂 file_id，导致"复用 chunks"这件事无处承载。
-
-身份用 (volume_uuid, inode) 而非路径（§8）：用户在 Finder 里移动/改名文件后
-索引自动跟上，不需要重新解析、重新嵌入。
+真实文件系统仍是 source of truth。library_items / tags / relations 只保存索引层
+知识元数据，删除后可由 contents + files 重建，不移动、不复制、不改名用户文件。
 """
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 
--- 来源（§9 sources）
 CREATE TABLE IF NOT EXISTS sources (
     id                    INTEGER PRIMARY KEY,
     name                  TEXT NOT NULL,
     path                  TEXT NOT NULL UNIQUE,
-    kind                  TEXT NOT NULL,              -- im / browser / system / manual
-    discovered_by         TEXT NOT NULL,              -- config / heuristic / bundle / default / manual
-    volatile              INTEGER NOT NULL DEFAULT 0, -- 应用会自行清理？
-    auto_preserve         INTEGER NOT NULL DEFAULT 0, -- 易失来源自动保全副本，默认关
-    enabled               INTEGER NOT NULL DEFAULT 0, -- 默认不启用（§1 约束 4）
+    kind                  TEXT NOT NULL,
+    discovered_by         TEXT NOT NULL,
+    volatile              INTEGER NOT NULL DEFAULT 0,
+    auto_preserve         INTEGER NOT NULL DEFAULT 0,
+    enabled               INTEGER NOT NULL DEFAULT 0,
     permission_ok         INTEGER,
     permission_checked_at REAL,
     created_at            REAL NOT NULL
 );
 
--- 内容实体（§9 contents）：chunks 挂这里，不挂 files
 CREATE TABLE IF NOT EXISTS contents (
-    id                 INTEGER PRIMARY KEY,
-    sha256             TEXT NOT NULL UNIQUE,
-    size               INTEGER NOT NULL,
-    parse_state        TEXT NOT NULL DEFAULT 'D',  -- B / C / D
-    chunk_count        INTEGER NOT NULL DEFAULT 0,
-    embedding_model_id TEXT,
-    indexed_at         REAL,
+    id                   INTEGER PRIMARY KEY,
+    sha256               TEXT NOT NULL UNIQUE,
+    size                 INTEGER NOT NULL,
+    parse_state          TEXT NOT NULL DEFAULT 'D',
+    chunk_count          INTEGER NOT NULL DEFAULT 0,
+    embedding_model_id   TEXT,
+    indexed_at           REAL,
     active_index_version INTEGER NOT NULL DEFAULT 1
 );
 
--- 文件（§9 files）
 CREATE TABLE IF NOT EXISTS files (
     id                INTEGER PRIMARY KEY,
-    volume_uuid       TEXT NOT NULL,      -- 身份 1/2
-    inode             INTEGER NOT NULL,   -- 身份 2/2
+    volume_uuid       TEXT NOT NULL,
+    inode             INTEGER NOT NULL,
     content_id        INTEGER REFERENCES contents(id) ON DELETE SET NULL,
-    path              TEXT NOT NULL,      -- 当前路径（缓存，可变）
+    path              TEXT NOT NULL,
     name              TEXT NOT NULL,
-    origin_path       TEXT,               -- 首次发现时的路径
-    preserved_path    TEXT,               -- 保全副本路径
+    origin_path       TEXT,
+    preserved_path    TEXT,
     source_id         INTEGER REFERENCES sources(id) ON DELETE SET NULL,
     ext               TEXT,
     mime              TEXT,
     size              INTEGER NOT NULL,
-    state             TEXT NOT NULL DEFAULT 'D',  -- B / C / D
+    state             TEXT NOT NULL DEFAULT 'D',
     error_code        TEXT,
     retry_count       INTEGER NOT NULL DEFAULT 0,
     category_id       INTEGER REFERENCES categories(id) ON DELETE SET NULL,
     confidence        REAL,
     confirmed_by_user INTEGER NOT NULL DEFAULT 0,
-    is_dataless       INTEGER NOT NULL DEFAULT 0,  -- iCloud 占位文件（§7.8）
+    is_dataless       INTEGER NOT NULL DEFAULT 0,
     mtime             REAL,
     detected_at       REAL NOT NULL,
     indexed_at        REAL,
@@ -81,11 +74,8 @@ CREATE INDEX IF NOT EXISTS idx_files_source   ON files(source_id);
 CREATE INDEX IF NOT EXISTS idx_files_volume   ON files(volume_uuid);
 CREATE INDEX IF NOT EXISTS idx_files_category ON files(category_id);
 CREATE INDEX IF NOT EXISTS idx_files_mtime    ON files(mtime);
--- Watcher callbacks fall back to exact-path lookup on inode changes/deletions.
--- Without this, every filesystem event scanned the entire files table.
 CREATE INDEX IF NOT EXISTS idx_files_path     ON files(path);
 
--- 分类树（§9 categories）：**纯虚拟，磁盘上不存在对应目录**
 CREATE TABLE IF NOT EXISTS categories (
     id         INTEGER PRIMARY KEY,
     parent_id  INTEGER REFERENCES categories(id) ON DELETE CASCADE,
@@ -93,8 +83,6 @@ CREATE TABLE IF NOT EXISTS categories (
     sort_order INTEGER NOT NULL DEFAULT 0
 );
 
--- 分类规则（§9 rules / §11.4 回流学习）
--- 三条件 AND，NULL = 不限；priority 小的先匹配，首条命中即停
 CREATE TABLE IF NOT EXISTS rules (
     id                    INTEGER PRIMARY KEY,
     priority              INTEGER NOT NULL DEFAULT 100,
@@ -118,19 +106,18 @@ CREATE TABLE IF NOT EXISTS file_tags (
     PRIMARY KEY (file_id, tag_id)
 );
 
--- 分片（§9 chunks）：挂 content_id
 CREATE TABLE IF NOT EXISTS chunks (
     id                 INTEGER PRIMARY KEY,
     content_id         INTEGER NOT NULL REFERENCES contents(id) ON DELETE CASCADE,
-    layer              TEXT NOT NULL DEFAULT 'child',   -- child（检索用）/ parent（送模型用）
+    layer              TEXT NOT NULL DEFAULT 'child',
     parent_id          INTEGER REFERENCES chunks(id) ON DELETE SET NULL,
     page               INTEGER,
     page_end           INTEGER,
-    bbox               TEXT,          -- JSON 数组，一片可跨多个矩形
+    bbox               TEXT,
     section_path       TEXT NOT NULL DEFAULT '',
     ordinal            INTEGER NOT NULL,
     text               TEXT NOT NULL,
-    text_hash          TEXT NOT NULL, -- 增量 diff 的主键（§12.5）
+    text_hash          TEXT NOT NULL,
     token_count        INTEGER,
     embedding_model_id TEXT,
     section_id         INTEGER REFERENCES sections(id) ON DELETE SET NULL,
@@ -142,31 +129,15 @@ CREATE TABLE IF NOT EXISTS chunks (
 CREATE INDEX IF NOT EXISTS idx_chunks_content ON chunks(content_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_layer   ON chunks(content_id, layer);
 CREATE INDEX IF NOT EXISTS idx_chunks_hash    ON chunks(text_hash);
--- chunks.parent_id 是**自引用外键**（parent 层指向 child 层）。开着
--- PRAGMA foreign_keys 时，删一个 chunk 就要找出所有 parent_id 指向它的行来
--- 执行 ON DELETE SET NULL —— 没有这个索引就是每删一行全表扫一遍。
---
--- 实测代价：真实库 164,180 个分片、删 16,753 个（清理 670 个孤儿 content）
--- 时，`DELETE FROM contents WHERE NOT EXISTS(...)` 的级联跑了半小时以上仍未
--- 完成，约合 27 亿次行访问。sections.parent_id 和 chunks.section_id 都建了
--- 索引，唯独这一列漏了。任何删除内容的路径（移除来源、删文件、清理）都在
--- 付这笔钱。
 CREATE INDEX IF NOT EXISTS idx_chunks_parent  ON chunks(parent_id);
 
--- Document / Section / Child 分层索引（v7 M2）。Document 与 Section 表示按
--- index_version 保存，contents.active_index_version 是唯一激活指针。
 CREATE TABLE IF NOT EXISTS document_representations (
     id                   INTEGER PRIMARY KEY,
     content_id           INTEGER NOT NULL REFERENCES contents(id) ON DELETE CASCADE,
     index_version        INTEGER NOT NULL,
     title                TEXT NOT NULL DEFAULT '',
     summary_text         TEXT NOT NULL DEFAULT '',
-    -- 检索用主题摘要（本机 Ollama 生成，可为 NULL）。summary_text 是
-    -- full_text[:1000] 的截断，只带正文开头的词；abstract 带的是**主题**
-    -- 词汇，让「哪份资料讲了 X」这类查询能在文档路上命中。两者一起进
-    -- documents_fts，abstract 在前。缺失时索引文本与未引入本列时一致。
     abstract             TEXT,
-    -- 生成它的模型标识。换模型后可据此判断哪些摘要需要重生成。
     abstract_model       TEXT,
     full_text            TEXT NOT NULL DEFAULT '',
     text_hash            TEXT NOT NULL,
@@ -197,7 +168,7 @@ CREATE TABLE IF NOT EXISTS sections (
 CREATE TABLE IF NOT EXISTS index_versions (
     content_id    INTEGER NOT NULL REFERENCES contents(id) ON DELETE CASCADE,
     version       INTEGER NOT NULL,
-    status        TEXT NOT NULL, -- building / active / superseded / failed
+    status        TEXT NOT NULL,
     document_hash TEXT,
     section_count INTEGER NOT NULL DEFAULT 0,
     chunk_count   INTEGER NOT NULL DEFAULT 0,
@@ -213,10 +184,9 @@ CREATE INDEX IF NOT EXISTS idx_sections_version
     ON sections(content_id, index_version, ordinal);
 CREATE INDEX IF NOT EXISTS idx_sections_parent ON sections(parent_id);
 
--- 任务队列（§9 tasks）
 CREATE TABLE IF NOT EXISTS tasks (
     id             INTEGER PRIMARY KEY,
-    file_id        INTEGER REFERENCES files(id) ON DELETE CASCADE,  -- 非文件级任务为 NULL
+    file_id        INTEGER REFERENCES files(id) ON DELETE CASCADE,
     kind           TEXT NOT NULL,
     payload        TEXT,
     status         TEXT NOT NULL DEFAULT 'pending',
@@ -228,31 +198,28 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_at     REAL NOT NULL
 );
 
--- 防止同一文件的同类任务重复入队（FSEvents 抖动时极易发生）
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_dedup
     ON tasks(kind, file_id) WHERE status IN ('pending', 'running');
 
--- 写盘操作日志（§9 operations）：只记录真正写盘的动作
 CREATE TABLE IF NOT EXISTS operations (
     id            INTEGER PRIMARY KEY,
     file_id       INTEGER REFERENCES files(id) ON DELETE CASCADE,
-    kind          TEXT NOT NULL,   -- preserve / archive_move
+    kind          TEXT NOT NULL,
     src_path      TEXT,
     dst_path      TEXT,
-    method        TEXT,            -- copy / copy_verify_delete
+    method        TEXT,
     sha256_before TEXT,
     undone        INTEGER NOT NULL DEFAULT 0,
     created_at    REAL NOT NULL
 );
 
--- 分类变更历史（§9 file_history）：批量操作靠 batch_id 整批撤销
 CREATE TABLE IF NOT EXISTS file_history (
     id       INTEGER PRIMARY KEY,
     file_id  INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
     field    TEXT NOT NULL,
     old      TEXT,
     new      TEXT,
-    by       TEXT NOT NULL,   -- rule / llm / user
+    by       TEXT NOT NULL,
     batch_id TEXT,
     rule_id  INTEGER,
     at       REAL NOT NULL
@@ -263,9 +230,6 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT
 );
 
--- 文件书（§9 books / B7）：虚拟集合，一个文件可属多本书。
--- 与分类互补：分类单选表达"是什么"，书多选表达"为哪件事收集"。
--- 书内可限定检索与问答范围（filters.book_id）。
 CREATE TABLE IF NOT EXISTS books (
     id         INTEGER PRIMARY KEY,
     name       TEXT NOT NULL UNIQUE,
@@ -279,33 +243,11 @@ CREATE TABLE IF NOT EXISTS book_members (
     PRIMARY KEY (book_id, file_id)
 );
 
--- 用户排除的目录子树（2026-08-18）。
---
--- 为什么必须交给用户而不是靠启发式：入库白名单按**扩展名**过滤，而 .md
--- 同时是用户笔记和每个代码仓库样板的格式。实测真实库里 .md 占可见文件
--- 41%，大头是克隆的第三方项目的 docs/。试过按目录名（docs/）自动排除，
--- 但那会连用户**自己**项目的设计文档一起删掉 —— InkHole/docs 下的
--- 「墨洞项目计划」正是 gold 评测 X07 题依赖的资料。第三方项目与自己的
--- 项目在路径上无法区分，只有用户知道，所以由用户按目录排除。
---
--- 只影响索引层：排除不移动、不改名、不删除磁盘上的任何文件，
--- 文件记录也保留（置为 ignored），取消排除后重新扫描即可恢复。
 CREATE TABLE IF NOT EXISTS excluded_paths (
     path       TEXT PRIMARY KEY,
     created_at REAL NOT NULL
 );
 
--- 中文全文检索双索引（§9.1，M0 实测确认必须双路）
---
--- FTS5 默认 unicode61 对中文零命中：整段汉字被当作一个 token。
--- jieba 主索引负责成词查询，trigram 副索引兜底子串、编号、错别字。
--- 两个都是 content='' 的外部内容表，rowid 对齐 chunks.id。
---
--- contentless_delete=1 不可省：content='' 的表默认**不支持 DELETE**
--- （SQLite 报 "cannot DELETE from contentless fts5 table"）。缺了它，
--- 删除文件或来源时索引清不掉，搜索会命中已消失的分片 —— 库只能进不能出。
--- 替代方案 INSERT INTO t(t,rowid,text) VALUES('delete',...) 要求提供
--- 被删行的原文，而删除时原文往往已不存在，不可行。
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
     text, content='', contentless_delete=1, tokenize='unicode61'
 );
@@ -322,26 +264,14 @@ CREATE VIRTUAL TABLE IF NOT EXISTS sections_fts USING fts5(
     text, content='', contentless_delete=1, tokenize='unicode61'
 );
 
--- 调查日志：把每次成功问答的结论沉淀下来，让「我上次查过这个」能被找回。
---
--- **它是导航面，不是证据面。** journal.answer 是模型自己的输出，不是库内
--- 原文。绝不把它当证据喂回 LLM 上下文 —— 那样模型可能引用"自己上次说的
--- 话"而不是原文，H8 的证据链就断了。它只用来回答「我以前问过什么、当时
--- 引了哪些文件」，引用仍指向真实 content。
---
--- 只记 status='answered' 的回答：拒答没有结论可沉淀，记下来只会让下次
--- 检索命中一堆"查不到"。
 CREATE TABLE IF NOT EXISTS journal (
-    id           INTEGER PRIMARY KEY,
-    question     TEXT NOT NULL,
-    answer       TEXT NOT NULL,
-    -- 回答引用到的 content id（JSON 数组）。存 content 而非 chunk：分片会
-    -- 随重建索引换 id，content 的身份跨重建稳定。
-    content_ids  TEXT NOT NULL DEFAULT '[]',
-    -- 提问时的检索范围，回看时能还原上下文；文件书被删则置空。
-    book_id      INTEGER REFERENCES books(id) ON DELETE SET NULL,
-    model        TEXT NOT NULL DEFAULT '',
-    created_at   REAL NOT NULL
+    id          INTEGER PRIMARY KEY,
+    question    TEXT NOT NULL,
+    answer      TEXT NOT NULL,
+    content_ids TEXT NOT NULL DEFAULT '[]',
+    book_id     INTEGER REFERENCES books(id) ON DELETE SET NULL,
+    model       TEXT NOT NULL DEFAULT '',
+    created_at  REAL NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_journal_created ON journal(created_at DESC);
@@ -351,11 +281,18 @@ CREATE VIRTUAL TABLE IF NOT EXISTS journal_fts USING fts5(
 );
 """
 
+# Keep the AI Library schema in one domain-owned place while making it part of
+# normal database initialization.  Old v2 applications now correctly reject a
+# database upgraded to v3 instead of opening it with incomplete semantics.
+from app.library.core import LIBRARY_SCHEMA
+
+SCHEMA = f"{SCHEMA}\n{LIBRARY_SCHEMA}"
+
 DEFAULT_SETTINGS = {
     "db_schema_version": str(SCHEMA_VERSION),
-    "cloud_index_placeholders": "0",   # iCloud 占位文件默认不索引（§7.8）
-    "privacy_cloud_ai_enabled": "0",   # 云端 AI 默认关闭（§1 约束 3）
+    "cloud_index_placeholders": "0",
+    "privacy_cloud_ai_enabled": "0",
     "confidence_threshold": "0.6",
-    "ocr_enabled": "1",                # 扫描件 OCR（macOS Vision，纯本地）默认开
-    "answer_max_tokens": "auto",       # 问答输出上限："auto"=跟随所选模型
+    "ocr_enabled": "1",
+    "answer_max_tokens": "auto",
 }
