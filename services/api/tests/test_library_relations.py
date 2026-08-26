@@ -4,8 +4,9 @@ import numpy as np
 
 from app.db import database
 from app.library.core import sync_library_items
+from app.library.query import library_item_detail
 import app.library.relations as relations
-from app.library.relations import apply_relation_plan, build_relation_plan
+from app.library.relations import apply_relation_plan, build_relation_plan, relation_status
 
 
 def _seed():
@@ -51,21 +52,25 @@ def _fake_vectors():
     return {key: value / np.linalg.norm(value) for key, value in raw.items()}
 
 
-def test_relation_plan_uses_mutual_top_k_and_existing_vectors(monkeypatch) -> None:
-    conn = _seed()
+def _plan(conn, monkeypatch):
     vectors = _fake_vectors()
-
-    def fake_vectors_for(_conn, chunk_ids):
-        return {cid: vectors[cid] for cid in chunk_ids if cid in vectors}
-
-    monkeypatch.setattr(relations.vector, "vectors_for", fake_vectors_for)
-    plan = build_relation_plan(
+    monkeypatch.setattr(
+        relations.vector,
+        "vectors_for",
+        lambda _conn, ids: {cid: vectors[cid] for cid in ids if cid in vectors},
+    )
+    return build_relation_plan(
         conn,
         limit=10,
         top_k=1,
         min_score=0.60,
         chunks_per_item=1,
     )
+
+
+def test_relation_plan_uses_mutual_top_k_and_existing_vectors(monkeypatch) -> None:
+    conn = _seed()
+    plan = _plan(conn, monkeypatch)
 
     item_by_content = {
         int(row["content_id"]): int(row["id"])
@@ -89,20 +94,69 @@ def test_relation_plan_uses_mutual_top_k_and_existing_vectors(monkeypatch) -> No
         )
     }
     assert stored == expected_pairs
+    versions = conn.execute(
+        """SELECT source_item_id,target_item_id,source_input_hash,target_input_hash
+           FROM library_relation_versions ORDER BY source_item_id,target_item_id"""
+    ).fetchall()
+    assert len(versions) == 2
+    for row in versions:
+        source_hash = conn.execute(
+            "SELECT input_hash FROM library_items WHERE id=?",
+            (row["source_item_id"],),
+        ).fetchone()[0]
+        target_hash = conn.execute(
+            "SELECT input_hash FROM library_items WHERE id=?",
+            (row["target_item_id"],),
+        ).fetchone()[0]
+        assert row["source_input_hash"] == source_hash
+        assert row["target_input_hash"] == target_hash
+
+    status = relation_status(conn)
+    assert status["relations"] == 2
+    assert status["stale_relations"] == 0
+    assert status["covered_items"] == 4
+    assert status["coverage"] == 1.0
+    assert status["needs_rebuild"] is False
+    conn.close()
+
+
+def test_relation_versions_hide_stale_edge_but_keep_other_cluster(monkeypatch) -> None:
+    conn = _seed()
+    plan = _plan(conn, monkeypatch)
+    apply_relation_plan(conn, plan, now=20)
+    conn.commit()
+
+    os_a = conn.execute(
+        "SELECT id FROM library_items WHERE content_id=1"
+    ).fetchone()[0]
+    os_b = conn.execute(
+        "SELECT id FROM library_items WHERE content_id=2"
+    ).fetchone()[0]
+
+    # Simulate the normal sync step after this Library item's active document
+    # changed. The relation version snapshot still points to the previous hash.
+    conn.execute(
+        "UPDATE library_items SET input_hash='new-library-version' WHERE id=?",
+        (os_a,),
+    )
+    conn.commit()
+
+    status = relation_status(conn)
+    assert status["relations"] == 1
+    assert status["stale_relations"] == 1
+    assert status["covered_items"] == 2
+    assert status["coverage"] == 0.5
+    assert status["needs_rebuild"] is True
+
+    detail = library_item_detail(conn, os_b)
+    assert detail is not None
+    assert all(related["id"] != os_a for related in detail["related"])
     conn.close()
 
 
 def test_relation_apply_rejects_active_document_change_without_library_sync(monkeypatch) -> None:
     conn = _seed()
-    vectors = _fake_vectors()
-    monkeypatch.setattr(
-        relations.vector,
-        "vectors_for",
-        lambda _conn, ids: {cid: vectors[cid] for cid in ids if cid in vectors},
-    )
-    plan = build_relation_plan(
-        conn, limit=10, top_k=1, min_score=0.60, chunks_per_item=1,
-    )
+    plan = _plan(conn, monkeypatch)
 
     changed_item = conn.execute(
         "SELECT id FROM library_items WHERE content_id=1"
@@ -125,6 +179,7 @@ def test_relation_apply_rejects_active_document_change_without_library_sync(monk
            WHERE source_item_id=? OR target_item_id=?""",
         (changed_item, changed_item),
     ).fetchone()
-    # The unrelated RAG cluster is still safe to apply.
+    # The unrelated RAG cluster is still safe to apply and gets a version row.
     assert result["relations"] == 1
+    assert conn.execute("SELECT COUNT(*) FROM library_relation_versions").fetchone()[0] == 1
     conn.close()
