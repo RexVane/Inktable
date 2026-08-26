@@ -269,9 +269,10 @@ def apply_relation_plan(
             "truncated": plan.truncated,
         }
 
-    # Remove old derived edges touching this rebuilt subset first. If an item
-    # changed since planning, it intentionally stays relation-less until the
-    # next rebuild rather than keeping a now-stale similarity edge.
+    # Remove old derived edges touching this rebuilt subset first. Their version
+    # snapshots cascade automatically. If an item changed since planning, it
+    # intentionally stays relation-less until the next rebuild rather than
+    # keeping a now-stale similarity edge.
     for start in range(0, len(processed_ids), _SQL_BATCH):
         batch = processed_ids[start : start + _SQL_BATCH]
         marks = ",".join("?" * len(batch))
@@ -328,6 +329,28 @@ def apply_relation_plan(
                          created_at=excluded.created_at""",
         rows,
     )
+
+    version_rows = [
+        (
+            left,
+            right,
+            expected[left],
+            expected[right],
+            ts,
+        )
+        for left, right, _score, _source, _created_at in rows
+    ]
+    conn.executemany(
+        """INSERT INTO library_relation_versions
+           (source_item_id,target_item_id,relation_type,
+            source_input_hash,target_input_hash,created_at)
+           VALUES (?,?,'related_to',?,?,?)
+           ON CONFLICT(source_item_id,target_item_id,relation_type)
+           DO UPDATE SET source_input_hash=excluded.source_input_hash,
+                         target_input_hash=excluded.target_input_hash,
+                         created_at=excluded.created_at""",
+        version_rows,
+    )
     return {
         "processed": len(plan.items),
         "vectorized": plan.vectorized,
@@ -339,4 +362,66 @@ def apply_relation_plan(
         "min_score": plan.min_score,
         "chunks_per_item": plan.chunks_per_item,
         "source": RELATION_SOURCE,
+    }
+
+
+def relation_status(conn: sqlite3.Connection) -> dict:
+    """Return visibility-aware freshness information for derived relations."""
+    item_visible = visible_content_exists("li.content_id", "ivf", "ivs")
+    total_visible = int(
+        conn.execute(
+            f"SELECT COUNT(*) FROM library_items li WHERE {item_visible}"
+        ).fetchone()[0]
+    )
+
+    source_visible = visible_content_exists("src.content_id", "svf", "svs")
+    target_visible = visible_content_exists("dst.content_id", "tvf", "tvs")
+    rows = conn.execute(
+        f"""SELECT rel.source_item_id, rel.target_item_id, rel.created_at,
+                   src.input_hash AS source_current_hash,
+                   dst.input_hash AS target_current_hash,
+                   rv.source_input_hash, rv.target_input_hash,
+                   rv.created_at AS version_created_at
+            FROM library_relations rel
+            JOIN library_items src ON src.id = rel.source_item_id
+            JOIN library_items dst ON dst.id = rel.target_item_id
+            LEFT JOIN library_relation_versions rv
+              ON rv.source_item_id = rel.source_item_id
+             AND rv.target_item_id = rel.target_item_id
+             AND rv.relation_type = rel.relation_type
+            WHERE rel.relation_type='related_to' AND rel.source=?
+              AND {source_visible}
+              AND {target_visible}""",
+        (RELATION_SOURCE,),
+    ).fetchall()
+
+    valid_edges = 0
+    stale_edges = 0
+    covered: set[int] = set()
+    latest: float | None = None
+    for row in rows:
+        valid = (
+            row["source_input_hash"] is not None
+            and row["target_input_hash"] is not None
+            and str(row["source_input_hash"]) == str(row["source_current_hash"])
+            and str(row["target_input_hash"]) == str(row["target_current_hash"])
+        )
+        if not valid:
+            stale_edges += 1
+            continue
+        valid_edges += 1
+        covered.add(int(row["source_item_id"]))
+        covered.add(int(row["target_item_id"]))
+        created = float(row["version_created_at"] or row["created_at"] or 0)
+        latest = created if latest is None else max(latest, created)
+
+    return {
+        "source": RELATION_SOURCE,
+        "total_visible": total_visible,
+        "relations": valid_edges,
+        "stale_relations": stale_edges,
+        "covered_items": len(covered),
+        "coverage": (len(covered) / total_visible) if total_visible else 0.0,
+        "updated_at": latest,
+        "needs_rebuild": bool(stale_edges) or (total_visible >= 2 and valid_edges == 0),
     }
