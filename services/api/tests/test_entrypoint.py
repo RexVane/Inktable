@@ -14,6 +14,7 @@ def test_entrypoint_reuses_existing_sidecar_app_and_mounts_library_routes_once()
     assert "/library/enrichment/status" in paths
     assert "/library/sync" in paths
     assert "/library/enrich" in paths
+    assert "/library/relations/rebuild" in paths
 
     before = len(entrypoint.app.routes)
     entrypoint.install_feature_routers()
