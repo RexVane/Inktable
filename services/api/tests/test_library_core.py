@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 from app.library.core import (
+    compute_input_hash,
     ensure_library_schema,
     get_library_item,
     replace_library_item_tags,
@@ -56,7 +57,8 @@ def _db() -> sqlite3.Connection:
             index_version INTEGER NOT NULL,
             title TEXT NOT NULL DEFAULT '',
             abstract TEXT,
-            abstract_model TEXT
+            abstract_model TEXT,
+            text_hash TEXT
         );
         """
     )
@@ -80,12 +82,13 @@ def _content(conn: sqlite3.Connection, *, cid: int, sha: str, name: str, ext: st
 
 def test_sync_creates_one_item_per_content_and_is_idempotent() -> None:
     conn = _db()
-    _content(conn, cid=1, sha="a" * 64, name="操作系统.pdf", ext="pdf")
+    sha = "a" * 64
+    _content(conn, cid=1, sha=sha, name="操作系统.pdf", ext="pdf")
     conn.execute(
         """
         INSERT INTO document_representations
-            (content_id, index_version, title, abstract, abstract_model)
-        VALUES (1, 1, '操作系统', '进程、内存与文件系统', 'ollama:bge-summary')
+            (content_id, index_version, title, abstract, abstract_model, text_hash)
+        VALUES (1, 1, '操作系统', '进程、内存与文件系统', 'ollama:bge-summary', 'doc-v1')
         """
     )
 
@@ -99,7 +102,44 @@ def test_sync_creates_one_item_per_content_and_is_idempotent() -> None:
     assert row["item_type"] == "pdf"
     assert row["summary"] == "进程、内存与文件系统"
     assert row["enrichment_status"] == "ready"
-    assert row["input_hash"] == "a" * 64
+    assert row["input_hash"] == compute_input_hash(sha, 1, "doc-v1")
+
+
+def test_reindex_same_file_marks_existing_enrichment_stale() -> None:
+    conn = _db()
+    sha = "a" * 64
+    _content(conn, cid=1, sha=sha, name="scan.pdf", ext="pdf")
+    conn.execute(
+        "INSERT INTO document_representations(content_id,index_version,title,text_hash) "
+        "VALUES (1,1,'扫描件','ocr-v1')"
+    )
+    sync_library_items(conn, now=10)
+    item = conn.execute("SELECT * FROM library_items").fetchone()
+    old_hash = item["input_hash"]
+    assert update_enrichment(
+        conn,
+        item["id"],
+        summary="第一版 OCR 摘要",
+        category_id=None,
+        model="qwen3:8b",
+        prompt_version="library-enrichment-v1",
+        input_hash=old_hash,
+        now=15,
+    )
+
+    # File bytes are identical; only the active parsed/OCR representation changed.
+    conn.execute(
+        "INSERT INTO document_representations(content_id,index_version,title,text_hash) "
+        "VALUES (1,2,'扫描件','ocr-v2')"
+    )
+    conn.execute("UPDATE contents SET active_index_version=2 WHERE id=1")
+
+    result = sync_library_items(conn, now=20)
+    current = conn.execute("SELECT * FROM library_items").fetchone()
+    assert result["stale"] == 1
+    assert current["enrichment_status"] == "stale"
+    assert current["input_hash"] == compute_input_hash(sha, 2, "ocr-v2")
+    assert current["input_hash"] != old_hash
 
 
 def test_ignored_only_content_is_not_promoted_to_library() -> None:
@@ -160,32 +200,40 @@ def test_missing_file_requires_preservation_copy() -> None:
     assert conn.execute("SELECT COUNT(*) FROM library_items").fetchone()[0] == 1
 
 
-def test_enrichment_rejects_stale_worker_result() -> None:
+def test_enrichment_rejects_result_when_active_document_changed_without_sync() -> None:
     conn = _db()
-    _content(conn, cid=1, sha="a" * 64, name="notes.md", ext="md")
+    sha = "a" * 64
+    _content(conn, cid=1, sha=sha, name="notes.md", ext="md")
+    conn.execute(
+        "INSERT INTO document_representations(content_id,index_version,title,text_hash) "
+        "VALUES (1,1,'notes','doc-v1')"
+    )
     sync_library_items(conn, now=10)
     item = conn.execute("SELECT * FROM library_items").fetchone()
+    old_hash = item["input_hash"]
 
-    # Simulate content identity changing before an asynchronous model call returns.
+    # The parser/OCR activates a new representation before the asynchronous
+    # model call returns, and Library sync has not run yet.
     conn.execute(
-        "UPDATE library_items SET input_hash = ?, enrichment_status = 'stale' WHERE id = ?",
-        ("b" * 64, item["id"]),
+        "INSERT INTO document_representations(content_id,index_version,title,text_hash) "
+        "VALUES (1,2,'notes','doc-v2')"
     )
+    conn.execute("UPDATE contents SET active_index_version=2 WHERE id=1")
+
     accepted = update_enrichment(
         conn,
         item["id"],
         summary="old answer",
         category_id=None,
         model="qwen3:8b",
-        prompt_version="library-v1",
-        input_hash="a" * 64,
+        prompt_version="library-enrichment-v1",
+        input_hash=old_hash,
         now=20,
     )
 
     assert accepted is False
     current = get_library_item(conn, item["id"])
     assert current["summary"] == ""
-    assert current["enrichment_status"] == "stale"
 
 
 def test_tags_use_existing_controlled_vocabulary() -> None:
