@@ -23,6 +23,7 @@ import numpy as np
 
 from app.db.visibility import visible_content_exists
 from app.index import vector
+from app.library.core import compute_input_hash
 
 
 DEFAULT_LIMIT = 1000
@@ -255,7 +256,7 @@ def apply_relation_plan(
     *,
     now: float | None = None,
 ) -> dict:
-    """Apply a relation plan, rejecting items whose model-input version changed."""
+    """Apply a relation plan, rejecting items whose active document changed."""
     ts = time.time() if now is None else float(now)
     processed_ids = [item.item_id for item in plan.items]
     if not processed_ids:
@@ -288,14 +289,28 @@ def apply_relation_plan(
         batch = processed_ids[start : start + _SQL_BATCH]
         marks = ",".join("?" * len(batch))
         rows = conn.execute(
-            f"""SELECT li.id, li.input_hash
+            f"""SELECT li.id, li.input_hash AS stored_input_hash,
+                       c.sha256 AS content_sha, c.active_index_version,
+                       dr.text_hash AS document_text_hash
                 FROM library_items li
+                JOIN contents c ON c.id = li.content_id
+                LEFT JOIN document_representations dr
+                  ON dr.content_id = c.id
+                 AND dr.index_version = c.active_index_version
                 WHERE li.id IN ({marks}) AND {visible}""",
             batch,
         ).fetchall()
         for row in rows:
             item_id = int(row["id"])
-            if str(row["input_hash"]) == expected[item_id]:
+            current = compute_input_hash(
+                str(row["content_sha"]),
+                row["active_index_version"],
+                row["document_text_hash"],
+            )
+            if (
+                current == expected[item_id]
+                and str(row["stored_input_hash"]) == expected[item_id]
+            ):
                 valid.add(item_id)
 
     rows = [
