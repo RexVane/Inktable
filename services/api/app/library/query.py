@@ -6,6 +6,7 @@ import sqlite3
 
 from app.db.visibility import visible_content_exists, visible_files_condition
 from app.library.core import get_library_item, list_library_items
+from app.library.relations import RELATION_SOURCE
 
 
 def library_page(
@@ -85,6 +86,9 @@ def library_item_detail(conn: sqlite3.Connection, item_id: int) -> dict | None:
     ]
 
     # Relations are useful only if the other endpoint is currently visible.
+    # Automatically derived edges are also versioned: an OCR/parser/index
+    # change invalidates the old edge until the relation builder runs again.
+    # Manual/future non-derived relations are not subject to this AI lifecycle.
     other_visible = visible_content_exists("other.content_id", "vf", "vs")
     related = [
         dict(row)
@@ -93,16 +97,29 @@ def library_item_detail(conn: sqlite3.Connection, item_id: int) -> dict | None:
                        other.summary, other.enrichment_status,
                        rel.score, rel.source, rel.relation_type
                 FROM library_relations rel
+                JOIN library_items src ON src.id = rel.source_item_id
+                JOIN library_items dst ON dst.id = rel.target_item_id
                 JOIN library_items other
                   ON other.id = CASE
                        WHEN rel.source_item_id = ? THEN rel.target_item_id
                        ELSE rel.source_item_id
                      END
+                LEFT JOIN library_relation_versions rv
+                  ON rv.source_item_id = rel.source_item_id
+                 AND rv.target_item_id = rel.target_item_id
+                 AND rv.relation_type = rel.relation_type
                 WHERE (rel.source_item_id = ? OR rel.target_item_id = ?)
                   AND {other_visible}
+                  AND (
+                       rel.source != ?
+                       OR (
+                            rv.source_input_hash = src.input_hash
+                            AND rv.target_input_hash = dst.input_hash
+                       )
+                  )
                 ORDER BY COALESCE(rel.score, 0) DESC, other.id
                 LIMIT 24""",
-            (item_id, item_id, item_id),
+            (item_id, item_id, item_id, RELATION_SOURCE),
         ).fetchall()
     ]
 
@@ -145,9 +162,21 @@ def library_stats(conn: sqlite3.Connection) -> dict:
                 FROM library_relations rel
                 JOIN library_items src ON src.id = rel.source_item_id
                 JOIN library_items dst ON dst.id = rel.target_item_id
+                LEFT JOIN library_relation_versions rv
+                  ON rv.source_item_id = rel.source_item_id
+                 AND rv.target_item_id = rel.target_item_id
+                 AND rv.relation_type = rel.relation_type
                 WHERE rel.relation_type = 'related_to'
                   AND {source_visible}
-                  AND {target_visible}"""
+                  AND {target_visible}
+                  AND (
+                       rel.source != ?
+                       OR (
+                            rv.source_input_hash = src.input_hash
+                            AND rv.target_input_hash = dst.input_hash
+                       )
+                  )""",
+            (RELATION_SOURCE,),
         ).fetchone()[0]
     )
     return {
