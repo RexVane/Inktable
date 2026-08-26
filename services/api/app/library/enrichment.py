@@ -32,7 +32,7 @@ from app.library.core import (
 )
 
 
-PROMPT_VERSION = "library-enrichment-v1"
+PROMPT_VERSION = "library-enrichment-v2"
 DEFAULT_BATCH = 3
 MAX_BATCH = 10
 LEASE_SECONDS = 15 * 60
@@ -140,7 +140,6 @@ def _document_packet(conn: sqlite3.Connection, claim: EnrichmentClaim) -> dict |
     """Build a bounded model input without exposing filesystem paths."""
     row = conn.execute(
         """SELECT li.title, c.active_index_version,
-                  dr.summary_text, dr.abstract,
                   length(dr.full_text) AS text_length,
                   substr(dr.full_text, 1, ?) AS head,
                   CASE WHEN length(dr.full_text) > ?
@@ -176,7 +175,9 @@ def _document_packet(conn: sqlite3.Connection, claim: EnrichmentClaim) -> dict |
         body += "\n\n[中间内容为控制上下文长度而省略]\n\n" + tail
     return {
         "title": str(row["title"] or claim.title or "未命名文档")[:300],
-        "summary_hint": str(row["abstract"] or row["summary_text"] or "")[:1200],
+        # document_representations.abstract is intentionally absent. It is a
+        # keyword-dense retrieval artifact, not input to the user-facing
+        # knowledge-card summary. The worker summarizes bounded source text.
         "headings": headings,
         "body": body,
         "text_length": int(row["text_length"] or 0),
@@ -233,7 +234,6 @@ def _prompt(packet: dict, categories: list[dict], tags: list[dict]) -> str:
 
 文档标题：{packet['title']}
 文档总字符数：{packet['text_length']}
-已有检索摘要提示：{packet['summary_hint'] or '（无）'}
 结构标题：
 {headings}
 

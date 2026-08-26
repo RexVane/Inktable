@@ -5,8 +5,53 @@ from __future__ import annotations
 import sqlite3
 
 from app.db.visibility import visible_content_exists, visible_files_condition
-from app.library.core import get_library_item, list_library_items
-from app.library.relations import RELATION_SOURCE
+from app.library.core import (
+    compute_input_hash,
+    get_library_item,
+    list_library_items,
+)
+from app.library.relations import RELATION_SOURCE, relation_status
+
+
+_RELATION_VERSION_COLUMNS = (
+    "source_stored_hash",
+    "target_stored_hash",
+    "source_content_sha",
+    "source_active_index_version",
+    "source_document_text_hash",
+    "target_content_sha",
+    "target_active_index_version",
+    "target_document_text_hash",
+    "source_input_hash",
+    "target_input_hash",
+)
+
+
+def _derived_relation_is_fresh(row: sqlite3.Row) -> bool:
+    """Check an edge against the active document, not only Library metadata.
+
+    A parser/OCR worker can activate a new document generation before the next
+    Library sync runs. Read paths must hide the old derived edge during that
+    window as well; otherwise a stale relation briefly becomes user-visible.
+    """
+    source_current = compute_input_hash(
+        str(row["source_content_sha"]),
+        row["source_active_index_version"],
+        row["source_document_text_hash"],
+    )
+    target_current = compute_input_hash(
+        str(row["target_content_sha"]),
+        row["target_active_index_version"],
+        row["target_document_text_hash"],
+    )
+    return (
+        row["source_input_hash"] is not None
+        and row["target_input_hash"] is not None
+        and str(row["source_input_hash"]) == source_current
+        and str(row["target_input_hash"]) == target_current
+        and str(row["source_stored_hash"]) == source_current
+        and str(row["target_stored_hash"]) == target_current
+    )
 
 
 def library_page(
@@ -90,38 +135,54 @@ def library_item_detail(conn: sqlite3.Connection, item_id: int) -> dict | None:
     # change invalidates the old edge until the relation builder runs again.
     # Manual/future non-derived relations are not subject to this AI lifecycle.
     other_visible = visible_content_exists("other.content_id", "vf", "vs")
-    related = [
-        dict(row)
-        for row in conn.execute(
-            f"""SELECT other.id, other.content_id, other.title, other.item_type,
-                       other.summary, other.enrichment_status,
-                       rel.score, rel.source, rel.relation_type
-                FROM library_relations rel
-                JOIN library_items src ON src.id = rel.source_item_id
-                JOIN library_items dst ON dst.id = rel.target_item_id
-                JOIN library_items other
-                  ON other.id = CASE
-                       WHEN rel.source_item_id = ? THEN rel.target_item_id
-                       ELSE rel.source_item_id
-                     END
-                LEFT JOIN library_relation_versions rv
-                  ON rv.source_item_id = rel.source_item_id
-                 AND rv.target_item_id = rel.target_item_id
-                 AND rv.relation_type = rel.relation_type
-                WHERE (rel.source_item_id = ? OR rel.target_item_id = ?)
-                  AND {other_visible}
-                  AND (
-                       rel.source != ?
-                       OR (
-                            rv.source_input_hash = src.input_hash
-                            AND rv.target_input_hash = dst.input_hash
-                       )
-                  )
-                ORDER BY COALESCE(rel.score, 0) DESC, other.id
-                LIMIT 24""",
-            (item_id, item_id, item_id, RELATION_SOURCE),
-        ).fetchall()
-    ]
+    relation_rows = conn.execute(
+        f"""SELECT other.id, other.content_id, other.title, other.item_type,
+                   other.summary, other.enrichment_status,
+                   rel.score, rel.source, rel.relation_type,
+                   src.input_hash AS source_stored_hash,
+                   dst.input_hash AS target_stored_hash,
+                   src_c.sha256 AS source_content_sha,
+                   src_c.active_index_version AS source_active_index_version,
+                   src_dr.text_hash AS source_document_text_hash,
+                   dst_c.sha256 AS target_content_sha,
+                   dst_c.active_index_version AS target_active_index_version,
+                   dst_dr.text_hash AS target_document_text_hash,
+                   rv.source_input_hash, rv.target_input_hash
+            FROM library_relations rel
+            JOIN library_items src ON src.id = rel.source_item_id
+            JOIN library_items dst ON dst.id = rel.target_item_id
+            JOIN contents src_c ON src_c.id = src.content_id
+            JOIN contents dst_c ON dst_c.id = dst.content_id
+            LEFT JOIN document_representations src_dr
+              ON src_dr.content_id = src_c.id
+             AND src_dr.index_version = src_c.active_index_version
+            LEFT JOIN document_representations dst_dr
+              ON dst_dr.content_id = dst_c.id
+             AND dst_dr.index_version = dst_c.active_index_version
+            JOIN library_items other
+              ON other.id = CASE
+                   WHEN rel.source_item_id = ? THEN rel.target_item_id
+                   ELSE rel.source_item_id
+                 END
+            LEFT JOIN library_relation_versions rv
+              ON rv.source_item_id = rel.source_item_id
+             AND rv.target_item_id = rel.target_item_id
+             AND rv.relation_type = rel.relation_type
+            WHERE (rel.source_item_id = ? OR rel.target_item_id = ?)
+              AND {other_visible}
+            ORDER BY COALESCE(rel.score, 0) DESC, other.id""",
+        (item_id, item_id, item_id),
+    ).fetchall()
+    related = []
+    for row in relation_rows:
+        if row["source"] == RELATION_SOURCE and not _derived_relation_is_fresh(row):
+            continue
+        payload = dict(row)
+        for column in _RELATION_VERSION_COLUMNS:
+            payload.pop(column, None)
+        related.append(payload)
+        if len(related) >= 24:
+            break
 
     payload = dict(item)
     payload["tags"] = tags
@@ -156,29 +217,21 @@ def library_stats(conn: sqlite3.Connection) -> dict:
 
     source_visible = visible_content_exists("src.content_id", "svf", "svs")
     target_visible = visible_content_exists("dst.content_id", "tvf", "tvs")
-    related = int(
+    derived_related = int(relation_status(conn)["relations"])
+    manual_related = int(
         conn.execute(
             f"""SELECT COUNT(*)
                 FROM library_relations rel
                 JOIN library_items src ON src.id = rel.source_item_id
                 JOIN library_items dst ON dst.id = rel.target_item_id
-                LEFT JOIN library_relation_versions rv
-                  ON rv.source_item_id = rel.source_item_id
-                 AND rv.target_item_id = rel.target_item_id
-                 AND rv.relation_type = rel.relation_type
                 WHERE rel.relation_type = 'related_to'
+                  AND rel.source != ?
                   AND {source_visible}
-                  AND {target_visible}
-                  AND (
-                       rel.source != ?
-                       OR (
-                            rv.source_input_hash = src.input_hash
-                            AND rv.target_input_hash = dst.input_hash
-                       )
-                  )""",
+                  AND {target_visible}""",
             (RELATION_SOURCE,),
         ).fetchone()[0]
     )
+    related = derived_related + manual_related
     return {
         "total": total,
         "by_status": by_status,

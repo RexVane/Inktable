@@ -434,11 +434,14 @@ const API_ROUTE_RULES = [
   // file_id 是整数主键，收窄成 [0-9]+ 而非宽松的 [^/]+。
   ['GET', /^\/files\/tree(?:\?[^#]*)?$/],
   ['GET', /^\/files\/[0-9]+\/(?:detail|content)(?:\?[^#]*)?$/],
-  // AI Library 只放行当前 UI 需要的精确路由；不要用 /library/.* 这种宽白名单。
-  ['GET', /^\/library\/items(?:\?[^#]*)?$/],
+  // AI Library 只放行当前 UI 需要的精确路由和参数形状；不要用
+  // /library/.* 或任意查询串这种宽白名单。
+  ['GET', /^\/library\/items(?:\?limit=[0-9]+&offset=[0-9]+(?:&status=(?:pending|running|ready|failed|stale))?)?$/],
   ['GET', /^\/library\/items\/[0-9]+$/],
   ['GET', /^\/library\/(?:stats|enrichment\/status|relations\/status)$/],
-  ['POST', /^\/library\/(?:sync|enrich|relations\/rebuild)(?:\?[^#]*)?$/],
+  ['POST', /^\/library\/sync$/],
+  ['POST', /^\/library\/enrich(?:\?limit=[0-9]+)?$/],
+  ['POST', /^\/library\/relations\/rebuild(?:\?limit=[0-9]+&top_k=[0-9]+&min_score=-?[0-9]+(?:\.[0-9]+)?&chunks_per_item=[0-9]+)?$/],
   ['POST', /^\/(?:settings\/llm\/test|ask(?:\/stream)?|files\/(?:remove|classify)|books\/add|classify\/auto_ext|search|sources\/(?:discover|discover_deep|preview|enable|disable|remove|add|auto_preserve|preserve_all)|watch\/start|index\/(?:run|embed_backfill|retry_scanned)|settings\/(?:ocr|qa)|journal\/remove)$/],
 ];
 const MAX_API_BODY_BYTES = 1024 * 1024;

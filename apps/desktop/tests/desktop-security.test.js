@@ -7,8 +7,13 @@ const vm = require('node:vm');
 
 const desktopRoot = path.resolve(__dirname, '..');
 const rendererPath = path.join(desktopRoot, 'renderer', 'index.html');
+const libraryPath = path.join(desktopRoot, 'renderer', 'library.js');
+const libraryCssPath = path.join(desktopRoot, 'renderer', 'library.css');
 const mainPath = path.join(desktopRoot, 'electron', 'main.js');
 const renderer = fs.readFileSync(rendererPath, 'utf8');
+const library = fs.readFileSync(libraryPath, 'utf8');
+const libraryCss = fs.readFileSync(libraryCssPath, 'utf8');
+const rendererScripts = `${renderer}\n${library}`;
 const main = fs.readFileSync(mainPath, 'utf8');
 
 test('renderer HTML escaping covers text and attribute delimiters', () => {
@@ -76,15 +81,15 @@ test('renderer never receives the sidecar bearer token', () => {
   // 令牌只存在于主进程：sidecar:info 只回 { port }，无 token 字段。
   assert.match(main, /ipcMain\.handle\('sidecar:info', \(\) => \(sidecarInfo \? \{ port: sidecarInfo\.port \} : null\)\)/);
   // 渲染层与 preload 都不得再拼 Authorization / 读取 token。
-  assert.doesNotMatch(renderer, /Bearer/);
-  assert.doesNotMatch(renderer, /info\.token/);
+  assert.doesNotMatch(rendererScripts, /Bearer/);
+  assert.doesNotMatch(rendererScripts, /info\.token/);
   assert.doesNotMatch(preload, /token/);
   // 所有 sidecar 访问改走受控主进程代理。
   assert.match(preload, /apiRequest: \(req\) => ipcRenderer\.invoke\('api:request', req\)/);
   assert.match(preload, /api:stream-start/);
   assert.match(renderer, /window\.inktable\.apiRequest\(/);
   assert.match(renderer, /window\.inktable\.apiStream\(/);
-  assert.doesNotMatch(renderer, /fetch\('http:\/\/127\.0\.0\.1/);
+  assert.doesNotMatch(rendererScripts, /fetch\('http:\/\/127\.0\.0\.1/);
 });
 
 // 把 main.js 里的纯路由校验函数搬进沙箱真实执行。
@@ -104,14 +109,15 @@ function loadRouteGuard() {
 // 渲染层真实调用点。新增 api()/apiStream() 调用而忘记同步白名单时，本测试会失败。
 function rendererRequests() {
   const found = new Map();
-  for (const m of renderer.matchAll(
-    /\bapi\('([^']+)'(?:\s*,\s*\{[^}]*?method:\s*'(\w+)')?/g)) {
-    found.set(m[1], (m[2] || 'GET').toUpperCase());
+  for (const m of rendererScripts.matchAll(
+    /\bapi\('([^']+)'(?:\s*,\s*(?:\{[^}]*?method:\s*'(\w+)'|'(\w+)'))?/g)) {
+    found.set(m[1], (m[2] || m[3] || 'GET').toUpperCase());
   }
-  for (const m of renderer.matchAll(/apiStream\('([^']+)'/g)) found.set(m[1], 'POST');
-  const literal = [...found].filter(([p]) => !p.includes('+') && !p.endsWith('/'));
-  // 运行期拼接出来的路径用代表性实例覆盖；Library 路由在 UI 完成前也先
-  // 锁进安全契约，防止后端接通但主进程代理误拦。
+  for (const m of rendererScripts.matchAll(/apiStream\('([^']+)'/g)) found.set(m[1], 'POST');
+  const literal = [...found].filter(([p]) =>
+    !p.includes('+') && !p.endsWith('/') && !p.endsWith('?') && !p.endsWith('='));
+  // 运行期拼接出来的路径用代表性实例覆盖，确保两个独立 renderer
+  // 模块的调用都被主进程白名单接住。
   return [
     ...literal,
     ['/files/123/detail', 'GET'],
@@ -166,6 +172,46 @@ test('proxy allowlist rejects traversal, absolute, and unlisted routes', () => {
   assert.deepEqual(leaked, [], `allowlist leaked privileged routes: ${JSON.stringify(leaked)}`);
 });
 
+test('library proxy routes are admitted by exact method and resource shape', () => {
+  const guard = loadRouteGuard();
+  const admitted = [
+    ['GET', '/library/items'],
+    ['GET', '/library/items?limit=36&offset=0&status=ready'],
+    ['GET', '/library/items/42'],
+    ['GET', '/library/stats'],
+    ['GET', '/library/enrichment/status'],
+    ['GET', '/library/relations/status'],
+    ['POST', '/library/sync'],
+    ['POST', '/library/enrich?limit=3'],
+    ['POST', '/library/relations/rebuild?limit=1000&top_k=8&min_score=0.6&chunks_per_item=16'],
+  ];
+  for (const [method, requestPath] of admitted) {
+    assert.equal(guard.isAllowedApiRequest(method, requestPath), true,
+      `${method} ${requestPath} should be admitted`);
+  }
+
+  const rejected = [
+    ['POST', '/library/items'],
+    ['PUT', '/library/sync'],
+    ['GET', '/library/sync'],
+    ['POST', '/library/stats'],
+    ['GET', '/library/items/42/relations'],
+    ['GET', '/library/items/not-a-number'],
+    ['GET', '/library/items/42?include=private'],
+    ['GET', '/library/items?limit=36&offset=0&include=private'],
+    ['GET', '/library/items?offset=0&limit=36'],
+    ['POST', '/library/sync?force=true'],
+    ['POST', '/library/enrich?limit=3&provider=cloud'],
+    ['POST', '/library/relations/rebuild?limit=1000'],
+    ['POST', '/library/relations/rebuild/force'],
+    ['DELETE', '/library/items/42'],
+  ];
+  for (const [method, requestPath] of rejected) {
+    assert.equal(guard.isAllowedApiRequest(method, requestPath), false,
+      `${method} ${requestPath} should remain blocked`);
+  }
+});
+
 test('main process api proxy validates paths and attaches the token itself', () => {
   assert.match(main, /function isSafeApiPath\(p\)/);
   assert.match(main, /ipcMain\.handle\('api:request'/);
@@ -204,6 +250,17 @@ test('API-controlled renderer fields are escaped before HTML insertion', () => {
   assert.doesNotMatch(renderer, /\+ s\.path\.replace/);
   assert.doesNotMatch(renderer, /\+ s\.file_count \+/);
   assert.doesNotMatch(renderer, /\+ c\.tag \+/);
+});
+
+test('library UI keeps the filesystem read-only and treats cards as derived data', () => {
+  assert.match(libraryCss, /原始文件不会被移动、复制或改名/);
+  assert.match(library, /真实文件来源/);
+  assert.match(library, /window\.inktable\.revealInFinder\(path\)/);
+  assert.match(library, /item\.summary/);
+  assert.match(library, /检索专用摘要不会在这里展示/);
+  assert.match(library, /面向用户 · 与检索摘要分离/);
+  assert.doesNotMatch(library, /item\.abstract|retrieval_abstract/);
+  assert.doesNotMatch(library, /trashItem|rename|moveFile|copyFile|unlink|removeSource/);
 });
 
 test('main process has single-instance, key-clear, and timeout cleanup guards', () => {

@@ -81,8 +81,15 @@ def _visible_items(conn: sqlite3.Connection, limit: int) -> tuple[int, list[Rela
         ).fetchone()[0]
     )
     rows = conn.execute(
-        f"""SELECT li.id, li.content_id, li.input_hash
+        f"""SELECT li.id, li.content_id,
+                      c.sha256 AS content_sha,
+                      c.active_index_version,
+                      dr.text_hash AS document_text_hash
             FROM library_items li
+            JOIN contents c ON c.id = li.content_id
+            LEFT JOIN document_representations dr
+              ON dr.content_id = c.id
+             AND dr.index_version = c.active_index_version
             WHERE {visible}
             ORDER BY li.id
             LIMIT ?""",
@@ -92,7 +99,14 @@ def _visible_items(conn: sqlite3.Connection, limit: int) -> tuple[int, list[Rela
         RelationItemVersion(
             item_id=int(row["id"]),
             content_id=int(row["content_id"]),
-            input_hash=str(row["input_hash"]),
+            # Capture the version of the representation the read-only planner
+            # actually sees. The apply phase still requires library_items to
+            # have been synced to that same hash, so a stale plan cannot write.
+            input_hash=compute_input_hash(
+                str(row["content_sha"]),
+                row["active_index_version"],
+                row["document_text_hash"],
+            ),
         )
         for row in rows
     ]
@@ -378,14 +392,28 @@ def relation_status(conn: sqlite3.Connection) -> dict:
     target_visible = visible_content_exists("dst.content_id", "tvf", "tvs")
     rows = conn.execute(
         f"""SELECT rel.source_item_id, rel.target_item_id, rel.created_at,
-                   src.input_hash AS source_current_hash,
-                   dst.input_hash AS target_current_hash,
+                   src.input_hash AS source_stored_hash,
+                   dst.input_hash AS target_stored_hash,
+                   src_c.sha256 AS source_content_sha,
+                   src_c.active_index_version AS source_active_index_version,
+                   src_dr.text_hash AS source_document_text_hash,
+                   dst_c.sha256 AS target_content_sha,
+                   dst_c.active_index_version AS target_active_index_version,
+                   dst_dr.text_hash AS target_document_text_hash,
                    rv.source_input_hash, rv.target_input_hash,
                    rv.created_at AS version_created_at
-            FROM library_relations rel
-            JOIN library_items src ON src.id = rel.source_item_id
-            JOIN library_items dst ON dst.id = rel.target_item_id
-            LEFT JOIN library_relation_versions rv
+             FROM library_relations rel
+             JOIN library_items src ON src.id = rel.source_item_id
+             JOIN library_items dst ON dst.id = rel.target_item_id
+             JOIN contents src_c ON src_c.id = src.content_id
+             JOIN contents dst_c ON dst_c.id = dst.content_id
+             LEFT JOIN document_representations src_dr
+               ON src_dr.content_id = src_c.id
+              AND src_dr.index_version = src_c.active_index_version
+             LEFT JOIN document_representations dst_dr
+               ON dst_dr.content_id = dst_c.id
+              AND dst_dr.index_version = dst_c.active_index_version
+             LEFT JOIN library_relation_versions rv
               ON rv.source_item_id = rel.source_item_id
              AND rv.target_item_id = rel.target_item_id
              AND rv.relation_type = rel.relation_type
@@ -400,11 +428,23 @@ def relation_status(conn: sqlite3.Connection) -> dict:
     covered: set[int] = set()
     latest: float | None = None
     for row in rows:
+        source_current_hash = compute_input_hash(
+            str(row["source_content_sha"]),
+            row["source_active_index_version"],
+            row["source_document_text_hash"],
+        )
+        target_current_hash = compute_input_hash(
+            str(row["target_content_sha"]),
+            row["target_active_index_version"],
+            row["target_document_text_hash"],
+        )
         valid = (
             row["source_input_hash"] is not None
             and row["target_input_hash"] is not None
-            and str(row["source_input_hash"]) == str(row["source_current_hash"])
-            and str(row["target_input_hash"]) == str(row["target_current_hash"])
+            and str(row["source_input_hash"]) == source_current_hash
+            and str(row["target_input_hash"]) == target_current_hash
+            and str(row["source_stored_hash"]) == source_current_hash
+            and str(row["target_stored_hash"]) == target_current_hash
         )
         if not valid:
             stale_edges += 1

@@ -105,6 +105,40 @@ def test_sync_creates_pending_item_without_exposing_retrieval_abstract() -> None
     assert row["enrichment_model"] is None
     assert row["prompt_version"] is None
     assert row["input_hash"] == compute_input_hash(sha, 1, "doc-v1")
+    assert "abstract" not in row.keys()
+
+
+def test_retrieval_abstract_changes_do_not_invalidate_library_summary() -> None:
+    conn = _db()
+    sha = "a" * 64
+    _content(conn, cid=1, sha=sha, name="主题.pdf", ext="pdf")
+    conn.execute(
+        """INSERT INTO document_representations
+           (content_id, index_version, title, abstract, abstract_model, text_hash)
+           VALUES (1, 1, '主题', '旧检索词', 'model-v1', 'doc-v1')"""
+    )
+    sync_library_items(conn, now=10)
+    item = conn.execute("SELECT * FROM library_items").fetchone()
+    assert update_enrichment(
+        conn,
+        item["id"],
+        summary="真正面向用户的知识卡片摘要",
+        category_id=None,
+        model="qwen3:8b",
+        prompt_version="library-enrichment-v1",
+        input_hash=item["input_hash"],
+        now=20,
+    )
+
+    conn.execute(
+        "UPDATE document_representations SET abstract='新检索词' WHERE content_id=1"
+    )
+    result = sync_library_items(conn, now=30)
+    current = conn.execute("SELECT * FROM library_items").fetchone()
+
+    assert result["stale"] == 0
+    assert current["enrichment_status"] == "ready"
+    assert current["summary"] == "真正面向用户的知识卡片摘要"
 
 
 def test_sync_cleans_legacy_abstract_bootstrap_from_v3_development_build() -> None:

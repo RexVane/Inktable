@@ -281,12 +281,13 @@ CREATE VIRTUAL TABLE IF NOT EXISTS journal_fts USING fts5(
 );
 """
 
-# Keep the AI Library SQL in the domain package. CREATE statements and the v4
-# backfill are deliberately separate so ordinary read helpers never mutate the
-# database just because an item was viewed.
+# Keep the AI Library SQL in the domain package. The backfill is deliberately
+# not part of SCHEMA: on a legacy database CREATE TABLE IF NOT EXISTS cannot add
+# newer files columns such as preserved_path. init_db runs the backfill only
+# after additive migrations have completed, inside the migration transaction.
 from app.library.core import LIBRARY_BOOTSTRAP_SQL, LIBRARY_SCHEMA
 
-SCHEMA = f"{SCHEMA}\n{LIBRARY_SCHEMA}\n{LIBRARY_BOOTSTRAP_SQL}"
+SCHEMA = f"{SCHEMA}\n{LIBRARY_SCHEMA}"
 
 DEFAULT_SETTINGS = {
     "db_schema_version": str(SCHEMA_VERSION),

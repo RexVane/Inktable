@@ -21,7 +21,12 @@ from datetime import date
 from pathlib import Path
 from urllib.parse import quote
 
-from app.db.schema import DEFAULT_SETTINGS, SCHEMA, SCHEMA_VERSION
+from app.db.schema import (
+    DEFAULT_SETTINGS,
+    LIBRARY_BOOTSTRAP_SQL,
+    SCHEMA,
+    SCHEMA_VERSION,
+)
 
 # 单实例锁的平台原语：Unix 用 flock，Windows 用 msvcrt 字节区锁
 if sys.platform == "win32":
@@ -173,6 +178,10 @@ def init_db(conn: sqlite3.Connection) -> None:
     conn.execute("BEGIN")
     try:
         _migrate_schema(conn)
+        # Library rows are derived from the migrated files/contents graph. Run
+        # this only after legacy file columns exist, and keep it in the same
+        # transaction so a failed upgrade cannot leave a half-backfilled layer.
+        conn.execute(LIBRARY_BOOTSTRAP_SQL)
         _init_vec_table(conn)
         for k, v in DEFAULT_SETTINGS.items():
             conn.execute(
@@ -198,6 +207,11 @@ def _add_column(conn: sqlite3.Connection, table: str, definition: str) -> None:
 def _migrate_schema(conn: sqlite3.Connection) -> None:
     """Apply additive migrations and backfill a searchable v1 active version."""
     _repair_legacy_chunk_fts(conn)
+    # These columns are part of the Library visibility/read contract. CREATE
+    # TABLE IF NOT EXISTS cannot add them to a v1 files table, so they must
+    # exist before the post-migration Library bootstrap runs.
+    _add_column(conn, "files", "preserved_path TEXT")
+    _add_column(conn, "files", "ext TEXT")
     _add_column(
         conn, "contents", "active_index_version INTEGER NOT NULL DEFAULT 1",
     )

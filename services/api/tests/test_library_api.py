@@ -118,7 +118,7 @@ def test_library_enrich_route_delegates_bounded_batch(monkeypatch) -> None:
             'available': True,
             'provider': 'local_ollama',
             'model': 'fake',
-            'prompt_version': 'library-enrichment-v1',
+            'prompt_version': 'library-enrichment-v2',
             'claimed': 2,
             'ready': 2,
             'failed': 0,

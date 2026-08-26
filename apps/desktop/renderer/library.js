@@ -315,7 +315,7 @@
     var statusGrid = node('div', 'library-status-grid');
     statusGrid.append(
       statCard(number(stats.total), '馆藏知识条目'),
-      statCard(number(by.ready), '已完成 AI 整理'),
+      statCard(number(by.ready), '用户摘要已完成'),
       statCard(number(stats.tagged), '已有主题标签'),
       statCard(number(relations.relations), '有效相关关系')
     );
@@ -389,7 +389,7 @@
     card.appendChild(node('div', 'library-card-summary',
       item.summary || (item.enrichment_status === 'running'
         ? '本地模型正在整理这份资料…'
-        : '尚未生成知识摘要。点击“AI 整理”后会补充摘要、分类和标签。')));
+        : '尚未生成知识卡片摘要；检索专用摘要不会在这里展示。')));
     var meta = node('div', 'library-card-meta');
     if (item.category_name) meta.appendChild(node('span', '', item.category_name));
     if (item.language) meta.appendChild(node('span', '', item.language));
@@ -438,10 +438,10 @@
     shell.appendChild(head);
 
     var summaryHead = node('div', 'library-section-head');
-    summaryHead.appendChild(node('div', 'library-section-title', '知识摘要'));
-    if (item.enrichment_model) {
-      summaryHead.appendChild(node('div', 'library-section-meta', item.enrichment_model));
-    }
+    summaryHead.appendChild(node('div', 'library-section-title', '知识卡片摘要'));
+    summaryHead.appendChild(node('div', 'library-section-meta',
+      '面向用户 · 与检索摘要分离' +
+      (item.enrichment_model ? ' · ' + item.enrichment_model : '')));
     shell.appendChild(summaryHead);
     shell.appendChild(node('div', 'library-summary-box', item.summary ||
       (item.enrichment_status === 'stale'
@@ -489,13 +489,13 @@
 
   function sourceRow(source) {
     var row = node('div', 'library-source');
-    var main = node('div', 'library-source-main');
-    main.appendChild(node('div', 'library-source-name', source.name || '未命名文件'));
-    main.appendChild(node('div', 'library-source-path', source.path || source.preserved_path || ''));
-    row.appendChild(main);
-    var actions = node('div', 'library-source-actions');
     var path = source.state === 'missing' && source.preserved_path
       ? source.preserved_path : (source.path || source.preserved_path || '');
+    var main = node('div', 'library-source-main');
+    main.appendChild(node('div', 'library-source-name', source.name || '未命名文件'));
+    main.appendChild(node('div', 'library-source-path', path));
+    row.appendChild(main);
+    var actions = node('div', 'library-source-actions');
     if (path) {
       actions.appendChild(button('打开', 'library-mini', function () {
         if (window.inktable.openPath) window.inktable.openPath(path);

@@ -4,7 +4,7 @@ import numpy as np
 
 from app.db import database
 from app.library.core import sync_library_items
-from app.library.query import library_item_detail
+from app.library.query import library_item_detail, library_stats
 import app.library.relations as relations
 from app.library.relations import apply_relation_plan, build_relation_plan, relation_status
 
@@ -182,4 +182,37 @@ def test_relation_apply_rejects_active_document_change_without_library_sync(monk
     # The unrelated RAG cluster is still safe to apply and gets a version row.
     assert result["relations"] == 1
     assert conn.execute("SELECT COUNT(*) FROM library_relation_versions").fetchone()[0] == 1
+    conn.close()
+
+
+def test_relation_reads_hide_active_document_change_before_library_sync(monkeypatch) -> None:
+    conn = _seed()
+    plan = _plan(conn, monkeypatch)
+    apply_relation_plan(conn, plan, now=20)
+    conn.commit()
+
+    changed_item = conn.execute(
+        "SELECT id FROM library_items WHERE content_id=1"
+    ).fetchone()[0]
+    other_item = conn.execute(
+        "SELECT id FROM library_items WHERE content_id=2"
+    ).fetchone()[0]
+    conn.execute(
+        """INSERT INTO document_representations
+           (content_id,index_version,title,summary_text,full_text,text_hash,
+            token_count,structure_confidence)
+           VALUES (1,2,'OS A','','new parsed text','doc-v2',3,1)"""
+    )
+    conn.execute("UPDATE contents SET active_index_version=2 WHERE id=1")
+    conn.commit()
+
+    status = relation_status(conn)
+    assert status["relations"] == 1
+    assert status["stale_relations"] == 1
+    assert status["needs_rebuild"] is True
+
+    detail = library_item_detail(conn, other_item)
+    assert detail is not None
+    assert all(related["id"] != changed_item for related in detail["related"])
+    assert library_stats(conn)["relations"] == 1
     conn.close()

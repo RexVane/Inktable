@@ -77,6 +77,17 @@ def test_v1_database_is_migrated_and_existing_chunks_remain_active():
     assert conn.execute(
         "SELECT status FROM index_versions WHERE content_id = 1"
     ).fetchone()[0] == "active"
+    library_item = conn.execute(
+        "SELECT content_id, title, summary, enrichment_status FROM library_items"
+    ).fetchone()
+    assert dict(library_item) == {
+        "content_id": 1,
+        "title": "legacy.md",
+        "summary": "",
+        "enrichment_status": "pending",
+    }
+    # Migration only derives metadata; the registered source path is untouched.
+    assert conn.execute("SELECT path FROM files WHERE id=1").fetchone()[0] == "/tmp/legacy.md"
     conn.close()
 
 

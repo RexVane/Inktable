@@ -32,9 +32,11 @@ def _seed():
     )
     conn.execute(
         """INSERT INTO document_representations
-           (content_id,index_version,title,summary_text,full_text,text_hash,
+           (content_id,index_version,title,summary_text,abstract,abstract_model,
+            full_text,text_hash,
             token_count,structure_confidence)
-           VALUES (1,1,'操作系统笔记','',?, 'doc-v1',100,1)""",
+           VALUES (1,1,'操作系统笔记','','RAG_ONLY_MARKER 检索关键词同义词',
+                   'retrieval-model',?, 'doc-v1',100,1)""",
         (
             "进程调度、虚拟内存、文件系统。\n"
             "死锁的四个必要条件包括互斥、请求保持、不可剥夺和循环等待。",
@@ -100,6 +102,8 @@ def test_enrichment_writes_summary_controlled_category_and_tags_without_path_lea
     assert prompts
     assert "/private-vault/os-note.md" not in prompts[0]
     assert "---BEGIN UNTRUSTED DOCUMENT---" in prompts[0]
+    assert "RAG_ONLY_MARKER" not in prompts[0]
+    assert "检索摘要提示" not in prompts[0]
 
     item = conn.execute("SELECT * FROM library_items WHERE content_id=1").fetchone()
     assert item["enrichment_status"] == "ready"
@@ -176,6 +180,29 @@ def test_running_claim_is_only_recovered_after_lease_expires() -> None:
     expired = claim_items(conn, limit=1, now=300, lease_seconds=150)
     assert len(expired) == 1
     assert expired[0].item_id == item_id
+    conn.close()
+
+
+def test_previous_prompt_version_is_reclaimed_after_boundary_change() -> None:
+    conn = _seed()
+    item_id = conn.execute("SELECT id FROM library_items WHERE content_id=1").fetchone()[0]
+    conn.execute(
+        """UPDATE library_items
+           SET summary='旧提示生成的摘要', enrichment_status='ready',
+               enrichment_model='local-model', prompt_version='library-enrichment-v1',
+               updated_at=100
+           WHERE id=?""",
+        (item_id,),
+    )
+
+    claims = claim_items(conn, limit=1, now=200)
+
+    assert PROMPT_VERSION == "library-enrichment-v2"
+    assert len(claims) == 1
+    assert claims[0].item_id == item_id
+    assert conn.execute(
+        "SELECT enrichment_status FROM library_items WHERE id=?", (item_id,)
+    ).fetchone()[0] == "running"
     conn.close()
 
 

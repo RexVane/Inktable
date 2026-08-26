@@ -286,7 +286,8 @@ def sync_library_items(conn: sqlite3.Connection, *, now: float | None = None) ->
         # Compatibility cleanup for the brief v3 development window where the
         # retrieval-only document abstract was copied into Library summary and
         # incorrectly marked ready. Genuine Library enrichment always carries a
-        # prompt_version, so this cleanup is narrow and deterministic.
+        # prompt_version, so this cleanup is narrow and deterministic. Do not
+        # infer a user-facing summary from any document representation here.
         legacy_abstract_bootstrap = (
             status == "ready"
             and not existing["prompt_version"]
@@ -309,6 +310,17 @@ def sync_library_items(conn: sqlite3.Connection, *, now: float | None = None) ->
             status = "stale"
             stale += 1
 
+        # ``updated_at`` doubles as the enrichment lease timestamp. A routine
+        # sync must not keep a running worker alive indefinitely; only a real
+        # identity/status/metadata transition should move it forward while an
+        # item is running.
+        lease_is_active = status == "running" and not hash_changed
+        next_updated_at = (
+            existing["updated_at"]
+            if lease_is_active and not legacy_abstract_bootstrap
+            else ts
+        )
+
         conn.execute(
             """
             UPDATE library_items
@@ -321,7 +333,7 @@ def sync_library_items(conn: sqlite3.Connection, *, now: float | None = None) ->
                 _item_type(row["ext"]),
                 current_hash,
                 status,
-                ts,
+                next_updated_at,
                 existing["id"],
             ),
         )
@@ -388,7 +400,13 @@ def list_library_items(
     ).fetchall()
 
 
-def _current_input_hash(conn: sqlite3.Connection, item_id: int) -> str | None:
+def current_input_hash(conn: sqlite3.Connection, item_id: int) -> str | None:
+    """Compute the hash for the document representation active *right now*.
+
+    Read models and asynchronous writers use this same primitive so a caller
+    cannot accidentally treat the stored Library hash as authoritative after
+    an active OCR/parser generation changed but before the next Library sync.
+    """
     row = conn.execute(
         """SELECT c.sha256 AS content_sha, c.active_index_version,
                   dr.text_hash AS document_text_hash
@@ -405,6 +423,10 @@ def _current_input_hash(conn: sqlite3.Connection, item_id: int) -> str | None:
     return compute_input_hash(
         row["content_sha"], row["active_index_version"], row["document_text_hash"]
     )
+
+
+# Kept as a private compatibility alias for older internal callers.
+_current_input_hash = current_input_hash
 
 
 def update_enrichment(
@@ -426,7 +448,7 @@ def update_enrichment(
     representation before writing. Caller serializes writes with Inktable's
     single-writer lock.
     """
-    if _current_input_hash(conn, item_id) != input_hash:
+    if current_input_hash(conn, item_id) != input_hash:
         return False
 
     ts = time.time() if now is None else now
