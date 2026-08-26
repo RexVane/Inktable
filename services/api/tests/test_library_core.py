@@ -36,12 +36,18 @@ def _db() -> sqlite3.Connection:
             name TEXT NOT NULL UNIQUE,
             color TEXT
         );
+        CREATE TABLE sources (
+            id INTEGER PRIMARY KEY,
+            enabled INTEGER NOT NULL DEFAULT 1
+        );
         CREATE TABLE files (
             id INTEGER PRIMARY KEY,
             content_id INTEGER REFERENCES contents(id) ON DELETE SET NULL,
+            source_id INTEGER REFERENCES sources(id) ON DELETE SET NULL,
             name TEXT NOT NULL,
             ext TEXT,
             state TEXT NOT NULL,
+            preserved_path TEXT,
             mtime REAL
         );
         CREATE TABLE document_representations (
@@ -64,7 +70,10 @@ def _content(conn: sqlite3.Connection, *, cid: int, sha: str, name: str, ext: st
         (cid, sha),
     )
     conn.execute(
-        "INSERT INTO files(id, content_id, name, ext, state, mtime) VALUES (?, ?, ?, ?, 'registered', ?)",
+        """
+        INSERT INTO files(id, content_id, source_id, name, ext, state, preserved_path, mtime)
+        VALUES (?, ?, NULL, ?, ?, 'registered', NULL, ?)
+        """,
         (cid, cid, name, ext, float(cid)),
     )
 
@@ -100,13 +109,55 @@ def test_ignored_only_content_is_not_promoted_to_library() -> None:
         ("a" * 64,),
     )
     conn.execute(
-        "INSERT INTO files(id, content_id, name, ext, state, mtime) VALUES (1, 1, 'noise.md', 'md', 'ignored', 1)"
+        """
+        INSERT INTO files(id, content_id, source_id, name, ext, state, preserved_path, mtime)
+        VALUES (1, 1, NULL, 'noise.md', 'md', 'ignored', NULL, 1)
+        """
     )
 
     result = sync_library_items(conn, now=10)
 
     assert result["created"] == 0
     assert conn.execute("SELECT COUNT(*) FROM library_items").fetchone()[0] == 0
+
+
+def test_disabled_source_is_not_promoted_to_library() -> None:
+    conn = _db()
+    conn.execute("INSERT INTO sources(id, enabled) VALUES (1, 0)")
+    conn.execute(
+        "INSERT INTO contents(id, sha256, size, active_index_version) VALUES (1, ?, 1, 1)",
+        ("a" * 64,),
+    )
+    conn.execute(
+        """
+        INSERT INTO files(id, content_id, source_id, name, ext, state, preserved_path, mtime)
+        VALUES (1, 1, 1, 'hidden.pdf', 'pdf', 'registered', NULL, 1)
+        """
+    )
+
+    sync_library_items(conn)
+
+    assert conn.execute("SELECT COUNT(*) FROM library_items").fetchone()[0] == 0
+
+
+def test_missing_file_requires_preservation_copy() -> None:
+    conn = _db()
+    conn.execute(
+        "INSERT INTO contents(id, sha256, size, active_index_version) VALUES (1, ?, 1, 1)",
+        ("a" * 64,),
+    )
+    conn.execute(
+        """
+        INSERT INTO files(id, content_id, source_id, name, ext, state, preserved_path, mtime)
+        VALUES (1, 1, NULL, 'gone.pdf', 'pdf', 'missing', NULL, 1)
+        """
+    )
+    sync_library_items(conn)
+    assert conn.execute("SELECT COUNT(*) FROM library_items").fetchone()[0] == 0
+
+    conn.execute("UPDATE files SET preserved_path = '/preserved/gone.pdf' WHERE id = 1")
+    sync_library_items(conn)
+    assert conn.execute("SELECT COUNT(*) FROM library_items").fetchone()[0] == 1
 
 
 def test_enrichment_rejects_stale_worker_result() -> None:
