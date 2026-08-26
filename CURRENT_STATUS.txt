@@ -514,3 +514,73 @@ U02 融合 12/向量 32），各给一半名额可用 K=13 覆盖前三题，两
   延迟优先  再加 INKTABLE_CASCADE_VEC_SHARE=50 INKTABLE_CASCADE_PAIRS=13
 
 回归：后端 342 passed（本节新增 6 条），桌面 25 passed。
+
+
+十四、2026-08-26 收口：四条发布门槛全过（第十三节的 Pareto 前沿已被打破）
+
+第十三节说「没有配置四条全过，要收口得换更便宜的 CE」。这个结论少查了一步 ——
+我是用「Rerank P95 2140ms ÷ 26 对 ≈ 107ms/对」反推 CE 成本的，而那段耗时里还含
+候选正文加载、向量取用、本地打分与冗余降权。
+
+scripts/probe_ce_cost.py 直接量纯打分（真实分片正文、26 对、实装焦点窗口）：
+
+  默认 threads=14 batch=8 max_tokens=384   1798ms   69.1ms/对   1.00x
+  max_tokens=256                          1952ms   75.1ms/对   1.09x
+  max_tokens=192                          1434ms   55.2ms/对   0.80x
+  batch=26 一次喂完                        2148ms   82.6ms/对   1.20x
+  threads=28                              2797ms  107.6ms/对   1.56x
+  threads=7                               3736ms  143.7ms/对   2.08x
+
+线程 14 确实最优、批也调好了，唯一余量是 max_tokens。384→192 省 20%，
+**而且质量还升了**：nDCG 89.5%→90.3%、MRR 86.9%→88.1%，Recall@5 保持 96.2%。
+
+与 §5.1「截短正文会掉质量」不矛盾：那次动的是 _focus_window 的窗口宽度
+（420→300 字，换成居中位置不同的窗口），这里保持 420 字窗口不变、只截 tokenizer。
+窗口本就以查询词为中心，前半段已含最密集证据，往后是稀释信号的长尾。
+
+于是 K 可以降到 20（向量配额 25%：15 个融合名额装下 U02 的第 12 位，5 个向量名额
+装下 P19 的第 3 位）：
+
+                        local-static   新默认        门槛
+  Content Recall@5        92.5%        96.2%        ≥95%      过
+  Content Recall@20       98.1%       100.0%       回退≤2pp   过
+  nDCG@10                 87.6%        90.3%        ≥90%      过
+  Gold Evidence@50        94.8%        94.8%        ≥90%      过
+  MRR@10                  85.7%        88.1%        —
+  搜索 P95               1497ms    1529/1651ms     ≤2500ms    过
+  Rerank P95              101ms     891/900ms      ≤1500ms    过
+  搜索 P50                532ms        631ms        —
+
+质量指标在 5 次独立运行里逐位复现（评测是确定性的）。延迟是**静默机器**上两次
+独立运行 —— 桌面应用在后台扫描时同一份语料的搜索 P95 会漂到 2600-2800ms，这个
+方差不是本次改动引入的（纯本地在相同条件下也从 1497ms 漂到 2609ms）。
+
+下游无回退：tests/run_compress_eval.py 在新默认下 Gold Evidence Recall
+96.9%→97.9%、压缩 P95 452.7ms→302.4ms，其余门槛不变。
+
+代价只有中位数约 100ms，P95 几乎不动 —— 53 题里只有 4 题词法证据弱到需要 CE，
+其余走一级本地打分器，Rerank P50 仍是 102ms。
+
+已切生产默认。auto 的含义变成：装了 CE 资产走门控级联，没装走一级本地打分器
+（没装时行为与改动前逐字一致，不会因为缺一个 279MB 模型而打 degraded 标记）。
+退回旧行为：INKTABLE_RERANKER=local。
+
+新默认值（改任何一个都要重跑 65 题，有测试钉着）：
+
+  INKTABLE_CASCADE_LEX_GATE=45     门控阈值
+  INKTABLE_CASCADE_VEC_SHARE=25    头部里分给向量路名次的比例
+  INKTABLE_CASCADE_PAIRS=20        CE 打分的候选数
+  INKTABLE_RERANK_MAX_TOKENS=192   单对序列长度
+
+风险（不要读成「已经稳了」）：这套配置在 53 题上定，真正决定结论的只有 4 题
+（A09/P19/U02/M09），门控阈值可用窗口只有 (0.403, 0.533]，两端各由一道题钉住。
+四条门槛同时过是实测事实，但扩大评测集后必须整套重验。
+
+另记：原打算换一个更小的多语言 CE（mmarco-mMiniLMv2-L12-H384，hidden 384 对 768），
+但本机到 huggingface.co 不通（api/models 与直连文件均超时，HTTP 000），无法下载
+验证。调 max_tokens 已够用，这条不必继续；若将来要进一步压成本它仍是首选方向。
+
+回归：后端 344 passed，桌面 25 passed。
+
+剩余阻塞项只有一个：**代码签名**（需付费证书，Get-AuthenticodeSignature 对安装包
+与 Inktable.exe 均为 NotSigned）。
