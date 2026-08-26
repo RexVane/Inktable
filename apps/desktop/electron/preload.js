@@ -73,7 +73,7 @@ contextBridge.exposeInMainWorld('inktable', {
 
 // AI Library 是普通 renderer 模块，不属于特权 bridge。preload 只负责把同源
 // 静态资源挂进页面：library.js 仍运行在页面世界，只能调用上面已经受控的
-// window.inktable API；它拿不到 ipcRenderer，更拿不到 sidecar bearer token。
+// window.inktable API；它拿不到 ipcRenderer，更拿不到 sidecar bearer 令牌。
 // 这样不用去改 9 万字符的 inline 工作台脚本，也不会改变现有 CSP hash。
 window.addEventListener('DOMContentLoaded', () => {
   if (!document.querySelector('link[data-inktable-library]')) {
