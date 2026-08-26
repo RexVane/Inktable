@@ -7,8 +7,8 @@ from app.db.schema import SCHEMA_VERSION
 from app.library.core import compute_input_hash, sync_library_items
 
 
-def test_schema_v3_creates_ai_library_tables() -> None:
-    assert SCHEMA_VERSION == 3
+def test_schema_v4_creates_ai_library_tables() -> None:
+    assert SCHEMA_VERSION == 4
     conn = database.connect(":memory:")
     try:
         database.init_db(conn)
@@ -18,13 +18,18 @@ def test_schema_v3_creates_ai_library_tables() -> None:
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         }
-        assert {"library_items", "library_item_tags", "library_relations"}.issubset(tables)
-        assert database.get_setting(conn, "db_schema_version") == "3"
+        assert {
+            "library_items",
+            "library_item_tags",
+            "library_relations",
+            "library_relation_versions",
+        }.issubset(tables)
+        assert database.get_setting(conn, "db_schema_version") == "4"
     finally:
         conn.close()
 
 
-def test_v2_database_upgrades_to_v3_without_touching_physical_files() -> None:
+def test_v2_database_upgrades_to_v4_without_touching_physical_files() -> None:
     conn = database.connect(":memory:")
     try:
         # Build the current SQL surface once, then emulate a database last
@@ -53,7 +58,7 @@ def test_v2_database_upgrades_to_v3_without_touching_physical_files() -> None:
 
         database.init_db(conn)
 
-        # v3 bootstrap happens during normal init_db(), before any explicit
+        # Bootstrap happens during normal init_db(), before any explicit
         # Library sync or LLM work. Its input_hash is only an identity seed;
         # the first sync upgrades it to the active-document-aware hash.
         bootstrapped = conn.execute(
@@ -68,7 +73,7 @@ def test_v2_database_upgrades_to_v3_without_touching_physical_files() -> None:
 
         result = sync_library_items(conn, now=10)
         conn.commit()
-        assert database.get_setting(conn, "db_schema_version") == "3"
+        assert database.get_setting(conn, "db_schema_version") == "4"
         assert result["created"] == 0
         assert result["refreshed"] == 1
         item = conn.execute(
@@ -88,6 +93,27 @@ def test_v2_database_upgrades_to_v3_without_touching_physical_files() -> None:
             "name": "os.pdf",
             "content_id": 1,
         }
+    finally:
+        conn.close()
+
+
+def test_v3_database_adds_relation_version_table() -> None:
+    conn = database.connect(":memory:")
+    try:
+        database.init_db(conn)
+        conn.execute("DROP TABLE library_relation_versions")
+        conn.execute(
+            "UPDATE settings SET value='3' WHERE key='db_schema_version'"
+        )
+        conn.commit()
+
+        database.init_db(conn)
+
+        assert database.get_setting(conn, "db_schema_version") == "4"
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='library_relation_versions'"
+        ).fetchone() is not None
     finally:
         conn.close()
 
