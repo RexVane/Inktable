@@ -16,7 +16,7 @@ import sqlite3
 import time
 from collections.abc import Iterable, Sequence
 
-from app.db.visibility import visible_files_condition
+from app.db.visibility import visible_content_exists, visible_files_condition
 
 
 LIBRARY_SCHEMA = """
@@ -61,8 +61,8 @@ CREATE TABLE IF NOT EXISTS library_item_tags (
 CREATE INDEX IF NOT EXISTS idx_library_item_tags_tag
     ON library_item_tags(tag_id, library_item_id);
 
--- v0.4 starts with a deliberately small relation ontology.  ``related_to``
--- is symmetric, therefore each pair is stored once in canonical id order.
+-- v0.4 starts with a deliberately small relation ontology. ``related_to`` is
+-- symmetric, therefore each pair is stored once in canonical id order.
 CREATE TABLE IF NOT EXISTS library_relations (
     source_item_id INTEGER NOT NULL
         REFERENCES library_items(id) ON DELETE CASCADE,
@@ -78,11 +78,45 @@ CREATE TABLE IF NOT EXISTS library_relations (
 
 CREATE INDEX IF NOT EXISTS idx_library_relations_target
     ON library_relations(target_item_id, relation_type);
+
+-- Schema-v3 bootstrap: an upgraded existing library immediately gets one
+-- derived item per currently visible content.  Rich fields are filled by
+-- ``sync_library_items`` / the future enrichment worker; this SQL only makes
+-- the identity layer available during normal init_db().
+INSERT OR IGNORE INTO library_items
+    (content_id, title, input_hash, created_at, updated_at)
+SELECT
+    c.id,
+    COALESCE((
+        SELECT f2.name
+        FROM files f2
+        LEFT JOIN sources s2 ON s2.id = f2.source_id
+        WHERE f2.content_id = c.id
+          AND (f2.source_id IS NULL OR s2.enabled = 1)
+          AND f2.state != 'ignored'
+          AND (f2.state != 'missing' OR COALESCE(f2.preserved_path, '') != '')
+        ORDER BY CASE WHEN f2.state = 'registered' THEN 0 ELSE 1 END,
+                 COALESCE(f2.mtime, 0) DESC, f2.id
+        LIMIT 1
+    ), ''),
+    c.sha256,
+    CAST(strftime('%s','now') AS REAL),
+    CAST(strftime('%s','now') AS REAL)
+FROM contents c
+WHERE EXISTS (
+    SELECT 1
+    FROM files vf
+    LEFT JOIN sources vs ON vs.id = vf.source_id
+    WHERE vf.content_id = c.id
+      AND (vf.source_id IS NULL OR vs.enabled = 1)
+      AND vf.state != 'ignored'
+      AND (vf.state != 'missing' OR COALESCE(vf.preserved_path, '') != '')
+);
 """
 
 
 def ensure_library_schema(conn: sqlite3.Connection) -> None:
-    """Create the rebuildable AI Library tables if they do not exist."""
+    """Create/backfill the rebuildable AI Library schema idempotently."""
     conn.executescript(LIBRARY_SCHEMA)
 
 
@@ -156,7 +190,9 @@ def sync_library_items(conn: sqlite3.Connection, *, now: float | None = None) ->
 
     This operation is idempotent and deliberately cheap enough to run after a
     scan/index batch.  Content hash changes mark prior enrichment stale instead
-    of silently treating model output as current.
+    of silently treating model output as current.  Invisible items are kept in
+    storage but hidden by all read APIs, so disabling/re-enabling a source does
+    not destroy AI metadata.
     """
     ensure_library_schema(conn)
     ts = time.time() if now is None else now
@@ -229,8 +265,9 @@ def sync_library_items(conn: sqlite3.Connection, *, now: float | None = None) ->
 
 def get_library_item(conn: sqlite3.Connection, item_id: int) -> sqlite3.Row | None:
     ensure_library_schema(conn)
+    visible = visible_content_exists("li.content_id", "vf", "vs")
     return conn.execute(
-        """
+        f"""
         SELECT li.*,
                c.sha256,
                c.chunk_count,
@@ -238,7 +275,7 @@ def get_library_item(conn: sqlite3.Connection, item_id: int) -> sqlite3.Row | No
         FROM library_items li
         JOIN contents c ON c.id = li.content_id
         LEFT JOIN categories cat ON cat.id = li.category_id
-        WHERE li.id = ?
+        WHERE li.id = ? AND {visible}
         """,
         (item_id,),
     ).fetchone()
@@ -255,7 +292,8 @@ def list_library_items(
     ensure_library_schema(conn)
     limit = max(1, min(int(limit), 500))
     offset = max(0, int(offset))
-    clauses: list[str] = []
+    visible = visible_content_exists("li.content_id", "vf", "vs")
+    clauses: list[str] = [visible]
     params: list[object] = []
     if status:
         clauses.append("li.enrichment_status = ?")
@@ -263,13 +301,16 @@ def list_library_items(
     if category_id is not None:
         clauses.append("li.category_id = ?")
         params.append(category_id)
-    where = " WHERE " + " AND ".join(clauses) if clauses else ""
+    where = " WHERE " + " AND ".join(clauses)
+    source_cond = visible_files_condition("sf", "ss")
     params.extend([limit, offset])
     return conn.execute(
         f"""
         SELECT li.*, cat.name AS category_name,
-               (SELECT COUNT(*) FROM files f
-                WHERE f.content_id = li.content_id) AS source_file_count
+               (SELECT COUNT(*) FROM files sf
+                LEFT JOIN sources ss ON ss.id = sf.source_id
+                WHERE sf.content_id = li.content_id AND {source_cond})
+                   AS source_file_count
         FROM library_items li
         LEFT JOIN categories cat ON cat.id = li.category_id
         {where}
@@ -294,7 +335,7 @@ def update_enrichment(
 ) -> bool:
     """Persist validated model output only if it matches the current content.
 
-    A worker may finish after a file changed.  ``input_hash`` makes that race
+    A worker may finish after a file changed. ``input_hash`` makes that race
     explicit: stale model output is rejected instead of overwriting the newer
     library item.
     """
@@ -350,7 +391,7 @@ def replace_library_item_tags(
 ) -> None:
     """Replace an item's controlled-vocabulary tags atomically.
 
-    ``tags`` contains ``(tag_id, source, confidence)`` tuples.  Tag creation and
+    ``tags`` contains ``(tag_id, source, confidence)`` tuples. Tag creation and
     alias resolution intentionally live outside this primitive so the model
     cannot create uncontrolled vocabulary through this function.
     """
