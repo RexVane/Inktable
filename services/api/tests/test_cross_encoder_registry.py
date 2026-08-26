@@ -85,3 +85,41 @@ def test_model_dir_follows_the_active_spec(monkeypatch):
 def test_model_dir_override_wins(monkeypatch, tmp_path):
     monkeypatch.setenv("INKTABLE_RERANK_MODEL_DIR", str(tmp_path))
     assert ce.model_dir() == tmp_path
+
+
+def test_no_module_level_model_id():
+    """别再放一个「那个模型 id」的常量出来。
+
+    原先有 `MODEL_ID`，`health.py` 一直在 import 它。注册表化之后实际跑着
+    mMiniLM 时 /health 仍报 bge —— 唯一对外说明「用的是哪个 CE」的字段撒谎，
+    且不报错。删掉常量是唯一能让这类误用在 import 期就炸掉的办法。
+    """
+    assert not hasattr(ce, "MODEL_ID")
+
+
+def test_health_reports_the_active_model_not_a_constant(monkeypatch):
+    from app import health
+
+    _installed(monkeypatch, "bge-base", "mminilm-l12-h384")
+    report = health._check_reranker()
+    assert report["model"] == ce.MODELS["mminilm-l12-h384"].model_id
+    assert report["installed"] == ["bge-base", "mminilm-l12-h384"]
+
+    monkeypatch.setenv("INKTABLE_RERANK_MODEL", "bge-base")
+    assert health._check_reranker()["model"] == ce.MODELS["bge-base"].model_id
+
+
+def test_health_lists_which_models_are_installed(monkeypatch):
+    """available=true 推不出「跑的是默认那个」—— 得能看出装了哪几个。"""
+    from app import health
+
+    _installed(monkeypatch, "bge-base")
+    report = health._check_reranker()
+    assert report["available"] is True
+    assert report["installed"] == ["bge-base"]
+    assert report["model"] == ce.MODELS["bge-base"].model_id
+
+    _installed(monkeypatch)
+    missing = health._check_reranker()
+    assert missing["available"] is False
+    assert missing["installed"] == []

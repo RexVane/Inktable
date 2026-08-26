@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import sys
 
@@ -153,18 +154,32 @@ def _check_embedding() -> dict:
 
 
 def _check_reranker() -> dict:
-    """Verify dynamically imported Cross-Encoder runtime when assets exist."""
+    """Verify dynamically imported Cross-Encoder runtime when assets exist.
+
+    报的是 `active_spec()` 而不是某个常量：`is_available()` 的语义是「注册表里
+    任意一个模型装上了就算可用」，所以「可用」并不能推出「跑的是默认那个」。
+    额外列出 `installed`，否则用户看到 available=true 却无从知道生效的是哪个。
+    """
     try:
-        from app.retrieval.cross_encoder import MODEL_ID, is_available
+        from app.retrieval.cross_encoder import MODELS, active_spec, is_available
     except ImportError as e:
         return {"ok": False, "available": False, "error": f"import failed: {e}"}
+
+    try:
+        model_id = active_spec().model_id
+        installed = sorted(
+            spec.key for spec in MODELS.values() if _reranker_installed(spec)
+        )
+    except Exception as e:  # noqa: BLE001 - 探测模型目录不该拖垮 /health
+        return {"ok": False, "available": False, "error": f"probe failed: {e}"}
 
     assets_available = is_available()
     if not assets_available:
         return {
             "ok": True,
             "available": False,
-            "model": MODEL_ID,
+            "model": model_id,
+            "installed": installed,
             "note": "Cross-Encoder assets are not installed; local-static is the default",
         }
     try:
@@ -174,16 +189,24 @@ def _check_reranker() -> dict:
         return {
             "ok": False,
             "available": False,
-            "model": MODEL_ID,
+            "model": model_id,
+            "installed": installed,
             "error": f"runtime import failed: {e}",
         }
     return {
         "ok": True,
         "available": True,
-        "model": MODEL_ID,
+        "model": model_id,
+        "installed": installed,
         "onnxruntime": onnxruntime.__version__,
         "tokenizers": tokenizers.__version__,
     }
+
+
+def _reranker_installed(spec) -> bool:
+    from app.retrieval.cross_encoder import _spec_installed
+
+    return _spec_installed(spec)
 
 
 def _check_ocr() -> dict:
@@ -212,6 +235,38 @@ def _check_ocr() -> dict:
         }
 
 
+def _check_retrieval_config() -> dict:
+    """把生效的检索配置报出来。
+
+    存在的理由很具体：`npm run dist` 冻结的是**当时**的 services/api 源码，
+    而 8/26 那次重出安装包排在门控级联四条改动之前 —— 产物里根本没有门控，
+    文档却按门控的实测数字写。当时没有任何办法从装好的应用上看出这一点。
+    这一块就是那个办法：`mode` 与四个旋钮凑出「跑的是哪套检索」，
+    与 docs/RETRIEVAL-PERF.md §5.9 的发布配置逐个对得上才算产物没跑偏。
+    """
+    try:
+        from app.retrieval import rerank
+        from app.retrieval.cross_encoder import is_available, resolved_max_tokens
+    except ImportError as e:
+        return {"ok": False, "error": f"import failed: {e}"}
+    try:
+        preference = os.environ.get("INKTABLE_RERANKER", "").strip().lower() or "auto"
+        effective = preference
+        if effective == "auto":
+            effective = "cascade" if is_available() else "local"
+        return {
+            "ok": True,
+            "mode": preference,
+            "effective_mode": effective,
+            "lex_gate": round(rerank.CASCADE_LEX_GATE, 3),
+            "vec_share": round(rerank.CASCADE_VEC_SHARE, 3),
+            "pairs": rerank.CASCADE_PAIRS,
+            "max_tokens": resolved_max_tokens(),
+        }
+    except Exception as e:  # noqa: BLE001 - 报配置不该拖垮 /health
+        return {"ok": False, "error": str(e)}
+
+
 def collect_health() -> dict:
     checks = {
         "sqlite_vec": _check_sqlite_vec(),
@@ -219,6 +274,7 @@ def collect_health() -> dict:
         "chinese_search": _check_chinese_search(),
         "embedding": _check_embedding(),
         "reranker": _check_reranker(),
+        "retrieval_config": _check_retrieval_config(),
         "ocr": _check_ocr(),
     }
     return {

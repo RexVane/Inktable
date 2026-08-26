@@ -260,7 +260,7 @@ services/api 源码）。等发布门槛全部确认无问题后再冻结 PyInst
 并生成安装包。注意本轮改动全在 services/api 源码层，安装版必须重新冻结
 sidecar 才会包含这些改动。
 
-代码签名：仍未做（需要证书）。
+代码签名：不做（2026-08-26 决定，见第十五节）。
 
 当前总体发布结论：
 
@@ -454,13 +454,19 @@ CE 运行时已排除为瓶颈（14 线程是 28 核实测最优、批 8 分桶�
   inktable-sidecar.exe            95,711,954 bytes
     SHA-256 4C9CD9FB1C464201900E78A5C0F1CBC56DAE21A51695843E4B25A577F7BCF1A9
 
+【这两个产物已作废，见第十五节】它们冻结在门控级联四条改动**之前**，
+包里跑的是纯本地打分器（R@5 92.5%），不是本节之后各处引用的 96.2%。
+当时的冒烟「全绿」也不算证据：那个脚本只在 /health 顶层找 ok 字段，而检查项
+在 checks 里嵌一层 —— 它不可能因为检查失败变红。两处都已修。
+
 构建产物与包内副本逐字节一致；app.asar 内确认为 nebula 新界面。
 冻结 sidecar headless 冒烟（scripts/smoke_packaged_sidecar.py）全绿：
 sqlite-vec v0.1.9、FTS5、中文检索探针 7/7、嵌入 bge-m3 dim=1024、
 OCR windows-media-ocr。
 
 **仍无代码签名**：Get-AuthenticodeSignature 对安装包与 Inktable.exe 均返回
-NotSigned，首次运行会有 SmartScreen 警告。这一项要付费代码签名证书。
+NotSigned，首次运行会有 SmartScreen 警告。8/26 已决定不买证书、自用接受这个
+警告，因此本项不再是阻塞项（见第十五节）。
 
 10. 回归
 
@@ -531,8 +537,14 @@ scripts/probe_ce_cost.py 直接量纯打分（真实分片正文、26 对、实�
   threads=28                              2797ms  107.6ms/对   1.56x
   threads=7                               3736ms  143.7ms/对   2.08x
 
-线程 14 确实最优、批也调好了，唯一余量是 max_tokens。384→192 省 20%，
-**而且质量还升了**：nDCG 89.5%→90.3%、MRR 86.9%→88.1%，Recall@5 保持 96.2%。
+【本表的绝对值与「384→192 省 20%」这条结论已在第十五节更正，别照这里读】
+探针当时每换一组环境变量就多留一个活着的 ONNX session（各带 14 条线程，越往后
+越超订），且桌面应用正在后台扫描。静默机器上重测 20 对：tok384 33.8ms/对、
+tok192 35.2ms/对 —— **截到 192 对速度基本没有影响**。线程 14 最优这个相对结论
+仍然成立（超订与欠订的方向不会因为噪声翻面）。
+
+max_tokens 192 要留下，但理由是**质量**不是速度：nDCG 89.5%→90.3%、
+MRR 86.9%→88.1%，Recall@5 保持 96.2%，5 次独立运行逐位复现。
 
 与 §5.1「截短正文会掉质量」不矛盾：那次动的是 _focus_window 的窗口宽度
 （420→300 字，换成居中位置不同的窗口），这里保持 420 字窗口不变、只截 tokenizer。
@@ -577,10 +589,95 @@ scripts/probe_ce_cost.py 直接量纯打分（真实分片正文、26 对、实�
 四条门槛同时过是实测事实，但扩大评测集后必须整套重验。
 
 另记：原打算换一个更小的多语言 CE（mmarco-mMiniLMv2-L12-H384，hidden 384 对 768），
-但本机到 huggingface.co 不通（api/models 与直连文件均超时，HTTP 000），无法下载
-验证。调 max_tokens 已够用，这条不必继续；若将来要进一步压成本它仍是首选方向。
+当时判断「本机到 huggingface.co 不通（api/models 与直连文件均超时，HTTP 000），
+无法下载验证」。**这个判断是错的**：我只试了直连。hf-mirror.com 通（HTTP 200、
+1.1s），模型已装上并已切为默认，见第十五节。
 
 回归：后端 344 passed，桌面 25 passed。
 
-剩余阻塞项只有一个：**代码签名**（需付费证书，Get-AuthenticodeSignature 对安装包
-与 Inktable.exe 均为 NotSigned）。
+剩余阻塞项：无。原先列的唯一一条是**代码签名**，8/26 已决定不买证书、自用接受
+首次运行的 SmartScreen 警告（分发给他人时才需要重新考虑）。见第十五节。
+
+十五、2026-08-26 收口二：产物与文档对齐 + 签名决定（第十四节第 9 条已作废）
+
+1. 代码签名：不做
+
+用户决定不购买代码签名证书，自用时接受首次运行的 SmartScreen 警告。
+因此「剩余阻塞项只有代码签名」这句作废，剩余阻塞项为零。分发给他人时才需要
+重新考虑 —— 那时 SmartScreen 会拦在信任建立之前。
+
+2. 8/26 那个安装包与文档引用的数字不对应
+
+提交顺序：35b4254（重出安装包）在 fc24048 / 380776c / ca2cd92 / 5b70d1d
+（词法门控、向量配额、切生产默认、换小 CE）**之前**。也就是说第十四节那两个
+产物里跑的是纯本地打分器（R@5 92.5%、nDCG 87.6%），而第十三/十四节以后各处
+引用的 96.2% / 90.3% 是门控级联的数字。产物与文档差着四次改动。
+
+当时没有任何办法看出这一点：/health 不报检索配置，冒烟只看「起不起来」。
+
+3. 冒烟脚本发过假绿灯
+
+scripts/smoke_packaged_sidecar.py 的 report() 直接遍历 /health 顶层找 ok 字段，
+而检查项在 checks 里嵌一层 —— 顶层一个 ok 都没有，bad 恒为空。这个脚本
+**不可能因为检查失败变红**，还会把整个 checks 截到 120 字符打出来。
+第十四节写的「冒烟全绿」因此不是证据。已修：下钻 checks、失败项不截断、
+frozen 必须为 True，并加了三条测试钉住（test_rerank.py）。
+
+4. /health 也在撒谎
+
+注册表化之后 health.py 仍 `from ... import MODEL_ID`，于是实际跑 mMiniLM 时
+/health 报的是 bge —— 唯一对外说明「用的是哪个 CE」的字段错了，且不报错。
+已删掉模块级 MODEL_ID（留着就还会被 import），改为报 active_spec()，
+并加 installed 列表（is_available() 的语义是「任意一个装上就算」，
+所以 available=true 推不出「跑的是默认那个」）。
+
+5. 新增 /health.checks.retrieval_config
+
+  {"mode":"auto","effective_mode":"cascade","lex_gate":0.45,
+   "vec_share":0.25,"pairs":20,"max_tokens":192}
+
+这是「装好的应用跑的是哪套检索」的唯一可观测出口。冒烟现在逐个核对它，
+整块缺失直接红 —— 缺失的唯一原因就是冻结的源码早于门控级联，
+正是第 2 条那种错配的形状。max_tokens 的默认值收敛到
+cross_encoder.DEFAULT_MAX_TOKENS 一处，两边各写一个 192 会静默漂移。
+
+6. 重出的产物（第十四节那两个作废）
+
+  Inktable-0.3.0-Setup-x64.exe   194,863,145 bytes
+    SHA-256 E31CD684566418551A49F0D87E12F518EB7DB6FB3D25107CF57AFA32DD4BBF90
+  inktable-sidecar.exe            95,719,360 bytes
+    SHA-256 10A2477294B733D4EF6312CAAEC787D8AECF3E258C8878DA49E4B5528B30DAC4
+
+构建产物与包内副本逐字节一致（两边 SHA-256 相同）。
+app.asar 内界面标记：nebula 27、limestone 10、--radius-card 11、
+toggleDrawer 5、renderJournal 4。
+冻结冒烟全绿且**含配置核对**：frozen=True、status=ok、sqlite-vec v0.1.9、
+FTS5、中文检索探针 7/7（missed=[]）、嵌入 ollama-bge-m3 dim=1024 已加载、
+OCR windows-media-ocr、四个旋钮逐个对上。
+签名：Get-AuthenticodeSignature 对安装包与 Inktable.exe 均 NotSigned（见第 1 条）。
+
+CE 资产不在安装包里，也没有应用内下载入口：只装安装包的用户拿到的是
+auto → 一级本地打分器（R@5 92.5%），不是 96.2%。要拿门控级联得从仓库跑
+services/api/scripts/install_reranker.py（huggingface.co 不通时加
+--endpoint https://hf-mirror.com）。这是刻意的降级，不打 degraded 标记。
+
+7. 重构后复跑真实库评测（65 题）
+
+  Content Recall@5     96.2%   门槛 80%/发布 95%   PASS
+  Content Recall@20   100.0%   回退 ≤2pp           PASS
+  Gold Evidence@50     94.8%   门槛 90%            PASS
+  nDCG@10              90.4%   门槛 90%            PASS
+  MRR@10               88.2%
+  搜索 p50/p95     512.7 / 1244.7ms  ≤2500ms       PASS
+  Rerank p50/p95     64.6 / 401.4ms  ≤1500ms       PASS
+  degraded 0/65，模型 = cascade-lex-skip + cascade:local-static-v3+mMiniLM
+
+与第十四节记录的 90.2–90.3% / 88.1% 差 0.1–0.2pp：评测本身是确定性的，
+这点差异来自库在变（桌面应用一直在跑、还在登记新文件），不是重构引入的。
+第十四节那组「风险，别读成已经稳了」的话原样有效：自助重采样里 R@5 有 31.9%、
+nDCG 有 44.9% 的次数不达标，nDCG 余量 0.22pp，翻转距离 1 道题。
+
+8. 回归
+
+  后端 359 passed（第十四节 344）
+  桌面 25 passed

@@ -584,9 +584,89 @@ def test_shipped_cascade_defaults_match_the_measured_configuration():
     assert rerank.CASCADE_LEX_GATE == 0.45
     assert rerank.CASCADE_VEC_SHARE == 0.25
     assert rerank.CASCADE_PAIRS == 20
-    assert ce.__file__  # 默认 max_tokens 写在运行时构造里，见下
-    src = Path(ce.__file__).read_text(encoding="utf-8")
-    assert '"INKTABLE_RERANK_MAX_TOKENS", "192"' in src
+    assert ce.DEFAULT_MAX_TOKENS == 192
+    assert ce.resolved_max_tokens() == 192
+
+
+def test_packaged_smoke_expects_the_shipped_configuration():
+    """冒烟脚本核对的那套值必须等于代码里的默认值。
+
+    脚本里写着一份期望配置，代码里写着默认值 —— 两处各改一处就会出现
+    「冒烟全绿但产物跑的不是发布配置」，而这正是 8/26 那次错配的形状
+    （安装包早于门控级联四条改动，起得来、/health 全绿、数字对不上）。
+    """
+    import importlib.util
+
+    from app.retrieval import cross_encoder as ce
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "smoke_packaged_sidecar.py"
+    spec = importlib.util.spec_from_file_location("_smoke", path)
+    smoke = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(smoke)
+
+    assert smoke.EXPECTED_RETRIEVAL == {
+        "mode": "auto",
+        "lex_gate": rerank.CASCADE_LEX_GATE,
+        "vec_share": rerank.CASCADE_VEC_SHARE,
+        "pairs": rerank.CASCADE_PAIRS,
+        "max_tokens": ce.DEFAULT_MAX_TOKENS,
+    }
+
+
+def test_packaged_smoke_fails_when_the_frozen_binary_predates_the_gate():
+    """产物里没有 retrieval_config 必须变红，而不是当成「这一项没测到」。
+
+    缺这一块的唯一原因就是冻结的源码早于门控级联；这时 /health 其余项全绿，
+    没有任何别的信号能说出「文档引用的数字与这个产物无关」。
+    """
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "smoke_packaged_sidecar.py"
+    spec = importlib.util.spec_from_file_location("_smoke", path)
+    smoke = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(smoke)
+
+    assert smoke.check_retrieval_config(None) == ["retrieval_config_missing"]
+    assert smoke.check_retrieval_config({}) != []
+    ok = dict(smoke.EXPECTED_RETRIEVAL, effective_mode="local")
+    assert smoke.check_retrieval_config(ok) == []
+    assert smoke.check_retrieval_config(dict(ok, pairs=26)) == [
+        "retrieval_config.pairs"
+    ]
+
+
+def test_packaged_smoke_requires_checks_to_be_present():
+    """顶层没有 `checks` 时必须返回 1。
+
+    早先 report() 直接遍历顶层找 `ok` 字段，而检查项在 `checks` 里嵌一层 ——
+    顶层一个 `ok` 都没有，`bad` 恒为空，脚本不可能因为检查失败变红。
+    冒烟发假绿灯比没有冒烟更坏，所以这条把「下钻」钉死。
+    """
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "smoke_packaged_sidecar.py"
+    spec = importlib.util.spec_from_file_location("_smoke", path)
+    smoke = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(smoke)
+
+    assert smoke.report({"status": "ok", "frozen": True}) == 1
+    failing = {
+        "frozen": True,
+        "checks": {
+            "fts5": {"ok": False, "error": "boom"},
+            "retrieval_config": dict(smoke.EXPECTED_RETRIEVAL, ok=True),
+        },
+    }
+    assert smoke.report(failing) == 1
+    passing = {
+        "frozen": True,
+        "checks": {
+            "fts5": {"ok": True},
+            "retrieval_config": dict(smoke.EXPECTED_RETRIEVAL, ok=True),
+        },
+    }
+    assert smoke.report(passing) == 0
+    assert smoke.report(dict(passing, frozen=False)) == 1
 
 
 def test_local_reranker_lexical_only_without_embedding_model(monkeypatch):

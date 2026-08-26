@@ -1,4 +1,10 @@
-"""Local ONNX Cross-Encoder reranker with an explicit asset boundary."""
+"""Local ONNX Cross-Encoder reranker with an explicit asset boundary.
+
+刻意**没有**模块级的 `MODEL_ID`。原先有一个，注册表化之后它就变成了陷阱：
+`health.py` 一直在 `from ... import MODEL_ID`，于是实际跑着 mMiniLM 时
+`/health` 仍报 bge —— 唯一对外说出「用的是哪个 CE」的地方在撒谎，而且
+不会报错。要问哪个模型生效，只能走 `active_spec()`。
+"""
 
 from __future__ import annotations
 
@@ -11,16 +17,6 @@ from pathlib import Path
 import numpy as np
 
 from app.db.database import APP_DIR
-
-
-MODEL_ID = "bge-reranker-base-int8-onnx"
-MODEL_REPO = "onnx-community/bge-reranker-base-ONNX"
-MODEL_FILE = "model_int8.onnx"
-TOKENIZER_FILE = "tokenizer.json"
-MODEL_SHA256 = "46a1bb4cf46ff1e300d27589d620141fbf04fc0eaf8e7bb6dea5e044475ff387"
-TOKENIZER_SHA256 = "14917dd757b81bc44d4af6b028367351702656670c1954e055dabdfcf21593cf"
-MODEL_SIZE = 279_252_659
-TOKENIZER_SIZE = 17_082_798
 
 
 @dataclass(frozen=True)
@@ -49,14 +45,18 @@ class ModelSpec:
 MODELS: dict[str, ModelSpec] = {
     "bge-base": ModelSpec(
         key="bge-base",
-        model_id=MODEL_ID,
-        repo=MODEL_REPO,
-        model_file=MODEL_FILE,
+        model_id="bge-reranker-base-int8-onnx",
+        repo="onnx-community/bge-reranker-base-ONNX",
+        model_file="model_int8.onnx",
         model_remote="onnx/model_int8.onnx",
-        model_sha256=MODEL_SHA256,
-        model_size=MODEL_SIZE,
-        tokenizer_sha256=TOKENIZER_SHA256,
-        tokenizer_size=TOKENIZER_SIZE,
+        model_sha256=(
+            "46a1bb4cf46ff1e300d27589d620141fbf04fc0eaf8e7bb6dea5e044475ff387"
+        ),
+        model_size=279_252_659,
+        tokenizer_sha256=(
+            "14917dd757b81bc44d4af6b028367351702656670c1954e055dabdfcf21593cf"
+        ),
+        tokenizer_size=17_082_798,
         note="12 层 / hidden 768，279MB",
     ),
     "mminilm-l12-h384": ModelSpec(
@@ -136,6 +136,18 @@ def model_dir() -> Path:
     return _spec_dir(active_spec())
 
 
+DEFAULT_MAX_TOKENS = 192
+
+
+def resolved_max_tokens() -> int:
+    """单对候选截到多少 token。
+
+    做成函数是为了只有一处默认值：`/health` 要把生效值报出来（发布产物是否
+    真的含发布配置只能靠它看出来），若两边各写一个 192，改一处就会静默错配。
+    """
+    return _env_int("INKTABLE_RERANK_MAX_TOKENS", DEFAULT_MAX_TOKENS, 64, 512)
+
+
 def is_available() -> bool:
     """任意一个注册模型装上了就算可用。
 
@@ -147,7 +159,9 @@ def is_available() -> bool:
 
 
 class OnnxCrossEncoder:
-    model_id = MODEL_ID
+    # 实例上会被 __init__ 覆盖成实际加载的那个模型；类属性只是兜底，
+    # 且刻意留空而不是写死某一个 id —— 见模块顶部关于 MODEL_ID 的说明。
+    model_id = ""
 
     def __init__(self, root: Path | None = None):
         spec = active_spec()
@@ -183,19 +197,21 @@ class OnnxCrossEncoder:
             providers=["CPUExecutionProvider"],
         )
         self.tokenizer = Tokenizer.from_file(str(tokenizer_path))
-        # 192 而不是 384：实测（scripts/probe_ce_cost.py，真实分片正文，26 对）
-        # 纯打分从 1,798ms 降到 1,434ms，**而质量还升了** —— 65 题上
-        # nDCG 89.5% → 90.3%、MRR 86.9% → 88.1%，Recall@5 保持 96.2%。
+        # 192 而不是 384，理由是**质量**而不是速度：65 题上 nDCG 89.5% → 90.3%、
+        # MRR 86.9% → 88.1%，Recall@5 保持 96.2%，5 次独立运行逐位复现。
         #
-        # 这与 RETRIEVAL-PERF §5.1「截短正文会掉质量」不矛盾：那次动的是
-        # `_focus_window` 的窗口宽度（420→300 字，换了一个居中位置不同的窗口），
-        # 这里保持 420 字窗口不变，只截 tokenizer。窗口本就以查询词为中心，
-        # 前半段已含最密集的证据；再往后是稀释信号的长尾。
-        try:
-            max_length = int(os.environ.get("INKTABLE_RERANK_MAX_TOKENS", "192"))
-        except ValueError:
-            max_length = 192
-        self.tokenizer.enable_truncation(max_length=max(64, min(max_length, 512)))
+        # 别把它当省时手段。我原先在这里写过「纯打分 1,798ms → 1,434ms，省 20%」,
+        # 那是错的:probe_ce_cost.py 当时每换一组环境变量就多留一个活着的 ONNX
+        # session,各带 14 条线程,越往后越超订;同时桌面应用正在后台扫描。静默
+        # 机器上重测（20 对，bge）:tok384 33.8ms/对、tok192 35.2ms/对 —— 截到
+        # 192 对速度基本没有影响。详见 docs/RETRIEVAL-PERF.md §5.8 的更正。
+        #
+        # 这与 §5.1「截短正文会掉质量」不矛盾：那次动的是 `_focus_window` 的窗口
+        # 宽度（420→300 字，换了一个居中位置不同的窗口），这里保持 420 字窗口
+        # 不变，只截 tokenizer。窗口本就以查询词为中心，前半段已含最密集的证据；
+        # 再往后是稀释信号的长尾。
+        max_length = resolved_max_tokens()
+        self.tokenizer.enable_truncation(max_length=max_length)
         self.tokenizer.enable_padding(pad_id=1, pad_token="<pad>")
         self.input_names = {item.name for item in self.session.get_inputs()}
         try:
