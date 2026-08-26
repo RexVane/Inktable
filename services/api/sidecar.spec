@@ -9,6 +9,9 @@
 
 任一遗漏都会让冻结后的 /health 报 degraded，而开发环境完全正常。
 这正是 A0 冒烟要提前到第一天的原因。
+
+入口使用 app/entrypoint.py，而不是继续往已经很大的 app/main.py 塞 feature
+路由。entrypoint 只做路由组合，生命周期/认证/数据库仍由 app.main 负责。
 """
 
 import os
@@ -25,7 +28,7 @@ ort_datas, ort_binaries, ort_hiddenimports = collect_all("onnxruntime")
 tokenizer_datas, tokenizer_binaries, tokenizer_hiddenimports = collect_all("tokenizers")
 
 a = Analysis(
-    ["app/main.py"],
+    ["app/entrypoint.py"],
     pathex=[],
     binaries=[(vec_dylib, "sqlite_vec"), *ort_binaries, *tokenizer_binaries],
     datas=[*collect_data_files("jieba"), *ort_datas, *tokenizer_datas],
