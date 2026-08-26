@@ -1,0 +1,57 @@
+name: Backend tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/api/**"
+      - ".github/workflows/backend-tests.yml"
+  pull_request:
+    paths:
+      - "services/api/**"
+      - ".github/workflows/backend-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: Python 3.12 · pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: services/api
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: services/api/uv.lock
+
+      - name: Install locked dependencies
+        run: uv sync --frozen --group dev
+
+      - name: Compile application modules
+        run: uv run python -m compileall -q app
+
+      - name: Run backend tests
+        env:
+          PYTHONHASHSEED: "0"
+          INKTABLE_OLLAMA_URL: "http://127.0.0.1:9"
+        run: uv run pytest -q
