@@ -92,7 +92,7 @@ test('Library routes used by the renderer are admitted by the exact proxy allowl
 
 test('Library maintenance actions remain explicit local UI actions', () => {
   assert.match(library, /AI 整理全部/);
-  assert.match(library, /\/library\/enrich\?limit=10/);
+  assert.match(library, /\/library\/enrich\?limit=20/);
   assert.match(library, /重建相关资料/);
   assert.match(library, /\/library\/relations\/rebuild/);
   assert.match(library, /Deterministic metadata sync only/);

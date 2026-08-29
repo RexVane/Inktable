@@ -134,7 +134,7 @@ def test_library_enrich_route_delegates_bounded_batch(monkeypatch) -> None:
         assert response.json()['ready'] == 2
         assert seen['limit'] == 4
 
-        too_large = client.post('/library/enrich?limit=11')
+        too_large = client.post('/library/enrich?limit=21')
         assert too_large.status_code == 422
     finally:
         conn.close()

@@ -238,3 +238,77 @@ def test_summary_and_tags_apply_in_one_transaction(monkeypatch) -> None:
         (item["id"],),
     ).fetchone()[0] == 0
     conn.close()
+
+
+def test_enrichment_creates_new_category_and_tags_from_empty_vocabulary() -> None:
+    """词表为空时模型可提议新分类/新标签 —— 应用阶段幂等创建并挂到条目。"""
+    conn = _seed()
+
+    def fake_generate(prompt: str) -> str:
+        assert "new_category" in prompt   # 新建通道在提示词里
+        return json.dumps({
+            "summary": "操作系统课程笔记，覆盖进程与死锁。",
+            "language": "zh",
+            "category_id": None,
+            "new_category": "操作系统",
+            "tag_ids": [],
+            "new_tags": ["课程笔记", "死锁"],
+        }, ensure_ascii=False)
+
+    result = run_enrichment_batch(
+        lambda: conn, threading.Lock(), limit=1, generate_fn=fake_generate,
+        model="fake-local-model",
+    )
+
+    assert result["ready"] == 1
+    cat = conn.execute(
+        "SELECT id, name FROM categories WHERE name='操作系统'").fetchone()
+    assert cat is not None
+    item = conn.execute(
+        "SELECT category_id FROM library_items WHERE content_id=1").fetchone()
+    assert item["category_id"] == cat["id"]
+    tag_names = {
+        row["name"] for row in conn.execute(
+            """SELECT t.name FROM tags t
+               JOIN library_item_tags lit ON lit.tag_id = t.id
+               WHERE lit.library_item_id = (SELECT id FROM library_items
+                                            WHERE content_id = 1)""")}
+    assert tag_names == {"课程笔记", "死锁"}
+
+
+def test_enrichment_new_names_bounded_and_folded_into_existing() -> None:
+    """超长/重复的新名字被拒；与现有词表同名的折算回现有 id。"""
+    conn = _seed()
+    conn.execute("INSERT INTO categories(name) VALUES ('已存在分类')")
+    existing_cat = conn.execute(
+        "SELECT id FROM categories WHERE name='已存在分类'").fetchone()["id"]
+    conn.execute("INSERT INTO tags(name) VALUES ('已有标签')")
+    conn.commit()
+
+    def fake_generate(prompt: str) -> str:
+        return json.dumps({
+            "summary": "摘要",
+            "language": "zh",
+            "category_id": None,
+            "new_category": "已存在分类",            # 同名 → 折算回现有分类
+            "tag_ids": [],
+            "new_tags": ["已有标签", "x" * 40, "合法标签", "合法标签"],  # 超长+重复
+        }, ensure_ascii=False)
+
+    cat_count_before = conn.execute(
+        "SELECT COUNT(*) c FROM categories").fetchone()["c"]
+    run_enrichment_batch(
+        lambda: conn, threading.Lock(), limit=1, generate_fn=fake_generate,
+        model="fake-local-model",
+    )
+
+    item = conn.execute(
+        "SELECT category_id FROM library_items WHERE content_id=1").fetchone()
+    assert item["category_id"] == existing_cat   # 同名折算，没有重复创建
+    cat_count_after = conn.execute(
+        "SELECT COUNT(*) c FROM categories").fetchone()["c"]
+    assert cat_count_after == cat_count_before   # 同名没有重复创建
+    tag_names = {row["name"] for row in conn.execute("SELECT name FROM tags")}
+    assert {"已有标签", "合法标签"} <= tag_names          # 新标签已创建
+    assert "x" * 40 not in tag_names                     # 超长被拒
+    assert len(tag_names) == len(list(conn.execute("SELECT name FROM tags")))

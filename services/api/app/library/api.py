@@ -115,7 +115,7 @@ def create_library_router(
         return result
 
     @router.post("/enrich")
-    def post_enrich(limit: int = Query(3, ge=1, le=10)) -> dict:
+    def post_enrich(limit: int = Query(10, ge=1, le=20)) -> dict:
         """Explicitly run a bounded local-Ollama enrichment batch.
 
         This route never falls through to the cloud QA provider. The request is

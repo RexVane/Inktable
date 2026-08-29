@@ -482,7 +482,7 @@
         var failed = 0;
         try {
           while (!state.enrichStop) {
-            var result = await api('/library/enrich?limit=10', 'POST');
+            var result = await api('/library/enrich?limit=20', 'POST');
             if (result.available === false) {
               showToast(result.error || '整理模型不可用（设置 → 模型 里配置知识馆整理）');
               break;
