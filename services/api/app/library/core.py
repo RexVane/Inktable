@@ -365,6 +365,8 @@ def list_library_items(
     *,
     status: str | None = None,
     category_id: int | None = None,
+    tag_id: int | None = None,
+    uncategorized: bool = False,
     limit: int = 100,
     offset: int = 0,
 ) -> list[sqlite3.Row]:
@@ -380,6 +382,13 @@ def list_library_items(
     if category_id is not None:
         clauses.append("li.category_id = ?")
         params.append(category_id)
+    if tag_id is not None:
+        clauses.append(
+            "EXISTS (SELECT 1 FROM library_item_tags lit "
+            "WHERE lit.library_item_id = li.id AND lit.tag_id = ?)")
+        params.append(tag_id)
+    if uncategorized:
+        clauses.append("li.category_id IS NULL")
     where = " WHERE " + " AND ".join(clauses)
     source_cond = visible_files_condition("sf", "ss")
     params.extend([limit, offset])

@@ -31,10 +31,12 @@ from collections.abc import Iterable, Iterator
 
 import numpy as np
 
+from app.config import models as model_slots
+
 log = logging.getLogger("inktable.embedding")
 
 DIM = 1024
-MODEL_PREFIX = "bge-m3"     # 匹配 bge-m3 / bge-m3:latest / bge-m3:567m
+MODEL_PREFIX = "bge-m3"     # 未配置向量槽位时的默认匹配：bge-m3 / bge-m3:latest / bge-m3:567m
 # 单次 HTTP 请求的文本条数。批太大单请求耗时过长（超时、阻塞索引事务），
 # 太小则请求开销占比高。64 条在 Apple Silicon 上约 1-2 秒。
 BATCH = 64
@@ -96,9 +98,20 @@ def _cache_put(key: str, vec: np.ndarray) -> None:
             _encode_cache.pop(old, None)
 
 
+def _embedding_slot() -> dict | None:
+    """显式配置的向量槽位。不含环境变量回退 —— URL 回退走模块全局
+    _OLLAMA_URL（测试用 monkeypatch 替换的对象）。"""
+    return model_slots.get("embedding")
+
+
+def _base_url() -> str:
+    cfg = _embedding_slot()
+    return (cfg or {}).get("endpoint") or _OLLAMA_URL
+
+
 def _http_json(path: str, payload: dict | None = None, timeout: float = 3.0) -> dict:
     req = urllib.request.Request(
-        f"{_OLLAMA_URL}{path}",
+        f"{_base_url()}{path}",
         data=json.dumps(payload).encode() if payload is not None else None,
         headers={"Content-Type": "application/json"},
         method="POST" if payload is not None else "GET",
@@ -111,22 +124,33 @@ def _probe_model(force: bool = False) -> tuple[str | None, str | None]:
     """Return the available tag and its immutable Ollama manifest digest.
 
     `/api/tags` exposes a digest for real Ollama models. Include it in the
-    persisted model id so replacing `bge-m3:latest` with different 1024-d
-    weights cannot silently mix two vector spaces. Minimal/fake compatible
+    persisted model id so replacing the embedding weights with different
+    1024-d ones cannot silently mix two vector spaces. Minimal/fake compatible
     servers may omit the digest; in that case the full tag is still safer than
     the former prefix+dimension-only identity.
+
+    向量槽位配置了模型时按名字精确（或同基名）匹配；未配置回退 bge-m3 前缀。
     """
     with _probe_lock:
         now = time.time()
         if not force and now - _probe_cache["at"] < _PROBE_TTL:
             return _probe_cache["tag"], _probe_cache.get("digest")
+        cfg = _embedding_slot() or {}
+        wanted_model = str(cfg.get("model") or "")
+        wanted_base = wanted_model.split(":", 1)[0]
         tag = None
         digest = None
         try:
             data = _http_json("/api/tags", timeout=2.0)
             for model in data.get("models", []):
                 name = str(model.get("name", ""))
-                if name == MODEL_PREFIX or name.startswith(MODEL_PREFIX + ":"):
+                if wanted_model:
+                    matched = name == wanted_model or (
+                        wanted_base and name.split(":", 1)[0] == wanted_base)
+                else:
+                    matched = (name == MODEL_PREFIX
+                               or name.startswith(MODEL_PREFIX + ":"))
+                if matched:
                     tag = name
                     raw_digest = str(model.get("digest", "") or "").strip()
                     digest = raw_digest or None
@@ -148,9 +172,11 @@ class Embedder:
     def __init__(self):
         tag, digest = _probe_model()
         if tag is None:
+            cfg = model_slots.effective("embedding") or {}
+            wanted = str(cfg.get("model") or MODEL_PREFIX)
             raise EmbeddingUnavailable(
-                "未检测到 Ollama 的 bge-m3 模型。安装 Ollama 后执行："
-                "ollama pull bge-m3"
+                f"未在 Ollama（{cfg.get('endpoint') or _OLLAMA_URL}）检测到嵌入模型"
+                f"「{wanted}」。确认 Ollama 在运行后执行：ollama pull {wanted}"
             )
         self.tag = tag
         self.digest = digest
@@ -169,7 +195,8 @@ class Embedder:
         than collapsing every 1024-d bge-m3 variant into one id.
         """
         identity = (self.digest or self.tag).replace(":", "-").replace("/", "-")
-        return f"ollama-{MODEL_PREFIX}-{identity[:24]}-d{DIM}"
+        base = self.tag.split(":", 1)[0] or MODEL_PREFIX
+        return f"ollama-{base}-{identity[:24]}-d{DIM}"
 
     def encode(self, texts: list[str]) -> np.ndarray:
         """编码一批文本，返回 L2 归一化后的 float32 矩阵。

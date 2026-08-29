@@ -37,6 +37,8 @@ from app.retrieval.pipeline import (
 
 log = logging.getLogger("inktable.qa")
 
+# 档位（设置随每次请求传入）：深度 = 原默认管线；快速 = 可预期的单轮轻量管线。
+QA_MODES = ("quick", "deep")
 # 证据预算：早期为小上下文模型定的保守值（6 片 / 3600 字）会让回答"准确但单薄"。
 # 现代模型上下文普遍 256K–1M，把证据放开到 120 片 / 每文件 30 片 / 邻居各扩 3 片，
 # 装配字符预算 64000（仍远低于 256K 上下文）——
@@ -46,6 +48,16 @@ MAX_PER_CONTENT = 30
 NEIGHBOR_SPAN = 3
 CONTEXT_CHAR_BUDGET = 64000
 RETRIEVAL_LIMIT = 120
+_RETRIEVAL_BUDGETS = {
+    # 深度：全量证据预算，配全量校验与重试
+    "deep": {"retrieval_limit": RETRIEVAL_LIMIT, "top_context": TOP_CONTEXT,
+             "max_per_content": MAX_PER_CONTENT, "neighbor_span": NEIGHBOR_SPAN,
+             "char_budget": CONTEXT_CHAR_BUDGET},
+    # 快速：小候选池小预算 + 单轮生成，跳过蕴含校验与拒答重试；
+    # 零成本的确定性硬校验（虚构引用剔除、拒答截断、逐字引文核验）全部保留
+    "quick": {"retrieval_limit": 48, "top_context": 24, "max_per_content": 8,
+              "neighbor_span": 1, "char_budget": 16000},
+}
 REFUSAL = "未在文件库中找到足够依据"
 
 _CITE = re.compile(r"\[C(\d{1,3})\]")   # 证据可达三位数条目，两位会漏 C100+
@@ -85,21 +97,23 @@ class Answer:
 # ---------------------------------------------------------------- 检索与装配
 
 def retrieve_context(conn, question: str, book_id: int | None = None,
-                     *, return_trace: bool = False):
+                     *, return_trace: bool = False, qa_mode: str = "deep"):
     # 候选池放宽到 120：更大的证据预算需要更多候选来喂满，
     # 否则"讲全"受限于召回而不是预算
+    budget = _RETRIEVAL_BUDGETS.get(qa_mode, _RETRIEVAL_BUDGETS["deep"])
     retrieval = run_retrieval(
-        conn, question, route_limit=RETRIEVAL_LIMIT,
-        candidate_limit=RETRIEVAL_LIMIT, book_id=book_id,
+        conn, question, route_limit=budget["retrieval_limit"],
+        candidate_limit=budget["retrieval_limit"], book_id=book_id,
     )
     if not retrieval.candidates:
         return ([], retrieval.trace.to_dict()) if return_trace else []
     candidates = load_context_candidates(
-        conn, retrieval, limit=TOP_CONTEXT,
-        max_per_content=MAX_PER_CONTENT, book_id=book_id,
+        conn, retrieval, limit=budget["top_context"],
+        max_per_content=budget["max_per_content"], book_id=book_id,
     )
     candidates = expand_neighbors(
-        conn, candidates, neighbor_span=NEIGHBOR_SPAN, trace=retrieval.trace,
+        conn, candidates, neighbor_span=budget["neighbor_span"],
+        trace=retrieval.trace,
     )
     source_chars = sum(len(source.text) for source in {
         (source.file_id, source.chunk_id): source
@@ -108,7 +122,7 @@ def retrieve_context(conn, question: str, book_id: int | None = None,
     spans = compress_evidence(question, candidates, trace=retrieval.trace)
     pack = assemble_context(
         spans, trace=retrieval.trace, source_chars=source_chars,
-        char_budget=CONTEXT_CHAR_BUDGET,
+        char_budget=budget["char_budget"],
     )
     pieces = [
         ContextPiece(
@@ -147,19 +161,36 @@ def _requires_knowledge_scope(question: str) -> bool:
     return any(marker in compact for marker in _KNOWLEDGE_SCOPE_MARKERS)
 
 
-def build_messages(question: str, pieces: list[ContextPiece]) -> list[dict]:
+def build_messages(question: str, pieces: list[ContextPiece],
+                   quick: bool = False) -> list[dict]:
     """资料在前、问题在后，问题后补一行约束复述（§12.4 ⑤ recency 槽位）。
 
     模型先做意图路由：与本地资料相关 → 严格依据资料并逐句引用；
     寒暄/常识/写作等通用问题 → 以 GENERAL_MARK 开头自然回答。
     路由标记在带内声明，后置校验据此分流 —— 知识库回答仍走全部硬校验，
     通用回答在界面明确标注"未引用文件库"，来源永远可辨。
+
+    quick 档（快速简洁）：不要求引用标记，要求短答 —— 引用与逐条校验是
+    深度档的语义，快速档的契约是"快"。
     """
     ctx_lines = []
     for p in pieces:
         loc = f"第{p.page}页" if p.page else (p.section_path or "")
         ctx_lines.append(f"[{p.tag}] 《{p.file_name}》{('·' + loc) if loc else ''}\n{p.text}")
     ctx = "\n\n".join(ctx_lines) if ctx_lines else "（本次没有检索到相关资料）"
+
+    if quick:
+        system = (
+            "你是个人知识库的快速问答助手。先判断问题是否需要依据【资料】作答：\n"
+            "1) 资料中有相关信息 → 只依据【资料】回答，不超过 5 句话，直接给核心"
+            "要点；不要输出引用标记（如 [C1]）、不要标题、不要逐条罗列；"
+            f"资料没有直接回答问题时只回答「{REFUSAL}」。\n"
+            "2) 与资料无关的通用问题 → 第一行以" + GENERAL_MARK + "开头，然后简洁回答。\n"
+            "拿不准时优先按第 1 类处理。始终使用与问题相同的语言回答。"
+        )
+        user = f"【资料】\n{ctx}\n\n【问题】\n{question}\n\n（简洁作答，不要引用标记。）"
+        return [{"role": "system", "content": system},
+                {"role": "user", "content": user}]
 
     system = (
         "你是个人知识库的问答助手。先判断用户的问题是否需要依据【资料】"
@@ -396,12 +427,12 @@ def _verify_claim_support(
         + json.dumps(items, ensure_ascii=False)
     )
     try:
-        raw = llm.chat(
+        raw = _chat_adaptive(
             [
                 {"role": "system", "content": "你是严格的引用蕴含校验器。"},
                 {"role": "user", "content": prompt},
             ],
-            temperature=0, max_tokens=1000, timeout=120,
+            max_tokens=1000, timeout=120,
         )
         answerable, judgments = _parse_support_verdict(raw, len(claims))
         return judgments, answerable, ""
@@ -465,6 +496,22 @@ def auto_cite(text: str, pieces: list[ContextPiece]) -> tuple[str, int] | None:
 
 # ---------------------------------------------------------------- 多轮浓缩与检索改写
 
+def _chat_adaptive(messages: list[dict], *, max_tokens: int, timeout: float,
+                   temperature: float = 0) -> str:
+    """小预算辅助调用对推理模型不友好：思考先把 max_tokens 吃光，
+    content 为空。拿到空正文时放宽 4 倍预算重试一次，仍空才返回空串
+    （调用方按原有回退路径处理，不阻塞问答）。"""
+    text = llm.chat(messages, temperature=temperature,
+                    max_tokens=max_tokens, timeout=timeout) or ""
+    if text.strip():
+        return text
+    try:
+        return llm.chat(messages, temperature=temperature,
+                        max_tokens=max_tokens * 4,
+                        timeout=max(timeout, 30)) or ""
+    except llm.LLMError:
+        return text
+
 def _condense_question(question: str, history: list[dict]) -> str:
     """把依赖对话上下文的追问改写成可独立检索的问题（conversational condensing）。
 
@@ -482,14 +529,14 @@ def _condense_question(question: str, history: list[dict]) -> str:
         if answer_text:
             lines.append(f"助手：{answer_text[:200]}")
     try:
-        rewritten = llm.chat(
+        rewritten = _chat_adaptive(
             [{"role": "system", "content":
               "把用户的新问题改写成不依赖对话历史、可独立用于检索的完整问题。"
               "只输出改写后的问题本身，不要任何解释或前缀。"
               "如果新问题本身已经独立完整，原样输出。"},
              {"role": "user", "content":
               "【对话历史】\n" + "\n".join(lines) + f"\n\n【新问题】\n{question}"}],
-            temperature=0, max_tokens=200, timeout=15,
+            max_tokens=200, timeout=15,
         ).strip()
     except llm.LLMError:
         return question
@@ -505,13 +552,13 @@ def _rewrite_for_retrieval(question: str) -> str | None:
     对不上。换成更可能出现在文档里的关键词重试一次，命中率立涨。
     """
     try:
-        rewritten = llm.chat(
+        rewritten = _chat_adaptive(
             [{"role": "system", "content":
               "在个人文件库中没有检索到这个问题的答案。请把它改写成更可能"
               "命中文档原文的检索查询：改用文档里可能出现的关键词、同义词，"
               "展开缩写。只输出改写后的查询本身，不要解释。"},
              {"role": "user", "content": question}],
-            temperature=0, max_tokens=120, timeout=15,
+            max_tokens=120, timeout=15,
         ).strip()
     except llm.LLMError:
         return None
@@ -528,18 +575,22 @@ def ask(
     book_id: int | None = None,
     history: list[dict] | None = None,
     event_callback: Callable[[str, dict], None] | None = None,
+    qa_mode: str = "deep",
 ) -> Answer:
+    if qa_mode not in QA_MODES:
+        qa_mode = "deep"
     if not llm.is_configured():
         return Answer(status="not_configured", answer=None,
                       hedge="尚未配置模型服务，可先使用搜索")
 
-    validation: dict = {"attempts": 0}
+    validation: dict = {"attempts": 0, "qa_mode": qa_mode}
     # 多轮追问先浓缩成独立问题再检索；生成仍然用用户原话
     search_query = _condense_question(question, history or [])
     if search_query != question:
         validation["condensed_query"] = search_query
 
-    pieces, trace = retrieve_context(conn, search_query, book_id, return_trace=True)
+    pieces, trace = retrieve_context(conn, search_query, book_id,
+                                     return_trace=True, qa_mode=qa_mode)
     # 没有检索到资料也继续 —— 模型可路由为通用回答；涉及资料则按提示拒答
 
     from app.index.confidence import assess
@@ -557,12 +608,17 @@ def ask(
     answer = _generate(
         question, pieces, conf, trace, validation,
         max_tokens=answer_tokens, event_callback=event_callback,
+        qa_mode=qa_mode,
     )
 
     # 拒答 ≠ 库里没有：换检索关键词重试一次（有界，最多一轮）。
     # 重试用独立的 validation 副本 —— 重试失败被丢弃时，
     # 不能污染首轮已经留痕的校验记录。
+    # 快速档不做拒答重试：改写 + 二次检索 + 重生成是两轮额外模型调用，
+    # 快速档的契约就是单轮 —— 拒答原样返回，用户可切深度档再问。
     if answer.status == "refused":
+        if qa_mode == "quick":
+            return answer
         if _requires_knowledge_scope(question):
             answer.validation["knowledge_scope_refusal_preserved"] = True
             return answer
@@ -578,6 +634,7 @@ def ask(
                 retry = _generate(
                     question, retry_pieces, conf, retry_trace, retry_validation,
                     max_tokens=answer_tokens, event_callback=event_callback,
+                    qa_mode=qa_mode,
                 )
                 if retry.status == "answered":
                     return retry
@@ -590,6 +647,7 @@ def ask(
             retry = _generate(
                 question, pieces, conf, trace, retry_validation,
                 max_tokens=answer_tokens, event_callback=event_callback,
+                qa_mode=qa_mode,
             )
             if retry.status == "answered":
                 return retry
@@ -601,11 +659,14 @@ def _generate(
     trace: dict, validation: dict,
     max_tokens: int | None = None,
     event_callback: Callable[[str, dict], None] | None = None,
+    qa_mode: str = "deep",
 ) -> Answer:
     """一轮完整生成：装配 → LLM →（通用路由 / 四条硬校验 / 自动归因）。"""
-    messages = build_messages(question, pieces)
+    messages = build_messages(question, pieces, quick=(qa_mode == "quick"))
 
-    for attempt in (1, 2, 3):
+    # 快速档只允许一轮：无重试、无蕴含校验 —— 校验失败宁可降级为
+    # 片段列表也不追加模型调用，保证延迟可预期。
+    for attempt in ((1,) if qa_mode == "quick" else (1, 2, 3)):
         validation["attempts"] = attempt
         try:
             # max_tokens=None → 不传上限，跟随所选模型的默认输出上限。
@@ -699,6 +760,20 @@ def _generate(
         uncited_claims = _uncited_claim_count(cleaned) if cited else 0
         unsupported_claims = 0
         verifier_error = ""
+        if qa_mode == "quick":
+            # 快速档契约 = 简洁回答、无引用：引用与逐条校验是深度档的
+            # 语义。模型即使习惯性输出了 [Cn] 也直接剥掉（界面上没有
+            # 引用卡可点，留着只会误导）。拒答句原样透传。
+            plain = _CITE.sub("", cleaned).strip()
+            validation["support_check"] = "skipped_quick"
+            if plain == REFUSAL:
+                return Answer(status="refused", answer=REFUSAL,
+                              hedge=conf.hedge, validation=validation,
+                              trace=trace)
+            if not plain:
+                break   # 空回复 → 降级为片段列表
+            return Answer(status="answered", answer=plain, citations=[],
+                          hedge=conf.hedge, validation=validation, trace=trace)
         if (cited or raw_cited) and not uncited_claims:
             claims = _claims_with_evidence(cleaned, pieces)
             judgments, answerable, verifier_error = _verify_claim_support(

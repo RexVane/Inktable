@@ -196,3 +196,94 @@ def test_relation_rebuild_computes_outside_write_lock(monkeypatch) -> None:
         assert invalid.status_code == 422
     finally:
         conn.close()
+
+
+def test_taxonomy_and_category_tag_uncategorized_filters() -> None:
+    """左栏知识馆树的数据源：分类/标签计数 + 三种过滤（分类/标签/未分类）。"""
+    app, conn = _app()
+    try:
+        # 第二个条目用于体现过滤效果
+        conn.execute(
+            "INSERT INTO contents(id, sha256, size, parse_state) "
+            "VALUES (2, 'sha-api-2', 10, 'indexed')"
+        )
+        conn.execute(
+            """INSERT INTO files
+               (id, volume_uuid, inode, content_id, path, name, source_id, ext,
+                size, state, detected_at, mtime)
+               VALUES (2, 'vol', 2, 2, '/docs/other.md', 'other.md', 1, 'md',
+                       10, 'registered', 1, 1)"""
+        )
+        sync_library_items(conn, now=10)
+        cat = conn.execute(
+            "INSERT INTO categories(name, sort_order) VALUES ('课程', 0)"
+        ).lastrowid
+        tag = conn.execute("INSERT INTO tags(name) VALUES ('网络')").lastrowid
+        conn.execute(
+            "UPDATE library_items SET category_id = ?, enrichment_status = 'ready' "
+            "WHERE content_id = 1", (cat,))
+        conn.execute(
+            "INSERT INTO library_item_tags(library_item_id, tag_id) "
+            "SELECT id, ? FROM library_items WHERE content_id = 1", (tag,))
+        conn.commit()
+
+        client = TestClient(app)
+
+        taxonomy = client.get('/library/taxonomy')
+        assert taxonomy.status_code == 200
+        body = taxonomy.json()
+        assert body['categories'][0]['name'] == '课程'
+        assert body['categories'][0]['count'] == 1
+        assert body['tags'][0]['name'] == '网络'
+        assert body['tags'][0]['count'] == 1
+        assert body['uncategorized'] == 1
+
+        by_cat = client.get(f'/library/items?category_id={cat}').json()
+        assert by_cat['total'] == 1
+        assert by_cat['items'][0]['title'] == 'note.md'
+
+        by_tag = client.get(f'/library/items?tag_id={tag}').json()
+        assert by_tag['total'] == 1
+        assert by_tag['items'][0]['title'] == 'note.md'
+
+        uncat = client.get('/library/items?category_id=-1').json()
+        assert uncat['total'] == 1
+        assert uncat['items'][0]['title'] == 'other.md'
+    finally:
+        conn.close()
+
+
+def test_library_tree_returns_all_visible_items_lightweight() -> None:
+    """/library/tree：左栏树的完整叶子 —— 轻量列、不分页、含未分类。"""
+    app, conn = _app()
+    try:
+        conn.execute(
+            "INSERT INTO contents(id, sha256, size, parse_state) "
+            "VALUES (2, 'sha-tree-2', 10, 'indexed')"
+        )
+        conn.execute(
+            """INSERT INTO files
+               (id, volume_uuid, inode, content_id, path, name, source_id, ext,
+                size, state, detected_at, mtime)
+               VALUES (2, 'vol', 2, 2, '/docs/other.md', 'other.md', 1, 'md',
+                       10, 'registered', 1, 1)"""
+        )
+        sync_library_items(conn, now=10)
+        cat = conn.execute(
+            "INSERT INTO categories(name, sort_order) VALUES ('分类A', 0)"
+        ).lastrowid
+        conn.execute("UPDATE library_items SET category_id = ? WHERE content_id = 1",
+                     (cat,))
+        conn.commit()
+
+        client = TestClient(app)
+        resp = client.get('/library/tree')
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body['truncated'] is False
+        titles = {item['title'] for item in body['items']}
+        assert titles == {'note.md', 'other.md'}
+        first = body['items'][0]
+        assert set(first) == {'id', 'title', 'category_id', 'enrichment_status'}
+    finally:
+        conn.close()

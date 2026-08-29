@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import json
 import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import time
 from pathlib import Path
 
@@ -73,7 +75,8 @@ def test_streaming_ask_finalizes_before_citations(api_client, monkeypatch):
     client, _main = api_client
     import app.qa.answer as answer_module
 
-    def fake_ask(_conn, _question, _book_id=None, history=None, event_callback=None):
+    def fake_ask(_conn, _question, _book_id=None, history=None,
+                 event_callback=None, qa_mode="deep"):
         assert event_callback is not None
         event_callback("chat.draft", {"text": "错误草稿", "attempt": 1})
         event_callback("chat.regenerating", {"attempt": 2})
@@ -335,3 +338,177 @@ def test_index_version_endpoints_require_auth(api_client, endpoint) -> None:
     else:
         response = client.get(endpoint)
     assert response.status_code == 401
+
+
+# ---------------------------------------------------------------- 模型槽位
+
+
+@pytest.fixture
+def clean_model_slots():
+    from app.config import models as model_slots
+
+    model_slots.clear("library")
+    model_slots.clear("embedding")
+    yield
+    model_slots.clear("library")
+    model_slots.clear("embedding")
+
+
+# ---------------------------------------------------------------- 回答档位（快速 / 深度）
+
+
+def test_ask_rejects_unknown_mode(api_client):
+    client, _main_mod = api_client
+    response = client.post(
+        "/ask", headers=H,
+        json={"question": "汝窑的烧成温度是多少？", "mode": "bogus"},
+    )
+    assert response.status_code == 422
+
+
+def test_ask_mode_passed_through_to_pipeline(api_client, monkeypatch):
+    client, main_mod = api_client
+    import app.qa.answer as answer_module
+
+    captured = {}
+
+    class _FakeAnswer:
+        status = "answered"
+        answer = "好"
+        citations: list = []
+        retrieved: list = []
+        hedge = ""
+        validation = {"qa_mode": "deep"}
+        mode = "knowledge"
+        trace = {}
+
+    def fake_ask(conn, q, book_id=None, history=None,
+                 event_callback=None, qa_mode="deep"):
+        captured["qa_mode"] = qa_mode
+        return _FakeAnswer()
+
+    monkeypatch.setattr(answer_module, "ask", fake_ask)
+
+    quick = client.post("/ask", headers=H,
+                        json={"question": "汝窑的烧成温度是多少？", "mode": "quick"})
+    assert quick.status_code == 200
+    assert captured["qa_mode"] == "quick"
+
+    default = client.post("/ask", headers=H,
+                          json={"question": "两淮盐政的稽核制度？"})
+    assert default.status_code == 200
+    assert captured["qa_mode"] == "deep"
+
+
+def test_model_slots_set_get_clear(api_client, clean_model_slots):
+    client, _main_mod = api_client
+    # 向量槽位只接受本地 Ollama
+    bad = client.post("/settings/models", headers=H, json={
+        "slot": "embedding", "provider": "openai",
+        "endpoint": "https://api.example.com/v1", "api_key": "sk-x", "model": "m"})
+    assert bad.status_code == 422
+
+    saved = client.post("/settings/models", headers=H, json={
+        "slot": "library", "provider": "openai",
+        "endpoint": "https://api.example.com/v1", "api_key": "sk-slot-key",
+        "model": "organizer-1"})
+    assert saved.status_code == 200
+    assert saved.json()["configured"] is True
+    assert saved.json()["model"] == "organizer-1"
+
+    slots = client.get("/settings/models", headers=H).json()["slots"]
+    assert set(slots) == {"qa", "library", "embedding"}
+    assert slots["library"]["provider"] == "openai"
+    assert "sk-slot-key" not in json.dumps(slots)
+
+    cleared = client.post("/settings/models", headers=H, json={
+        "slot": "library", "clear": True})
+    assert cleared.status_code == 200
+    assert cleared.json()["configured"] is False
+
+
+def test_model_slot_list_uses_saved_credentials(api_client, clean_model_slots, monkeypatch):
+    client, main_mod = api_client
+    from app.config import models as model_slots
+
+    # 假 openai /models 服务器
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            resp = json.dumps({"data": [{"id": "m-1"}, {"id": "m-2"}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp)))
+            self.end_headers()
+            self.wfile.write(resp)
+
+        def log_message(self, *a):
+            pass
+
+    srv = HTTPServer(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        saved = client.post("/settings/models", headers=H, json={
+            "slot": "library", "provider": "openai",
+            "endpoint": f"http://127.0.0.1:{srv.server_port}/v1",
+            "api_key": "sk-from-save", "model": "m-1"})
+        assert saved.status_code == 200
+        # 表单不带密钥（密钥不回显到前端）→ 服务端用已保存的密钥拉列表
+        listed = client.post("/settings/models/list", headers=H, json={
+            "slot": "library"})
+        assert listed.status_code == 200
+        assert listed.json()["models"] == ["m-1", "m-2"]
+        assert model_slots.get("library")["api_key"] == "sk-from-save"
+    finally:
+        srv.shutdown()
+
+
+def test_model_slot_list_requires_endpoint(api_client, clean_model_slots):
+    """openai 格式没地址必须 422；ollama 格式空地址回退默认本机地址。"""
+    client, _main_mod = api_client
+    r = client.post("/settings/models/list", headers=H,
+                    json={"slot": "library", "provider": "openai"})
+    assert r.status_code == 422
+    ok = client.post("/settings/models/list", headers=H,
+                     json={"slot": "embedding", "provider": "ollama"})
+    # 本机 Ollama 在跑 → 200；没在跑 → 502；都不应再报"地址为空"
+    assert ok.status_code in (200, 502)
+
+
+# ---------------------------------------------------------------- 原文查看器字节端点
+
+
+def test_files_raw_serves_registered_bytes(api_client, tmp_path):
+    client, main_mod = api_client
+    conn = main_mod.db()
+    source = conn.execute(
+        "INSERT INTO sources(name,path,kind,discovered_by,enabled,created_at) "
+        "VALUES('B盘','B:\\\\','system','fixed_drive',1,?)", (time.time(),))
+    conn.commit()
+    source_id = source.lastrowid
+    doc = tmp_path / "讲义.pdf"
+    doc.write_bytes(b"%PDF-1.4 test-bytes")
+    fid = conn.execute(
+        """INSERT INTO files(volume_uuid,inode,path,name,source_id,ext,size,state,detected_at)
+           VALUES('v',1,?,'讲义.pdf',?,'.pdf',?,'registered',?)""",
+        (str(doc), source_id, doc.stat().st_size, time.time())).lastrowid
+    conn.commit()
+
+    resp = client.get(f"/files/{fid}/raw", headers=H)
+    assert resp.status_code == 200
+    assert b"%PDF-1.4 test-bytes" in resp.content
+    assert resp.headers["content-type"].startswith("application/pdf")
+
+    assert client.get("/files/999999/raw", headers=H).status_code == 404
+    assert client.get(f"/files/{fid}/raw").status_code == 401
+
+
+def test_qa_slot_accepts_ollama_provider(api_client, clean_model_slots):
+    client, _main_mod = api_client
+    r = client.post("/settings/models", headers=H, json={
+        "slot": "qa", "provider": "ollama",
+        "endpoint": "http://127.0.0.1:11434", "model": "qwen3:8b"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["provider"] == "ollama"
+    assert body["configured"] is True      # 本地 Ollama 免密钥也算已配置
+    assert client.get("/settings/llm", headers=H).json()["provider"] == "ollama"

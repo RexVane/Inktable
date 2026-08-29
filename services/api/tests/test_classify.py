@@ -119,7 +119,7 @@ def test_rule_never_overrides_user(client, tmp_path):
         "file_ids": [ids["a.pdf"]], "category_id": cat_b, "learn_rule": True,
     })
 
-    b = [f for f in client.get("/files", headers=H, params={"limit": 100}).json()["files"]
+    _ = [f for f in client.get("/files", headers=H, params={"limit": 100}).json()["files"]
          if f["name"] == "b.pdf"][0]
     in_a = client.get("/files", headers=H, params={"category_id": cat_a}).json()["files"]
     assert "b.pdf" in [f["name"] for f in in_a], "规则覆盖了用户的手动归类"

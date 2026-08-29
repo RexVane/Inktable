@@ -14,6 +14,18 @@
     total: 0,
     offset: 0,
     filter: '',
+    categoryId: null,     // 左栏树选中的分类
+    tagId: null,          // 左栏树选中的标签
+    taxonomy: null,
+    treeItems: [],        // /library/tree 全量叶子
+    enriching: false,     // AI 整理循环进行中
+    enrichDone: 0,        // 本轮已整理篇数
+    enrichStop: false,    // 再点一次按钮 = 停止
+    treeOpen: (function () {
+      try { return JSON.parse(localStorage.getItem('libraryTreeOpen') || '{}') || {}; }
+      catch (e) { return {}; }
+    })(),
+    detailItemId: null,
     stats: null,
     relations: null,
     enrichment: null,
@@ -177,12 +189,201 @@
     if (!state.active) return;
     setMode(false);
     state.detail = null;
+    state.categoryId = null;
+    state.tagId = null;
+    var nav = document.getElementById('libraryNav');
+    if (nav) nav.remove();
     var el = surface();
     if (el) el.hidden = true;
     if (typeof window.showListPage === 'function') window.showListPage();
     if (typeof window.updateWorkbenchChrome === 'function') window.updateWorkbenchChrome();
     var q = document.getElementById('q');
     if (typeof window.load === 'function') window.load(q ? q.value.trim() : '');
+  }
+
+  /* 左栏知识馆树：分类按 parent_id 嵌套、可展开收起，
+     分类下挂知识条目叶子（点击直接打开知识卡片），标签仍为平铺过滤。 */
+  function persistTreeOpen() {
+    try { localStorage.setItem('libraryTreeOpen', JSON.stringify(state.treeOpen)); }
+    catch (e) { /* 存不下就算了，只影响展开记忆 */ }
+  }
+
+  function chevronEl(open) {
+    var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('class', 'ln-chev' + (open ? ' open' : ''));
+    svg.setAttribute('viewBox', '0 0 10 10');
+    svg.setAttribute('aria-hidden', 'true');
+    var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', 'M3 1.6 L7.2 5 L3 8.4');
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', 'currentColor');
+    path.setAttribute('stroke-width', '1.7');
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('stroke-linejoin', 'round');
+    svg.appendChild(path);
+    return svg;
+  }
+
+  function itemsUnder(categoryId) {
+    return state.treeItems.filter(function (it) {
+      return it.category_id === categoryId;
+    });
+  }
+
+  function makeLeaf(item, depth) {
+    var isActive = state.detailItemId === item.id;
+    var row = node('button', 'ln-item ln-leaf' + (isActive ? ' on' : ''),
+                   item.title || '未命名条目');
+    row.style.paddingLeft = (9 + depth * 13) + 'px';
+    row.title = item.title || '';
+    row.addEventListener('click', function () {
+      state.detailItemId = item.id;
+      renderLibraryNav();
+      openDetail(item.id);
+    });
+    return row;
+  }
+
+  function makeCategoryRow(cat, depth) {
+    var open = !!state.treeOpen[cat.id];
+    var row = node('button', 'ln-item ln-dir' + (state.categoryId === cat.id ? ' on' : ''));
+    row.style.paddingLeft = (9 + depth * 13) + 'px';
+    var label = node('span', 'ln-label', cat.name || '未命名分类');
+    row.appendChild(chevronEl(open));
+    row.appendChild(label);
+    row.appendChild(node('span', 'ln-count', String(cat.count || 0)));
+    row.addEventListener('click', function () {
+      state.treeOpen[cat.id] = !open;
+      persistTreeOpen();
+      state.categoryId = state.categoryId === cat.id ? null : cat.id;
+      state.tagId = null;
+      refreshLibrary(true);
+    });
+    return row;
+  }
+
+  function appendCategory(tree, cat, depth, childrenMap) {
+    tree.appendChild(makeCategoryRow(cat, depth));
+    if (!state.treeOpen[cat.id]) return;
+    (childrenMap[cat.id] || []).forEach(function (child) {
+      appendCategory(tree, child, depth + 1, childrenMap);
+    });
+    itemsUnder(cat.id).forEach(function (item, index) {
+      if (index >= 50) return;   // 单类叶子太多时截断，用中栏列表看全
+      tree.appendChild(makeLeaf(item, depth + 1));
+    });
+  }
+
+  function renderLibraryNav() {
+    var panel = document.getElementById('navPanel');
+    if (!panel) return;
+    var old = document.getElementById('libraryNav');
+    if (old) old.remove();
+    if (!state.taxonomy) return;
+    var tree = node('div', 'library-nav');
+    tree.id = 'libraryNav';
+
+    var all = node('button', 'ln-item' + (!state.categoryId && !state.tagId ? ' on' : ''),
+                   '全部条目');
+    all.appendChild(node('span', 'ln-count', String(state.total)));
+    all.addEventListener('click', function () {
+      state.categoryId = null;
+      state.tagId = null;
+      refreshLibrary(true);
+    });
+    tree.appendChild(all);
+
+    var categories = (state.taxonomy.categories || []);
+    if (categories.length) {
+      tree.appendChild(node('div', 'ln-head', '分类'));
+      var childrenMap = {};
+      var roots = [];
+      categories.forEach(function (cat) {
+        if (cat.parent_id && categories.some(function (c) { return c.id === cat.parent_id; })) {
+          (childrenMap[cat.parent_id] = childrenMap[cat.parent_id] || []).push(cat);
+        } else {
+          roots.push(cat);
+        }
+      });
+      roots.forEach(function (root) { appendCategory(tree, root, 0, childrenMap); });
+
+      var uncatItems = itemsUnder(null);
+      if (uncatItems.length || state.taxonomy.uncategorized > 0) {
+        var uncatOpen = !!state.treeOpen.uncategorized;
+        var uncat = node('button', 'ln-item ln-dir' + (state.categoryId === -1 ? ' on' : ''));
+        uncat.appendChild(chevronEl(uncatOpen));
+        uncat.appendChild(node('span', 'ln-label', '未分类'));
+        uncat.appendChild(node('span', 'ln-count', String(state.taxonomy.uncategorized)));
+        uncat.addEventListener('click', function () {
+          state.treeOpen.uncategorized = !uncatOpen;
+          persistTreeOpen();
+          state.categoryId = state.categoryId === -1 ? null : -1;
+          state.tagId = null;
+          refreshLibrary(true);
+        });
+        tree.appendChild(uncat);
+        if (uncatOpen) {
+          uncatItems.slice(0, 50).forEach(function (item) {
+            tree.appendChild(makeLeaf(item, 1));
+          });
+        }
+      }
+    }
+
+    var tags = (state.taxonomy.tags || []);
+    if (tags.length) {
+      tree.appendChild(node('div', 'ln-head', '标签'));
+      tags.slice(0, 30).forEach(function (tag) {
+        var isActive = state.tagId === tag.id && !state.categoryId;
+        var row = node('button', 'ln-item' + (isActive ? ' on' : ''), tag.name || '未命名标签');
+        row.appendChild(node('span', 'ln-count', String(tag.count || 0)));
+        row.addEventListener('click', function () {
+          state.tagId = isActive ? null : tag.id;
+          state.categoryId = null;
+          refreshLibrary(true);
+        });
+        tree.appendChild(row);
+      });
+    }
+
+    panel.appendChild(tree);
+    renderFilterChip();
+  }
+
+  function activeFilterLabel() {
+    if (state.categoryId != null) {
+      if (state.categoryId === -1) return '未分类';
+      var cats = (state.taxonomy && state.taxonomy.categories) || [];
+      for (var i = 0; i < cats.length; i++) {
+        if (cats[i].id === state.categoryId) return cats[i].name;
+      }
+      return '分类';
+    }
+    if (state.tagId != null) {
+      var tags = (state.taxonomy && state.taxonomy.tags) || [];
+      for (var j = 0; j < tags.length; j++) {
+        if (tags[j].id === state.tagId) return tags[j].name;
+      }
+      return '标签';
+    }
+    return null;
+  }
+
+  function renderFilterChip() {
+    var old = document.getElementById('libraryFilterChip');
+    if (old) old.remove();
+    var label = activeFilterLabel();
+    if (!label) return;
+    var chip = node('button', 'library-action library-filter-chip', '✕ ' + label);
+    chip.id = 'libraryFilterChip';
+    chip.title = '清除左栏筛选';
+    chip.addEventListener('click', function () {
+      state.categoryId = null;
+      state.tagId = null;
+      refreshLibrary(true);
+    });
+    var bar = document.querySelector('.library-toolbar');
+    if (bar) bar.insertBefore(chip, bar.firstChild);
   }
 
   function renderLoading(text) {
@@ -210,16 +411,24 @@
     state.busy = true;
     try {
       var offset = resetItems ? 0 : state.items.length;
+      var itemsUrl = '/library/items?limit=' + PAGE + '&offset=' + offset;
+      if (state.categoryId) itemsUrl += '&category_id=' + state.categoryId;
+      if (state.tagId) itemsUrl += '&tag_id=' + state.tagId;
       var results = await Promise.all([
         api('/library/stats'),
         api('/library/relations/status'),
         api('/library/enrichment/status'),
-        api('/library/items?limit=' + PAGE + '&offset=' + offset),
+        api(itemsUrl),
+        api('/library/taxonomy'),
+        api('/library/tree'),
       ]);
       state.stats = results[0];
       state.relations = results[1];
       state.enrichment = results[2];
       var page = results[3];
+      state.taxonomy = results[4];
+      state.treeItems = results[5] && results[5].items || [];
+      renderLibraryNav();
       state.items = resetItems ? (page.items || []) : state.items.concat(page.items || []);
       state.total = number(page.total);
       state.offset = state.items.length;
@@ -259,19 +468,44 @@
     });
     bar.appendChild(sync);
 
-    var enrich = button('AI 整理 3 篇', 'library-action primary', async function () {
-      await runAction(enrich, '整理中…', async function () {
-        var result = await api('/library/enrich?limit=3', 'POST');
-        if (result.available === false) {
-          showToast(result.error || '本地整理模型不可用');
+    // AI 整理：循环跑批（每批 10 篇）直到没有待整理条目；进行中再点一次停止。
+    // 进度放在 state 上 —— refreshLibrary 会重建工具栏，闭包里的元素会失效。
+    var enrich = button(
+      state.enriching
+        ? '整理中… 已完 ' + state.enrichDone + ' 篇（点击停止）'
+        : 'AI 整理全部',
+      'library-action primary', async function () {
+        if (state.enriching) { state.enrichStop = true; return; }
+        state.enriching = true;
+        state.enrichStop = false;
+        state.enrichDone = 0;
+        var failed = 0;
+        try {
+          while (!state.enrichStop) {
+            var result = await api('/library/enrich?limit=10', 'POST');
+            if (result.available === false) {
+              showToast(result.error || '整理模型不可用（设置 → 模型 里配置知识馆整理）');
+              break;
+            }
+            state.enrichDone += number(result.ready);
+            failed += number(result.failed);
+            if (!number(result.claimed)) break;   // 认领为零 = 全部整理完
+            await refreshLibrary(true);
+          }
+          if (state.enrichDone || failed) {
+            showToast('整理完成 ' + state.enrichDone + ' 篇' +
+              (failed ? '，失败 ' + failed + ' 篇（可再点一次重试）' : ''));
+          } else {
+            showToast('没有需要整理的条目');
+          }
+        } catch (err) {
+          showToast('整理失败：' + err.message);
+        } finally {
+          state.enriching = false;
+          state.enrichStop = false;
           await refreshLibrary(true);
-          return;
         }
-        showToast('已整理 ' + number(result.ready) + ' 篇' +
-          (number(result.stale) ? '，' + number(result.stale) + ' 篇需重试' : ''));
-        await refreshLibrary(true);
       });
-    });
     bar.appendChild(enrich);
 
     var rebuild = button('重建相关资料', 'library-action', async function () {
@@ -407,6 +641,7 @@
 
   async function openDetail(itemId) {
     if (!state.active) return;
+    state.detailItemId = itemId;
     renderLoading('正在读取知识卡片…');
     try {
       state.detail = await api('/library/items/' + encodeURIComponent(itemId));

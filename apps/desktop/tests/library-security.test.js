@@ -32,7 +32,8 @@ test('preload loads Library only as same-origin renderer assets', () => {
   assert.ok(policy);
   assert.match(policy[1], /script-src 'self'/);
   assert.match(policy[1], /style-src 'self'/);
-  assert.match(policy[1], /connect-src 'none'/);
+  // 唯一连接出口是主进程 inkdoc:// 授权文档协议（原文查看器）
+  assert.match(policy[1], /connect-src inkdoc:/);
 });
 
 test('Library renderer has no privileged or direct network capability', () => {
@@ -90,8 +91,8 @@ test('Library routes used by the renderer are admitted by the exact proxy allowl
 });
 
 test('Library maintenance actions remain explicit local UI actions', () => {
-  assert.match(library, /AI 整理 3 篇/);
-  assert.match(library, /\/library\/enrich\?limit=3/);
+  assert.match(library, /AI 整理全部/);
+  assert.match(library, /\/library\/enrich\?limit=10/);
   assert.match(library, /重建相关资料/);
   assert.match(library, /\/library\/relations\/rebuild/);
   assert.match(library, /Deterministic metadata sync only/);

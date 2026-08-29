@@ -31,4 +31,17 @@ dev = [
     "pillow>=12.3.0",
     "pyinstaller>=6.22.0",
     "pytest>=9.1.1",
+    "ruff>=0.16.3",
 ]
+
+[tool.ruff]
+target-version = "py312"
+
+# 只开"错了就是错了"的规则：F（pyflakes：未用导入/变量、未定义名、f-string 漏花括号）
+# 与 E9（语法错误、IO 错误）。
+#
+# 刻意不开的：E501 行长与任何格式化类规则。本仓库没有 formatter，既有代码
+# 有 607 行超过 88 列，那是既有状态而不是待修项——见 CLAUDE.md「代码风格」。
+# 也不要用 `ruff format`：会产生巨量 diff 且没有配置依据。
+[tool.ruff.lint]
+select = ["F", "E9"]

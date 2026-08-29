@@ -59,6 +59,8 @@ def library_page(
     *,
     status: str | None = None,
     category_id: int | None = None,
+    tag_id: int | None = None,
+    uncategorized: bool = False,
     limit: int = 100,
     offset: int = 0,
 ) -> dict:
@@ -72,6 +74,13 @@ def library_page(
     if category_id is not None:
         clauses.append("li.category_id = ?")
         params.append(category_id)
+    if tag_id is not None:
+        clauses.append(
+            "EXISTS (SELECT 1 FROM library_item_tags lit "
+            "WHERE lit.library_item_id = li.id AND lit.tag_id = ?)")
+        params.append(tag_id)
+    if uncategorized:
+        clauses.append("li.category_id IS NULL")
     total = int(
         conn.execute(
             f"SELECT COUNT(*) FROM library_items li WHERE {' AND '.join(clauses)}",
@@ -84,6 +93,8 @@ def library_page(
             conn,
             status=status,
             category_id=category_id,
+            tag_id=tag_id,
+            uncategorized=uncategorized,
             limit=limit,
             offset=offset,
         )
@@ -238,3 +249,60 @@ def library_stats(conn: sqlite3.Connection) -> dict:
         "tagged": tagged,
         "relations": related,
     }
+
+
+def library_taxonomy(conn: sqlite3.Connection) -> dict:
+    """分类与标签及各自的可见条目数 —— 左栏知识馆树的数据源。
+
+    分类含空分类（新建分类也要看得见）；标签只列有条目挂靠的。
+    未分类单独给出计数，让"还没归类的"有一个可点击的入口。
+    """
+    visible = visible_content_exists("li.content_id", "vf", "vs")
+    categories = [
+        dict(row)
+        for row in conn.execute(
+            f"""SELECT c.id, c.name, c.parent_id, COUNT(li.id) AS count
+                FROM categories c
+                LEFT JOIN library_items li
+                  ON li.category_id = c.id AND {visible}
+                GROUP BY c.id
+                ORDER BY c.sort_order, c.name"""
+        )
+    ]
+    tags = [
+        dict(row)
+        for row in conn.execute(
+            f"""SELECT t.id, t.name, COUNT(lit.library_item_id) AS count
+                FROM tags t
+                JOIN library_item_tags lit ON lit.tag_id = t.id
+                JOIN library_items li ON li.id = lit.library_item_id AND {visible}
+                GROUP BY t.id
+                ORDER BY COUNT(lit.library_item_id) DESC, t.name"""
+        )
+    ]
+    uncategorized = int(conn.execute(
+        f"SELECT COUNT(*) FROM library_items li "
+        f"WHERE {visible} AND li.category_id IS NULL"
+    ).fetchone()[0])
+    return {"categories": categories, "tags": tags,
+            "uncategorized": uncategorized}
+
+
+def library_tree(conn: sqlite3.Connection) -> dict:
+    """左栏知识馆树的全量叶子 —— 只取轻量列，不做分页。
+
+    树需要"每个分类下有哪些条目"的完整视图，分页会让树残缺；
+    只取 id/title/category_id/状态，2000 条封顶（可见条目超过时截断并标记）。
+    """
+    visible = visible_content_exists("li.content_id", "vf", "vs")
+    items = [
+        dict(row)
+        for row in conn.execute(
+            f"""SELECT li.id, li.title, li.category_id, li.enrichment_status
+                FROM library_items li
+                WHERE {visible}
+                ORDER BY (li.category_id IS NULL), li.category_id, li.title
+                LIMIT 2000"""
+        )
+    ]
+    return {"items": items, "truncated": len(items) >= 2000}

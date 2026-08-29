@@ -11,13 +11,90 @@
 
 const {
   app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu,
-  nativeImage, nativeTheme, safeStorage, shell, Tray,
+  nativeImage, nativeTheme, protocol, safeStorage, shell, Tray,
 } = require('electron');
 const { spawn, spawnSync } = require('child_process');
 const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
+
+// ---- inkdoc:// 自定义协议：原文查看器的文件字节通道 ----
+// 渲染层 connect-src 'none'，不能自己发请求；PDF.js / docx-preview 需要
+// 用 fetch 拿文件字节与字体资源。inkdoc 只做两件事，且都先过授权：
+//   inkdoc://file/{file_id}/{name}  → 转发 sidecar /files/{id}/raw（库内登记路径，
+//                                     Range 透传，大 PDF 懒加载）
+//   inkdoc://app/vendor/{path}      → 提供应用内嵌的 pdfjs cmaps/standard_fonts
+// 密钥只在主进程，渲染层拿不到 sidecar 端口与令牌。
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'inkdoc',
+    privileges: { standard: true, stream: true, supportFetchAPI: true } },
+]);
+
+const VENDOR_ROOT = path.resolve(__dirname, '..', 'renderer', 'vendor');
+
+async function handleInkdocRequest(request) {
+  let url;
+  try {
+    url = new URL(request.url);
+  } catch {
+    return new Response('bad request', { status: 400 });
+  }
+  if (!sidecarInfo) {
+    return new Response('sidecar 未就绪',
+      { status: 503, headers: { 'Access-Control-Allow-Origin': '*' } });
+  }
+
+  if (url.host === 'file') {
+    // inkdoc://file/{file_id}/{name} —— id 必须是纯数字，其余由 sidecar 校验
+    const match = url.pathname.match(/^\/(\d+)(?:\/.*)?$/);
+    if (!match) return new Response('not found', { status: 404 });
+    const headers = { Authorization: `Bearer ${sidecarInfo.token}` };
+    const range = request.headers.get('range');
+    if (range) headers.Range = range;
+    const upstream = await fetch(
+      `http://127.0.0.1:${sidecarInfo.port}/files/${match[1]}/raw`, { headers });
+    const respHeaders = new Headers();
+    for (const h of ['content-type', 'content-length', 'content-range',
+      'accept-ranges', 'etag', 'last-modified']) {
+      const value = upstream.headers.get(h);
+      if (value) respHeaders.set(h, value);
+    }
+    respHeaders.set('Cache-Control', 'no-store');
+    // file:// 页面 origin 是 null：没有 ACAO 头 fetch 一律 "Failed to fetch"
+    respHeaders.set('Access-Control-Allow-Origin', '*');
+    return new Response(upstream.body,
+      { status: upstream.status, headers: respHeaders });
+  }
+
+  if (url.host === 'app') {
+    // inkdoc://app/vendor/{path} —— 只读应用内嵌 vendor 目录，拒绝任何穿越
+    const match = url.pathname.match(/^\/vendor\/(.+)$/);
+    if (!match) return new Response('not found', { status: 404 });
+    const target = path.resolve(VENDOR_ROOT, decodeURIComponent(match[1]));
+    if (!target.startsWith(VENDOR_ROOT + path.sep)) {
+      return new Response('forbidden', { status: 403 });
+    }
+    try {
+      const stat = fs.statSync(target);
+      if (!stat.isFile()) throw new Error('not a file');
+      const ext = path.extname(target).toLowerCase();
+      const types = {
+        '.bcmap': 'application/octet-stream', '.pfb': 'application/octet-stream',
+        '.ttf': 'font/ttf', '.mjs': 'text/javascript', '.js': 'text/javascript',
+      };
+      return new Response(fs.readFileSync(target), {
+        headers: { 'Content-Type': types[ext] || 'application/octet-stream',
+                   'Cache-Control': 'no-store',
+                   'Access-Control-Allow-Origin': '*' },
+      });
+    } catch {
+      return new Response('not found', { status: 404 });
+    }
+  }
+
+  return new Response('not found', { status: 404 });
+}
 
 let mainWindow = null;
 let sidecar = null;
@@ -73,34 +150,61 @@ const defaultDataDir = () => {
 };
 const currentDataDir = () => customDataDir || defaultDataDir();
 
-// ---- LLM 配置：safeStorage 加密落盘（§6.3），密钥绝不进渲染进程 ----
+// ---- 模型配置：safeStorage 加密落盘（§6.3），密钥绝不进渲染进程 ----
+// v2 起按槽位存储：{ slots: { qa, library, embedding } }，各槽位独立。
 const llmConfigPath = () => path.join(app.getPath('userData'), 'llm.enc');
 
 function loadLLMConfig() {
   try {
     const blob = fs.readFileSync(llmConfigPath());
-    return JSON.parse(safeStorage.decryptString(blob));
+    const parsed = JSON.parse(safeStorage.decryptString(blob));
+    const slots = (parsed && parsed.slots) || {};
+    // v1 平铺格式（{endpoint, api_key, model}）迁移为 qa 槽位
+    const qa = slots.qa
+      || (parsed && !parsed.slots && (parsed.endpoint || parsed.model) ? parsed : null);
+    return {
+      qa: qa || null,
+      library: slots.library || null,
+      embedding: slots.embedding || null,
+    };
   } catch { return null; }
 }
 
-function saveLLMConfig(cfg) {
+function saveLLMConfig(slots) {
+  if (!slots.qa && !slots.library && !slots.embedding) {
+    // 三个槽位全空 = 没有任何密钥值得落盘，直接删文件
+    try { fs.unlinkSync(llmConfigPath()); } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+    }
+    return;
+  }
   if (!safeStorage.isEncryptionAvailable()) {
     throw new Error('系统安全存储不可用，已拒绝在磁盘保存 API 密钥');
   }
   fs.mkdirSync(path.dirname(llmConfigPath()), { recursive: true });
-  fs.writeFileSync(llmConfigPath(), safeStorage.encryptString(JSON.stringify(cfg)));
+  fs.writeFileSync(llmConfigPath(), safeStorage.encryptString(JSON.stringify({ slots })));
 }
 
-async function pushLLMToSidecar(cfg) {
+function slotShape(cfg) {
+  return cfg
+    ? { provider: cfg.provider || 'openai', endpoint: cfg.endpoint || '',
+        model: cfg.model || '', has_key: !!cfg.api_key }
+    : { provider: null, endpoint: '', model: '', has_key: false };
+}
+
+async function pushLLMToSidecar(cfg, slot) {
   if (!sidecarInfo) return;
   try {
-    await fetch(`http://127.0.0.1:${sidecarInfo.port}/settings/llm`, {
+    await fetch(`http://127.0.0.1:${sidecarInfo.port}/settings/models`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json',
                  Authorization: `Bearer ${sidecarInfo.token}` },
-      body: JSON.stringify(cfg || { endpoint: '', api_key: '', model: '' }),
+      body: JSON.stringify(cfg
+        ? { slot, provider: cfg.provider || 'openai', endpoint: cfg.endpoint || '',
+            api_key: cfg.api_key || '', model: cfg.model || '' }
+        : { slot, clear: true }),
     });
-  } catch (e) { console.error('[main] LLM 配置推送失败:', e.message); }
+  } catch (e) { console.error('[main] 模型配置推送失败:', e.message); }
 }
 
 function resolveSidecarPath() {
@@ -217,8 +321,13 @@ function startSidecar() {
 
     // 令牌与模型配置经 stdin 传入，避免出现在进程表里（§6.2/§6.3）
     const boot = { token: SESSION_TOKEN };
-    const llm = loadLLMConfig();
-    if (llm) boot.llm = llm;
+    const slots = loadLLMConfig();
+    if (slots) {
+      boot.llm = {};
+      for (const [slot, cfg] of Object.entries(slots)) {
+        if (cfg) boot.llm[slot] = cfg;
+      }
+    }
     proc.stdin.write(JSON.stringify(boot) + '\n', (err) => {
       if (err) rejectStartup(err);
     });
@@ -428,7 +537,7 @@ ipcMain.handle('sidecar:info', () => (sidecarInfo ? { port: sidecarInfo.port } :
 ipcMain.handle('sidecar:get-status', () => lastSidecarStatus);
 
 const API_ROUTE_RULES = [
-  ['GET', /^\/(?:health|categories|books|stats|sources|watch\/status|index\/status|settings\/(?:ocr|qa|llm)|integrations\/ccswitch|reports\/weekly|journal|journal\/related)(?:\?[^#]*)?$/],
+  ['GET', /^\/(?:health|categories|books|stats|sources|watch\/status|index\/status|settings\/(?:ocr|qa|llm|models)|integrations\/ccswitch|reports\/weekly|journal|journal\/related)(?:\?[^#]*)?$/],
   ['GET', /^\/files(?:\?[^#]*)?$/],
   // 文件树是 /files/tree（两段），不是 /files/{id}/tree；正文读取带分页查询参数。
   // file_id 是整数主键，收窄成 [0-9]+ 而非宽松的 [^/]+。
@@ -436,13 +545,14 @@ const API_ROUTE_RULES = [
   ['GET', /^\/files\/[0-9]+\/(?:detail|content)(?:\?[^#]*)?$/],
   // AI Library 只放行当前 UI 需要的精确路由和参数形状；不要用
   // /library/.* 或任意查询串这种宽白名单。
-  ['GET', /^\/library\/items(?:\?limit=[0-9]+&offset=[0-9]+(?:&status=(?:pending|running|ready|failed|stale))?)?$/],
+  ['GET', /^\/library\/items(?:\?limit=[0-9]+&offset=[0-9]+(?:&status=(?:pending|running|ready|failed|stale))?(?:&category_id=-?[0-9]+)?(?:&tag_id=[0-9]+)?)?$/],
   ['GET', /^\/library\/items\/[0-9]+$/],
-  ['GET', /^\/library\/(?:stats|enrichment\/status|relations\/status)$/],
+  ['GET', /^\/library\/(?:stats|enrichment\/status|relations\/status|taxonomy|tree)$/],
+  ['GET', /^\/files\/[0-9]+\/raw$/],
   ['POST', /^\/library\/sync$/],
   ['POST', /^\/library\/enrich(?:\?limit=[0-9]+)?$/],
   ['POST', /^\/library\/relations\/rebuild(?:\?limit=[0-9]+&top_k=[0-9]+&min_score=-?[0-9]+(?:\.[0-9]+)?&chunks_per_item=[0-9]+)?$/],
-  ['POST', /^\/(?:settings\/llm\/test|ask(?:\/stream)?|files\/(?:remove|classify)|books\/add|classify\/auto_ext|search|sources\/(?:discover|discover_deep|preview|enable|disable|remove|add|auto_preserve|preserve_all)|watch\/start|index\/(?:run|embed_backfill|retry_scanned)|settings\/(?:ocr|qa)|journal\/remove)$/],
+  ['POST', /^\/(?:settings\/llm\/test|settings\/models(?:\/test|\/list)?|ask(?:\/stream)?|files\/(?:remove|classify)|books\/add|classify\/auto_ext|search|sources\/(?:discover|discover_deep|preview|enable|disable|remove|add|auto_preserve|preserve_all)|watch\/start|index\/(?:run|embed_backfill|retry_scanned)|settings\/(?:ocr|qa)|journal\/remove)$/],
 ];
 const MAX_API_BODY_BYTES = 1024 * 1024;
 const MAX_STREAM_PAYLOAD_BYTES = 256 * 1024;
@@ -480,6 +590,24 @@ ipcMain.handle('api:request', async (_e, req) => {
   const reqPath = req && req.path;
   const method = (req && req.method ? String(req.method) : 'GET').toUpperCase();
   if (!isAllowedApiRequest(method, reqPath)) return { ok: false, status: 0, error: 'route not allowed' };
+  // 原文查看器保底通道：inkdoc:// 不可用时以 base64 过 IPC 取文件字节
+  const rawMatch = method === 'GET' ? reqPath.match(/^\/files\/([0-9]+)\/raw$/) : null;
+  if (rawMatch) {
+    try {
+      const upstream = await fetch(
+        `http://127.0.0.1:${sidecarInfo.port}/files/${rawMatch[1]}/raw`,
+        { headers: { Authorization: `Bearer ${sidecarInfo.token}` } });
+      if (!upstream.ok) {
+        return { ok: false, status: upstream.status, error: 'HTTP ' + upstream.status };
+      }
+      const buf = Buffer.from(await upstream.arrayBuffer());
+      return { ok: true, status: upstream.status,
+               b64: buf.toString('base64'),
+               contentType: upstream.headers.get('content-type') || 'application/octet-stream' };
+    } catch (err) {
+      return { ok: false, status: 0, error: String((err && err.message) || err) };
+    }
+  }
   const body = req && typeof req.body === 'string' ? req.body : undefined;
   if (method === 'POST' && body !== undefined && byteLength(body) > MAX_API_BODY_BYTES) {
     return { ok: false, status: 0, error: 'request body too large' };
@@ -783,41 +911,50 @@ ipcMain.handle('dialog:pickDirectory', async () => {
 });
 
 ipcMain.handle('llm:get', () => {
-  const cfg = loadLLMConfig();
-  const encryption_available = safeStorage.isEncryptionAvailable();
-  return cfg
-    ? { endpoint: cfg.endpoint || '', model: cfg.model || '', has_key: !!cfg.api_key,
-        encryption_available }
-    : { endpoint: '', model: '', has_key: false, encryption_available };
+  const slots = loadLLMConfig() || { qa: null, library: null, embedding: null };
+  return {
+    slots: {
+      qa: slotShape(slots.qa),
+      library: slotShape(slots.library),
+      embedding: slotShape(slots.embedding),
+    },
+    encryption_available: safeStorage.isEncryptionAvailable(),
+  };
 });
 
 ipcMain.handle('llm:set', async (_e, incoming) => {
   if (!incoming || typeof incoming !== 'object') {
-    throw new TypeError('LLM 配置格式无效');
+    throw new TypeError('模型配置格式无效');
   }
+  const slot = ['qa', 'library', 'embedding'].includes(incoming.slot)
+    ? incoming.slot : 'qa';
+  const prev = loadLLMConfig() || { qa: null, library: null, embedding: null };
   if (incoming.clear === true) {
-    try { fs.unlinkSync(llmConfigPath()); } catch (err) {
-      if (err.code !== 'ENOENT') throw err;
-    }
-    await pushLLMToSidecar(null);
-    return { endpoint: '', model: '', has_key: false };
+    prev[slot] = null;
+    saveLLMConfig(prev);
+    await pushLLMToSidecar(null, slot);
+    return slotShape(null);
   }
-
-  const prev = loadLLMConfig() || {};
+  const prevSlot = prev[slot] || {};
   const cfg = {
+    provider: String(incoming.provider || prevSlot.provider
+      || (slot === 'qa' ? 'openai' : 'ollama')),
     endpoint: String(incoming.endpoint || '').trim(),
     // 留空 = 保留已存的密钥（改端点/模型不必重输密钥）
-    api_key: String(incoming.api_key || '').trim() || prev.api_key || '',
+    api_key: String(incoming.api_key || '').trim() || prevSlot.api_key || '',
     model: String(incoming.model || '').trim(),
   };
-  if (!cfg.endpoint && !cfg.api_key && !cfg.model) {
-    try { fs.unlinkSync(llmConfigPath()); } catch {}
-    await pushLLMToSidecar(null);
-    return { endpoint: '', model: '', has_key: false };
+  if (!cfg.endpoint && !cfg.model) {
+    // 只留了个密钥、什么都没填 —— 视为清除该槽位
+    prev[slot] = null;
+    saveLLMConfig(prev);
+    await pushLLMToSidecar(null, slot);
+    return slotShape(null);
   }
-  saveLLMConfig(cfg);
-  await pushLLMToSidecar(cfg);
-  return { endpoint: cfg.endpoint, model: cfg.model, has_key: !!cfg.api_key };
+  prev[slot] = cfg;
+  saveLLMConfig(prev);
+  await pushLLMToSidecar(cfg, slot);
+  return slotShape(cfg);
 });
 
 if (hasSingleInstanceLock) app.on('second-instance', () => {
@@ -878,6 +1015,9 @@ function setupGlobalEntry() {
 }
 
 if (hasSingleInstanceLock) app.whenReady().then(async () => {
+  // inkdoc:// 的注册必须先于任何窗口加载（见文件头部注释的授权模型）
+  protocol.handle('inkdoc', handleInkdocRequest);
+
   // 开发态（electron .）Dock 显示的是 Electron 默认图标，这里换成品牌图标；
   // 打包版由 electron-builder 从 build/icon.icns 注入，无需此步
   if (process.platform === 'darwin' && !app.isPackaged) {

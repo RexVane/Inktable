@@ -84,7 +84,7 @@ test('knowledge questions render only in the answer column', async () => {
     apiStream: async (requestPath, payload, onEvent) => {
       assert.equal(requestPath, '/ask/stream');
       assert.equal(JSON.stringify(payload), JSON.stringify(
-        { question: '什么是银行家算法？', book_id: null, history: [] }));
+        { question: '什么是银行家算法？', book_id: null, history: [], mode: 'deep' }));
       onEvent('chat.finalize', {
         status: 'answered', answer: '用于避免死锁 [C1]', mode: 'knowledge',
         retrieved: [], hedge: '', validation: {},
@@ -108,6 +108,7 @@ test('knowledge questions render only in the answer column', async () => {
   await vm.runInNewContext(`
     let activeBook = null;
     let llmInfo = { configured: true, available: true };
+    let qaMode = 'deep';
     function esc(value) { return String(value); }
     ${askSource}
     runAsk('什么是银行家算法？')

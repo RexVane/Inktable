@@ -221,7 +221,7 @@ def test_file_content_pagination(client, tmp_path):
 
     # 未知文件 404；无内容文件返回空但不报错
     assert client.get("/files/99999/content", headers=H).status_code == 404
-    _ = os  # noqa: 保留 import 以便后续用例扩展
+    _ = os  # 保留 import 以便后续用例扩展
 
 
 def test_files_remove_clears_records_but_not_disk(client, tmp_path):

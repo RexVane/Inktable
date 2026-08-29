@@ -32,6 +32,7 @@ class _FakeLLM(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         _FakeLLM.seen.append({
             "auth": self.headers.get("Authorization", ""),
+            "path": self.path,
             "messages": body.get("messages", []),
             "max_tokens": body.get("max_tokens", "ABSENT"),
         })
@@ -746,3 +747,144 @@ def test_validate_handles_three_digit_citation_tags():
     assert "[C106]" in cleaned
     assert "[C999]" not in cleaned
     assert record["fabricated_removed"] == 1
+
+
+# ---------------------------------------------------------------- 回答档位（快速 / 深度）
+
+
+def _verifier_counter(monkeypatch):
+    """替换逐条蕴含校验器并统计调用次数。"""
+    calls = {"n": 0}
+
+    def counter(_question, claims):
+        calls["n"] += 1
+        return [True] * len(claims), True, ""
+
+    monkeypatch.setattr(answer_module, "_verify_claim_support", counter)
+    return calls
+
+
+def test_quick_mode_is_concise_without_citations(db, scripted, monkeypatch):
+    """快速档契约 = 简洁回答、无引用：引用标记被剥离、蕴含校验零调用。"""
+    scripted("汝窑的烧成温度在一千二百度上下 [C1]。")
+    calls = _verifier_counter(monkeypatch)
+    a = ask(db, "汝窑的烧成温度是多少", qa_mode="quick")
+
+    assert a.status == "answered"
+    assert "[C1]" not in a.answer
+    assert "烧成温度" in a.answer
+    assert a.citations == []
+    assert a.validation["qa_mode"] == "quick"
+    assert a.validation["support_check"] == "skipped_quick"
+    assert calls["n"] == 0
+    assert len(_FakeLLM.seen) == 1
+
+
+def test_deep_mode_runs_support_verifier(db, scripted, monkeypatch):
+    """深度档保持原默认管线：逐条蕴含校验照常执行。"""
+    scripted("汝窑的烧成温度在一千二百度上下 [C1]。")
+    calls = _verifier_counter(monkeypatch)
+    a = ask(db, "汝窑的烧成温度是多少", qa_mode="deep")
+
+    assert a.status == "answered"
+    assert calls["n"] == 1
+    assert a.validation["qa_mode"] == "deep"
+
+
+def test_quick_mode_falls_back_without_retry(db, scripted):
+    """快速档空回复不重新生成 —— 单轮失败直接降级为片段列表。"""
+    scripted("")
+    a = ask(db, "汝窑的烧成温度是多少", qa_mode="quick")
+
+    assert a.status == "fallback"
+    assert a.retrieved
+    assert len(_FakeLLM.seen) == 1
+
+
+def test_quick_mode_passes_uncited_answer_through(db, scripted):
+    """快速档不做引用仪式：模型的无引用回答按原文透传（契约即"快"）。"""
+    scripted("一段自由发挥、与检索证据毫无重叠的泛泛回答。")
+    a = ask(db, "汝窑的烧成温度是多少", qa_mode="quick")
+
+    assert a.status == "answered"
+    assert a.citations == []
+    assert len(_FakeLLM.seen) == 1
+
+
+def test_deep_mode_retries_uncited_answer(db, scripted):
+    """深度档首轮引用缺失会重新生成一次（原默认行为，作对照）。"""
+    scripted("一段自由发挥、与检索证据毫无重叠的泛泛回答。",
+             "另一段自由发挥、与检索证据毫无重叠的泛泛回答。")
+    a = ask(db, "汝窑的烧成温度是多少", qa_mode="deep")
+
+    assert a.status == "fallback"
+    assert len(_FakeLLM.seen) == 2
+
+
+def test_quick_mode_returns_refusal_without_retry(db, scripted):
+    """快速档拒答即返回：不做查询改写与二次检索重试。"""
+    scripted(REFUSAL)
+    a = ask(db, "外星文明的确切起源时间是什么时候确定的？", qa_mode="quick")
+
+    assert a.status == "refused"
+    assert a.answer == REFUSAL
+    assert len(_FakeLLM.seen) == 1
+
+
+def test_unknown_mode_falls_back_to_deep(db, scripted, monkeypatch):
+    """未知档位值归一到深度档，而不是报错或走快速管线。"""
+    scripted("汝窑的烧成温度在一千二百度上下 [C1]。")
+    calls = _verifier_counter(monkeypatch)
+    a = ask(db, "汝窑的烧成温度是多少", qa_mode="bogus")
+
+    assert a.status == "answered"
+    assert a.validation["qa_mode"] == "deep"
+    assert calls["n"] == 1
+
+
+# ---------------------------------------------------------------- 接口格式与推理模型自适应
+
+
+def test_probe_retries_with_larger_budget_when_content_empty(fake_server):
+    """推理模型把 512 预算花在思考上时 content 为空 —— 探测自动放宽预算重试。"""
+    llm.configure(fake_server, "sk-test", "fake-model")
+    _FakeLLM.scripts = ["", "确认"]
+    _FakeLLM.seen = []
+    try:
+        result = llm.probe(timeout=5)
+    finally:
+        llm.configure("", "", "")
+
+    assert result["available"] is True
+    assert result["reply"] == "确认"
+    assert len(_FakeLLM.seen) == 2
+    assert _FakeLLM.seen[0]["max_tokens"] == 512
+    assert _FakeLLM.seen[1]["max_tokens"] == 2048
+
+
+def test_ollama_provider_keyless_with_v1_url(fake_server):
+    """本地 Ollama 格式：免密钥即可用，地址自动补 /v1/chat/completions。"""
+    llm.configure(fake_server, "", "qwen3:8b", provider="ollama")
+    _FakeLLM.scripts = ["确认"]
+    _FakeLLM.seen = []
+    try:
+        assert llm.is_configured() is True
+        text = llm.chat([{"role": "user", "content": "hi"}],
+                        max_tokens=8, timeout=5)
+    finally:
+        llm.configure("", "", "")
+
+    assert text == "确认"
+    assert _FakeLLM.seen[0]["path"].endswith("/v1/chat/completions")
+    assert _FakeLLM.seen[0]["auth"] == ""
+
+
+def test_condense_adapts_to_reasoning_models(db, scripted):
+    """追问浓缩拿不到正文时放宽预算重试 —— 改写仍生效且只多打一次。"""
+    scripted("", "改写后的独立问题", "汝窑的烧成温度在一千二百度上下 [C1]。")
+    a = ask(db, "那具体是多少度？",
+            history=[{"q": "汝窑的烧成温度", "a": "文档里有记载"}])
+
+    assert a.status == "answered"
+    assert a.validation.get("condensed_query") == "改写后的独立问题"
+    assert len(_FakeLLM.seen) == 3   # 浓缩(空) → 浓缩重试 → 主回答

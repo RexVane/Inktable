@@ -53,8 +53,9 @@ contextBridge.exposeInMainWorld('inktable', {
   dataGet: () => ipcRenderer.invoke('data:get'),
   dataChange: () => ipcRenderer.invoke('data:change'),
   pickDirectory: () => ipcRenderer.invoke('dialog:pickDirectory'),
+  // 模型配置按槽位（qa=问答 / library=知识馆整理 / embedding=向量）独立存取
   llmGet: () => ipcRenderer.invoke('llm:get'),
-  llmSet: (cfg) => ipcRenderer.invoke('llm:set', cfg),
+  llmSet: (slot, cfg) => ipcRenderer.invoke('llm:set', { slot, ...(cfg || {}) }),
   onFocusSearch: (cb) => {
     if (typeof cb !== 'function') return () => {};
     const listener = () => cb();

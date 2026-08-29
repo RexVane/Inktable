@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-+bogcxA9rN61l4U27NYWKv0PEc6ckm34si88nWr7EMQ=' 'sha256-50kKtustgRlEt2bB1ocN9osOidTEMeoIYPYSZRRtjto='; style-src 'self' 'unsafe-inline'; connect-src 'none'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-+bogcxA9rN61l4U27NYWKv0PEc6ckm34si88nWr7EMQ=' 'sha256-dmpjGSRa/ZfoR5IRobpdQzlxjYn4Bvt2SyqM3ByuxmE='; style-src 'self' 'unsafe-inline'; connect-src inkdoc:; worker-src 'self' inkdoc:; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'" />
 <title>Inktable</title>
 <style>
   /* 结构性 reset —— 全部视觉规则集中在 workbench.css，避免两处定义漂移 */
@@ -113,7 +113,13 @@
               <textarea id="askQ" rows="1" placeholder="询问你的文件，或随便聊聊…"></textarea>
               <button id="askSubmit" class="qa-submit" type="button" title="提问（Enter）" aria-label="提问"><svg viewBox="0 0 16 16"><path d="M8 12.5V3.5M3.5 8L8 3.5L12.5 8" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
             </div>
-            <div class="composer-hint">Enter 发送 · Shift+Enter 换行 · 回答附带原文引用</div>
+            <div class="composer-foot">
+              <div class="qa-mode" role="group" aria-label="回答档位">
+                <button class="qa-mode-btn" id="qaModeQuick" type="button" title="快速简洁回答：不带引用，单轮生成，速度优先">快速</button>
+                <button class="qa-mode-btn" id="qaModeDeep" type="button" title="全量检索 + 逐条引用校验，慢但严谨">深度</button>
+              </div>
+              <div class="composer-hint" id="composerHint">Enter 发送 · Shift+Enter 换行 · 逐条引用校验</div>
+            </div>
           </div>
         </aside>
       </div>
@@ -436,7 +442,8 @@ function showEvidence(evidence) {
   if (button) button.onclick = function () { window.inktable.revealInFinder(path); };
   var detailButton = document.getElementById('openEvidenceDetail');
   if (detailButton) detailButton.onclick = function () {
-    showFileDetail({ file_id: fileId, name: evidence.file_name, path: path });
+    showFileDetail({ file_id: fileId, name: evidence.file_name, path: path },
+                   { page: evidence.page, snippet: evidence.text || evidence.snippet || '' });
   };
 }
 
@@ -465,6 +472,11 @@ function renderFileDetail(detail) {
       '<button class="text-button" id="revealEvidence" type="button">在 Finder 中显示</button>' : '') +
       '<button class="text-button danger" id="trashFileBtn" type="button">删除文件</button>' +
     '</div></div>' +
+    (viewerKindOf(file.ext || file.name)
+      ? '<div class="view-toggle" id="viewToggle">' +
+        '<button class="vt-btn" id="vtOriginal" type="button">原文</button>' +
+        '<button class="vt-btn" id="vtText" type="button">提取文本</button>' +
+        '<span class="vt-hint" id="vtHint"></span></div>' : '') +
     '<div class="detail-sections" id="readerBody"></div>' +
     '<div class="detail-more" id="readerFoot"></div></div>';
   var button = document.getElementById('revealEvidence');
@@ -478,9 +490,401 @@ function renderFileDetail(detail) {
   if (trashBtn) trashBtn.onclick = function () {
     trashFile({ file_id: file.id, name: file.name });
   };
-  // 文件查看器：从头分页拉全文，滚到底自动续载；详情接口的
-  // 前 24 段仅作为 /content 不可用时的兜底
-  startReader(file.id, Array.isArray(detail.sections) ? detail.sections : []);
+  // 可渲染原版式的文件（PDF/DOCX）默认打开原文视图，可切提取文本；
+  // 其余格式走全文文本 reader（滚到底自动续载）
+  var kind = viewerKindOf(file.ext || file.name);
+  if (kind) {
+    var setView = function (view) {
+      document.getElementById('vtOriginal').classList.toggle('on', view === 'original');
+      document.getElementById('vtText').classList.toggle('on', view === 'text');
+      if (view === 'original') {
+        openOriginal(file.id, file.name || '', pendingJump);
+      } else {
+        originalViewToken++;   // 停掉原文视图的异步回写
+        setHint('vtHint', '');
+        startReader(file.id, Array.isArray(detail.sections) ? detail.sections : []);
+      }
+    };
+    document.getElementById('vtOriginal').onclick = function () { setView('original'); };
+    document.getElementById('vtText').onclick = function () { setView('text'); };
+    setView('original');
+    pendingJump = null;
+  } else {
+    // 文件查看器：从头分页拉全文，滚到底自动续载；详情接口的
+    // 前 24 段仅作为 /content 不可用时的兜底
+    startReader(file.id, Array.isArray(detail.sections) ? detail.sections : []);
+  }
+}
+
+/* ---------- 原文查看器（inkdoc:// + PDF.js / docx-preview） ----------
+   字节通道：主进程 inkdoc:// 协议（每次请求过 sidecar 授权）。
+   PDF：页面 canvas 懒渲染（滚到才画），引用按页码直达 + 文字层定位高亮。
+   DOCX：docx-preview 保版式渲染，按片段文本定位高亮。
+   其余格式没有原版式渲染，详情页维持提取文本 reader。 */
+var pendingJump = null;      // 待定位的引用 {page, snippet}
+var originalViewToken = 0;   // 切换视图/切换文件后使未完成的渲染作废
+var pdfjsLibPromise = null;
+
+function viewerKindOf(nameOrExt) {
+  var s = String(nameOrExt || '').toLowerCase();
+  var ext = s.indexOf('.') >= 0 ? s.slice(s.lastIndexOf('.') + 1) : s;
+  if (ext === 'pdf') return 'pdf';
+  if (ext === 'docx') return 'docx';
+  return null;
+}
+
+function inkdocUrl(fileId, name) {
+  return 'inkdoc://file/' + encodeURIComponent(String(fileId)) + '/' +
+    encodeURIComponent(name || '');
+}
+
+function normText(s) {
+  return String(s || '').replace(/\s+/g, '');
+}
+
+function setHint(id, text) {
+  var el = document.getElementById(id);
+  if (el) el.textContent = text;
+}
+
+function fetchOriginalBytes(fileId, name) {
+  // 主通道：inkdoc://（流式 + Range）；失败自动回退 IPC base64 保底通道，
+  // 保证原文查看在任何协议问题下都可用。
+  return fetch(inkdocUrl(fileId, name)).then(function (resp) {
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    return resp.arrayBuffer();
+  }).catch(function () {
+    return window.inktable.apiRequest({
+      path: '/files/' + encodeURIComponent(String(fileId)) + '/raw',
+      method: 'GET',
+    }).then(function (result) {
+      if (!result || !result.ok) {
+        throw new Error((result && result.error) || ('HTTP ' + (result && result.status)));
+      }
+      var bin = atob(result.b64);
+      var bytes = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return bytes.buffer;
+    });
+  });
+}
+
+function ensureScript(src) {
+  var existing = document.querySelector('script[data-vsrc="' + src + '"]');
+  if (existing) {
+    return existing.dataset.loaded
+      ? Promise.resolve()
+      : new Promise(function (resolve, reject) {
+          existing.addEventListener('load', resolve, { once: true });
+          existing.addEventListener('error',
+            function () { reject(new Error('加载失败：' + src)); }, { once: true });
+        });
+  }
+  return new Promise(function (resolve, reject) {
+    var el = document.createElement('script');
+    el.src = src;
+    el.dataset.vsrc = src;
+    el.onload = function () { el.dataset.loaded = '1'; resolve(); };
+    el.onerror = function () { reject(new Error('加载失败：' + src)); };
+    document.head.appendChild(el);
+  });
+}
+
+function loadPdfJs() {
+  if (!pdfjsLibPromise) {
+    pdfjsLibPromise = import('vendor/pdfjs/pdf.min.mjs').then(function (lib) {
+      lib.GlobalWorkerOptions.workerSrc = 'inkdoc://app/vendor/pdfjs/pdf.worker.min.mjs';
+      return lib;
+    });
+  }
+  return pdfjsLibPromise;
+}
+
+function openOriginal(fileId, name, jump) {
+  var body = document.getElementById('readerBody');
+  var foot = document.getElementById('readerFoot');
+  if (foot) foot.textContent = '';
+  if (!body) return;
+  originalViewToken++;
+  var token = originalViewToken;
+  var kind = viewerKindOf(name);
+  body.innerHTML = '<div class="original-loading">正在加载原文…</div>';
+  var task = kind === 'pdf'
+    ? openPdfOriginal(fileId, name, jump, body, token)
+    : openDocxOriginal(fileId, name, jump, body, token);
+  task.catch(function (err) {
+    if (token !== originalViewToken) return;
+    body.innerHTML = '<div class="detail-empty">原文加载失败：' + esc(err.message) +
+      '（文件可能已被移动或删除，可切「提取文本」查看索引内容）</div>';
+  });
+}
+
+/* ---------- PDF ---------- */
+
+function openPdfOriginal(fileId, name, jump, body, token) {
+  return loadPdfJs().then(function (pdfjsLib) {
+    if (token !== originalViewToken) return null;
+    return fetchOriginalBytes(fileId, name).then(function (buf) {
+      if (token !== originalViewToken) return null;
+      return pdfjsLib.getDocument({
+        data: new Uint8Array(buf),
+        cMapUrl: 'inkdoc://app/vendor/pdfjs/cmaps/',
+        cMapPacked: true,
+        standardFontDataUrl: 'inkdoc://app/vendor/pdfjs/standard_fonts/',
+      }).promise;
+    }).then(function (doc) {
+      if (token !== originalViewToken || !doc) return null;
+      buildPdfView(pdfjsLib, doc, body, jump || {}, token);
+      return null;
+    });
+  });
+}
+
+function buildPdfView(pdfjsLib, doc, body, jump, token) {
+  body.innerHTML = '';
+  var view = document.createElement('div');
+  view.className = 'pdf-view';
+  var bar = document.createElement('div');
+  bar.className = 'pdf-bar';
+  bar.innerHTML = '<span class="pdf-pos">加载中…</span>' +
+    '<button class="mini" id="pdfPrev" type="button">上一页</button>' +
+    '<button class="mini" id="pdfNext" type="button">下一页</button>' +
+    '<button class="mini" id="pdfZoomOut" type="button" title="缩小">－</button>' +
+    '<button class="mini" id="pdfZoomIn" type="button" title="放大">＋</button>';
+  var pages = document.createElement('div');
+  pages.className = 'pdf-pages';
+  view.appendChild(bar);
+  view.appendChild(pages);
+  body.appendChild(view);
+
+  var numPages = doc.numPages;
+  var scale = 0;
+  var rendered = {};        // pageNo -> true（已画）
+  var rendering = {};       // pageNo -> true（正在画）
+  var target = Math.min(Math.max(parseInt(jump.page, 10) || 1, 1), numPages);
+  var pos = bar.querySelector('.pdf-pos');
+
+  function setPos(pageNo) {
+    pos.textContent = pageNo + ' / ' + numPages + ' 页';
+  }
+
+  function pageWrap(pageNo) {
+    return pages.querySelector('.pdf-page[data-page="' + pageNo + '"]');
+  }
+
+  function firstScale() {
+    if (scale) return Promise.resolve(scale);
+    return doc.getPage(1).then(function (page) {
+      var base = page.getViewport({ scale: 1 });
+      var avail = Math.max(pages.clientWidth - 36, 320);
+      scale = Math.min(Math.max(avail / base.width, 0.5), 3);
+      return scale;
+    });
+  }
+
+  function renderPage(pageNo) {
+    if (rendered[pageNo] || rendering[pageNo]) return Promise.resolve(null);
+    rendering[pageNo] = true;
+    return firstScale().then(function () {
+      if (token !== originalViewToken) return null;
+      return doc.getPage(pageNo).then(function (page) {
+        if (token !== originalViewToken) return null;
+        var viewport = page.getViewport({ scale: scale });
+        var holder = pageWrap(pageNo);
+        if (!holder) return null;
+        holder.innerHTML = '';
+        var canvas = document.createElement('canvas');
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+        holder.appendChild(canvas);
+        holder.style.height = 'auto';
+        return page.render({
+          canvasContext: canvas.getContext('2d'),
+          viewport: viewport,
+        }).promise.then(function () {
+          rendered[pageNo] = true;
+          delete rendering[pageNo];
+          return page;
+        }).catch(function (err) {
+          delete rendering[pageNo];
+          holder.innerHTML = '<div class="pdf-page-err">第 ' + pageNo +
+            ' 页渲染失败</div>';
+          throw err;
+        });
+      });
+    });
+  }
+
+  // 占位骨架先全部铺开（滚动条真实），滚到附近才真正渲染
+  for (var i = 1; i <= numPages; i++) {
+    var ph = document.createElement('div');
+    ph.className = 'pdf-page-ph';
+    ph.dataset.page = i;
+    pages.appendChild(ph);
+  }
+  var observer = new IntersectionObserver(function (entries) {
+    entries.forEach(function (entry) {
+      if (!entry.isIntersecting) return;
+      var pageNo = parseInt(entry.target.dataset.page, 10);
+      renderPage(pageNo).catch(function () {});
+    });
+  }, { root: document.getElementById('evidence'), rootMargin: '700px 0px' });
+  Array.prototype.forEach.call(pages.children, function (el) { observer.observe(el); });
+
+  function scrollToPage(pageNo, afterRender) {
+    pageNo = Math.min(Math.max(pageNo, 1), numPages);
+    setPos(pageNo);
+    var holder = pageWrap(pageNo);
+    if (holder) holder.scrollIntoView({ block: 'start' });
+    renderPage(pageNo).then(function (page) {
+      if (afterRender && page && token === originalViewToken) afterRender(page);
+    }).catch(function () {});
+  }
+
+  bar.querySelector('#pdfPrev').onclick = function () { scrollToPage((parseInt(pos.textContent, 10) || 1) - 1); };
+  bar.querySelector('#pdfNext').onclick = function () { scrollToPage((parseInt(pos.textContent, 10) || 1) + 1); };
+  bar.querySelector('#pdfZoomIn').onclick = function () {
+    scale = Math.min(scale * 1.2, 3);
+    rerenderAll();
+  };
+  bar.querySelector('#pdfZoomOut').onclick = function () {
+    scale = Math.max(scale / 1.2, 0.5);
+    rerenderAll();
+  };
+  function rerenderAll() {
+    rendered = {};
+    Array.prototype.forEach.call(pages.children, function (el) {
+      el.classList.add('pdf-page-ph');
+      el.innerHTML = '';
+    });
+    var current = parseInt(pos.textContent, 10) || 1;
+    for (var d = 0; d < 3; d++) renderPage(current + d).catch(function () {});
+  }
+
+  scrollToPage(target, function (page) { highlightPdfPage(pdfjsLib, page, jump.snippet); });
+}
+
+function highlightPdfPage(pdfjsLib, page, snippet) {
+  var needle = normText(snippet).slice(0, 24);
+  if (!needle) return;
+  var viewport = page.getViewport({ scale: scaleOfPage(page) });
+  page.getTextContent().then(function (tc) {
+    var items = tc.items || [];
+    var matched = [];
+    var acc = '';
+    for (var i = 0; i < items.length; i++) {
+      var text = normText(items[i].str);
+      if (!text) continue;
+      var combined = (acc + text);
+      if (!matched.length) {
+        if (combined.indexOf(needle.slice(0, 10)) < 0) continue;
+        matched.push(items[i]);
+        acc = text;
+        if (acc.length >= needle.length) break;
+        continue;
+      }
+      matched.push(items[i]);
+      acc = combined;
+      if (acc.indexOf(needle.slice(0, Math.min(needle.length, 18))) >= 0 ||
+          acc.length > needle.length + 40) break;
+    }
+    if (!matched.length) return;
+    var canvas = document.querySelector(
+      '.pdf-page[data-page="' + page.pageNumber + '"] canvas');
+    var holder = canvas && canvas.parentElement;
+    if (!holder) return;
+    holder.style.position = 'relative';
+    matched.forEach(function (item) {
+      var tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
+      var h = Math.hypot(tx[2], tx[3]) || item.height * viewport.scale;
+      var w = (item.width || 0) * viewport.scale;
+      if (w <= 0 || h <= 0) return;
+      var hl = document.createElement('div');
+      hl.className = 'pdf-hl';
+      hl.style.left = tx[4] + 'px';
+      hl.style.top = (tx[5] - h) + 'px';
+      hl.style.width = w + 'px';
+      hl.style.height = h + 'px';
+      holder.appendChild(hl);
+    });
+  }).catch(function () {});
+}
+
+function scaleOfPage(page) {
+  var canvas = document.querySelector(
+    '.pdf-page[data-page="' + page.pageNumber + '"] canvas');
+  if (!canvas) return 1;
+  var base = page.getViewport({ scale: 1 });
+  return canvas.width / base.width;
+}
+
+/* ---------- DOCX ---------- */
+
+function openDocxOriginal(fileId, name, jump, body, token) {
+  return Promise.all([
+    ensureScript('vendor/docx/jszip.min.js'),
+    ensureScript('vendor/docx/docx-preview.min.js'),
+  ]).then(function () {
+    if (token !== originalViewToken) return null;
+    return fetchOriginalBytes(fileId, name).then(function (buf) {
+      if (token !== originalViewToken) return null;
+      body.innerHTML = '<div class="docx-view"></div>';
+      var holder = body.querySelector('.docx-view');
+      return window.docx.renderAsync(buf, holder, null, {
+        inWrapper: true,
+        ignoreWidth: false,
+        ignoreHeight: false,
+      }).then(function () {
+        if (token !== originalViewToken) return null;
+        highlightInDom(holder, jump && jump.snippet);
+        return null;
+      });
+    });
+  });
+}
+
+/* 在已渲染的 DOM 里按片段文本定位并包上 <mark>。
+   归一化只删空白 —— 用映射表把归一化下标折回各文本节点的局部偏移。 */
+function highlightInDom(root, snippet) {
+  var needle = normText(snippet).slice(0, 60);
+  if (!needle || !root) return;
+  var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+  var map = [];          // { node, rawIndex } 归一化字符 -> 原文位置
+  var normalized = '';
+  while (walker.nextNode()) {
+    var value = walker.currentNode.nodeValue || '';
+    for (var i = 0; i < value.length; i++) {
+      if (!/\s/.test(value[i])) {
+        map.push({ node: walker.currentNode, rawIndex: i });
+        normalized += value[i];
+      }
+    }
+  }
+  var at = normalized.indexOf(needle);
+  if (at < 0) return;
+  var spans = [];        // { node, start, end } 每个被覆盖文本节点的区间
+  for (var k = at; k < at + needle.length; k++) {
+    var entry = map[k];
+    var last = spans[spans.length - 1];
+    if (last && last.node === entry.node) last.end = entry.rawIndex + 1;
+    else spans.push({ node: entry.node, start: entry.rawIndex, end: entry.rawIndex + 1 });
+  }
+  var firstMark = null;
+  spans.forEach(function (span) {
+    try {
+      var range = document.createRange();
+      range.setStart(span.node, span.start);
+      range.setEnd(span.node, span.end);
+      var mark = document.createElement('mark');
+      mark.className = 'ev-hl';
+      range.surroundContents(mark);
+      if (!firstMark) firstMark = mark;
+    } catch (e) { /* 节点边界异常时跳过该小段，不影响其余高亮 */ }
+  });
+  if (firstMark) {
+    firstMark.scrollIntoView({ block: 'center' });
+    firstMark.classList.add('flash');
+  }
 }
 
 /* ---------- 每周知识库报告 ---------- */
@@ -584,10 +988,11 @@ async function loadReaderPage() {
   }
 }
 
-async function showFileDetail(file) {
+async function showFileDetail(file, jump) {
   if (!file) return clearEvidence();
   var fileId = file.file_id || file.id;
   if (!fileId) return showEvidence({ name: file.name, text: file.path || '', path: openPathForFile(file) });
+  pendingJump = jump || null;   // 原文视图打开后定位并高亮引用段
   var version = ++detailVersion;
   showDetailPage(file.name || '文件详情');
   document.getElementById('evidence').innerHTML = '<div class="detail-loading">正在读取文件详情…</div>';
@@ -1223,6 +1628,7 @@ async function runAsk(q) {
     await apiStream('/ask/stream', {
       question: question, book_id: activeBook,
       history: chatHistory.slice(-4),
+      mode: qaMode,
     }, function (event, payload) {
       var current = el.lastElementChild;
       if (event === 'chat.searching' && current) {
@@ -2319,74 +2725,210 @@ async function renderSourcesPane(pane) {
 }
 
 async function renderModelPane(pane) {
-  document.getElementById('sheetSub').textContent = '问答模型与本地向量模型';
-  // AI 问答配置（密钥经主进程 safeStorage 加密，渲染进程只见"已保存"）
-  var saved = await window.inktable.llmGet();
+  document.getElementById('sheetSub').textContent = '模型配置：问答 / 知识馆整理 / 向量';
+  var savedAll = await window.inktable.llmGet();
+  var slots = (savedAll && savedAll.slots) || {};
+  var qa = slots.qa || { provider: 'openai', endpoint: '', model: '', has_key: false };
+  var lib = slots.library || { provider: 'ollama', endpoint: '', model: '', has_key: false };
+  var emb = slots.embedding || { provider: 'ollama', endpoint: '', model: '', has_key: false };
+
+  function sectionHtml(slot, title, desc, cfg, opts) {
+    var fields =
+      '<input id="ep_' + slot + '" placeholder="' + (opts.epPlaceholder || '接口地址，如 https://api.xxx.com/v1') + '" value="' + esc(cfg.endpoint) + '">' +
+      '<input id="model_' + slot + '" placeholder="模型名" value="' + esc(cfg.model) + '">' +
+      (opts.keyed
+        ? '<input id="key_' + slot + '" type="password" placeholder="' +
+          (cfg.has_key ? 'API 密钥（已保存，留空表示不变）' : 'API 密钥') + '">'
+        : '');
+    return '<div class="set-section"><div class="set-title">' + title + '</div>' +
+      (desc ? '<div class="set-desc" style="margin:2px 0 8px">' + desc + '</div>' : '') +
+      (opts.providerSelect
+        ? '<select id="prov_' + slot + '" style="margin-bottom:8px">' +
+          '<option value="openai"' + (cfg.provider === 'openai' ? ' selected' : '') + '>' +
+            (opts.providerLabels ? opts.providerLabels.openai : 'OpenAI 兼容接口（云端 / 中转）') + '</option>' +
+          '<option value="ollama"' + (cfg.provider !== 'openai' ? ' selected' : '') + '>' +
+            (opts.providerLabels ? opts.providerLabels.ollama : '本地 Ollama') + '</option>' +
+          '</select>'
+        : '') +
+      '<div class="llm-form">' + fields +
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
+      '<button class="mini" id="save_' + slot + '">保存</button>' +
+      '<button class="mini" id="test_' + slot + '">检测连接</button>' +
+      '<button class="mini" id="list_' + slot + '">拉取模型列表</button>' +
+      '<button class="mini danger" id="clear_' + slot + '">清除</button>' +
+      '<span class="hint" id="hint_' + slot + '">' + (opts.hint || '') + '</span></div>' +
+      '<div id="listBox_' + slot + '"></div>' +
+      '</div></div>';
+  }
+
   pane.innerHTML =
-    '<div class="set-section"><div class="set-title">AI 问答（OpenAI 兼容接口）</div>' +
-    '<div class="llm-form">' +
-    '<input id="llmEp" placeholder="接口地址，如 https://api.xxx.com/v1" value="' + esc(saved.endpoint) + '">' +
-    '<input id="llmModel" placeholder="模型名" value="' + esc(saved.model) + '">' +
-    '<input id="llmKey" type="password" placeholder="' +
-      (saved.has_key ? 'API 密钥（已保存，留空表示不变）' : 'API 密钥') + '">' +
-    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
-    '<button class="mini" id="llmSave">保存</button>' +
-    '<button class="mini" id="llmTest">检测连接</button>' +
-    '<button class="mini danger" id="llmClear">清除</button>' +
-    '<span class="hint" id="llmHint">' +
-      (llmInfo.configured ? '已保存，检测后即可确认模型可用' : '未配置时问答不可用，其余功能不受影响') +
-    '</span></div></div></div>' +
+    sectionHtml('qa', '知识问答', '接口格式按服务选择：云端/中转用 OpenAI 兼容格式；本地 Ollama 免密钥并自动识别已装模型', qa,
+      { keyed: true, providerSelect: true,
+        providerLabels: { openai: 'OpenAI 兼容接口（chat/completions · 云端/中转）',
+                          ollama: '本地 Ollama（自动识别模型，免密钥）' },
+        epPlaceholder: '接口地址，如 https://api.xxx.com/v1',
+        hint: llmInfo.configured ? '已保存，检测后即可确认模型可用' : '未配置时问答不可用，其余功能不受影响' }) +
     '<div class="set-section"><div class="set-title">从 cc-switch 导入</div>' +
     '<div class="set-desc" style="margin:4px 0 8px">读取本机 cc-switch 的供应商配置，' +
-    '点选一项即可填入上方表单（填入后仍需保存并检测连接）</div>' +
+    '点选一项即可填入上方问答表单（填入后仍需保存并检测连接）</div>' +
     '<div id="ccList"><button class="mini" id="ccLoad">读取 cc-switch 配置</button></div></div>' +
-    '<div class="set-section"><div class="set-title">本地向量模型（语义检索）</div>' +
-    '<div class="set-row"><div class="set-info"><div class="set-label">Ollama · bge-m3</div>' +
-    '<div class="set-desc">1024 维上下文编码 · 经本机 Ollama 运行，不联网 · ' +
-    '未检测到时自动降级为关键词检索</div></div>' +
-    '<span class="tag" id="embState">检测中…</span></div>' +
-    '<div class="set-desc" id="embHint" style="margin-top:6px"></div></div>';
+    sectionHtml('library', '知识馆整理（摘要 / 卡片 / 标签 / 文档主题摘要）',
+      '支持本地 Ollama 或 OpenAI 兼容接口；选云端即表示允许文档正文发往该服务',
+      lib, { keyed: true, providerSelect: true,
+        epPlaceholder: '接口地址（Ollama 如 http://127.0.0.1:11434）' }) +
+    sectionHtml('embedding', '向量模型（语义检索 · 本地 Ollama）',
+      '嵌入模型输出维度需与向量表 1024 维一致（检测连接会显示维度）；换模型后向量将全量重建',
+      emb, { keyed: false, epPlaceholder: 'Ollama 地址，如 http://127.0.0.1:11434' });
 
   document.getElementById('ccLoad').onclick = loadCcswitchProviders;
 
-  document.getElementById('llmSave').onclick = async function () {
-    var hint = document.getElementById('llmHint');
-    hint.textContent = '保存中…';
-    await window.inktable.llmSet({
-      endpoint: document.getElementById('llmEp').value,
-      model: document.getElementById('llmModel').value,
-      api_key: document.getElementById('llmKey').value,
-    });
-    try { updateModelState(await api('/settings/llm')); } catch (e) {}
-    hint.textContent = llmInfo.configured ? '已保存，请检测连接' : '配置不完整（三项都要填）';
-  };
-  document.getElementById('llmTest').onclick = function () {
-    return testModelConnection(document.getElementById('llmHint'));
-  };
-  document.getElementById('llmClear').onclick = async function () {
-    await window.inktable.llmSet({ clear: true });
-    try { updateModelState(await api('/settings/llm')); } catch (e) {}
-    await renderSettings();
-  };
+  // ---- 通用槽位行为 ----
+  function cfgOf(slot) {
+    var provider = document.getElementById('prov_' + slot)
+      ? document.getElementById('prov_' + slot).value
+      : (slot === 'qa' ? 'openai' : 'ollama');
+    return {
+      slot: slot,
+      provider: provider,
+      endpoint: document.getElementById('ep_' + slot).value,
+      model: document.getElementById('model_' + slot).value,
+      api_key: document.getElementById('key_' + slot)
+        ? document.getElementById('key_' + slot).value : '',
+    };
+  }
+  function providerOf(slot) {
+    return document.getElementById('prov_' + slot)
+      ? document.getElementById('prov_' + slot).value
+      : (slot === 'qa' ? 'openai' : 'ollama');
+  }
+  function setHint(slot, text) {
+    var el = document.getElementById('hint_' + slot);
+    if (el) el.textContent = text;
+  }
+
+  // 接口格式切换：更新占位/密钥可用性；本地 Ollama 自动拉取已装模型列表
+  function applyProviderUi(slot) {
+    var prov = document.getElementById('prov_' + slot);
+    if (!prov) return;
+    var ep = document.getElementById('ep_' + slot);
+    var key = document.getElementById('key_' + slot);
+    if (prov.value === 'ollama') {
+      if (ep && !ep.value) ep.value = 'http://127.0.0.1:11434';
+      if (ep) ep.placeholder = 'Ollama 地址，如 http://127.0.0.1:11434';
+      if (key) { key.disabled = true; key.placeholder = '本地 Ollama 无需密钥'; }
+      fillModelList(slot, true);
+    } else {
+      if (ep) ep.placeholder = '接口地址，如 https://api.xxx.com/v1';
+      if (key) {
+        key.disabled = false;
+        key.placeholder = key.dataset.hasKey === '1' ? 'API 密钥（已保存，留空表示不变）' : 'API 密钥';
+      }
+    }
+  }
+  ['qa', 'library'].forEach(function (slot) {
+    var prov = document.getElementById('prov_' + slot);
+    if (!prov) return;
+    var key = document.getElementById('key_' + slot);
+    if (key) key.dataset.hasKey = key.placeholder.indexOf('已保存') >= 0 ? '1' : '0';
+    prov.onchange = function () { applyProviderUi(slot); };
+    if (prov.value === 'ollama') applyProviderUi(slot);
+  });
+
+  async function fillModelList(slot, auto) {
+    var box = document.getElementById('listBox_' + slot);
+    if (!box) return;
+    if (!auto) box.innerHTML = '<span class="hint">拉取中…</span>';
+    var cfg = cfgOf(slot);
+    try {
+      var r = await api('/settings/models/list', {
+        method: 'POST',
+        body: JSON.stringify({ slot: slot, provider: providerOf(slot),
+                               endpoint: cfg.endpoint, api_key: cfg.api_key }) });
+      if (!r.models || !r.models.length) {
+        if (!auto) box.innerHTML = '<span class="hint">服务端没有返回任何模型</span>';
+        return;
+      }
+      var sel = '<select id="pick_' + slot + '" style="margin-top:8px">' +
+        '<option value="">— 选择模型（共 ' + r.models.length + ' 个）—</option>' +
+        r.models.map(function (m) {
+          return '<option value="' + esc(m) + '"' +
+            (m === cfg.model ? ' selected' : '') + '>' + esc(m) + '</option>';
+        }).join('') + '</select>';
+      box.innerHTML = sel;
+      document.getElementById('pick_' + slot).onchange = function () {
+        if (this.value) document.getElementById('model_' + slot).value = this.value;
+      };
+    } catch (e) {
+      if (!auto) box.innerHTML = '<span class="hint">拉取失败：' + esc(e.message) + '</span>';
+    }
+  }
+
+  for (var s = 0; s < 3; s++) {
+    (function () {
+      var slot = ['qa', 'library', 'embedding'][s];
+      document.getElementById('save_' + slot).onclick = async function () {
+        var cfg = cfgOf(slot);
+        setHint(slot, '保存中…');
+        try {
+          await window.inktable.llmSet(slot, cfg);
+        } catch (e) {
+          setHint(slot, '保存失败：' + e.message);
+          return;
+        }
+        if (slot === 'qa') {
+          try { updateModelState(await api('/settings/llm')); } catch (e) {}
+          setHint('qa', llmInfo.configured ? '已保存，请检测连接' : '配置不完整（地址/密钥/模型都要填）');
+        } else {
+          setHint(slot, '已保存，请检测连接');
+        }
+      };
+      document.getElementById('test_' + slot).onclick = async function () {
+        setHint(slot, '正在检测…');
+        try {
+          var r = await api('/settings/models/test', {
+            method: 'POST', body: JSON.stringify({ slot: slot }) });
+          if (slot === 'embedding' && r.dim) {
+            setHint(slot, (r.ok ? '✓ ' : '✗ ') + (r.message || '') +
+              (r.model ? ' · ' + r.model : '') + ' · ' + r.latency_ms + 'ms');
+          } else if (slot === 'qa' && r.available !== undefined) {
+            setHint(slot, r.message || (r.available ? '模型连接正常' : '模型不可用'));
+            updateModelState(r);
+          } else {
+            setHint(slot, (r.ok ? '✓ ' : '✗ ') + (r.message || ''));
+          }
+        } catch (e) {
+          setHint(slot, '检测失败：' + e.message);
+        }
+      };
+      document.getElementById('list_' + slot).onclick = function () {
+        return fillModelList(slot, false);
+      };
+      document.getElementById('clear_' + slot).onclick = async function () {
+        await window.inktable.llmSet(slot, { clear: true });
+        if (slot === 'qa') {
+          try { updateModelState(await api('/settings/llm')); } catch (e) {}
+        }
+        await renderSettings();
+      };
+    })();
+  }
 
   try {
+    // 向量分区：本机 Ollama 自动识别 —— 地址默认值 + 自动拉模型列表
+    var embEp = document.getElementById('ep_embedding');
+    if (embEp && !embEp.value) embEp.value = 'http://127.0.0.1:11434';
+    fillModelList('embedding', true);
+  } catch (e) {}
+
+  try {
+    // 启动健康检查里就带本地探测结果（bge-m3 是否在跑），直接展示
     var health = await api('/health');
-    var emb = (health && health.checks && health.checks.embedding) || {};
-    var ok = emb.available !== false && emb.ok !== false;
-    var state = document.getElementById('embState');
-    if (state) {
-      state.textContent = ok ? ('已连接 · ' + (emb.model || 'bge-m3')) : '未检测到';
-      state.className = 'tag' + (ok ? ' live' : ' gone');
-    }
-    var hintEl = document.getElementById('embHint');
-    if (hintEl && !ok) {
-      hintEl.textContent = emb.note ||
-        '安装 Ollama（ollama.com）后在终端执行 ollama pull bge-m3，重启应用即可启用语义检索';
-    }
-  } catch (e) {
-    var stateEl = document.getElementById('embState');
-    if (stateEl) stateEl.textContent = '状态未知';
-  }
+    var embCheck = (health && health.checks && health.checks.embedding) || {};
+    var ok = embCheck.available !== false && embCheck.ok !== false;
+    setHint('embedding', ok
+      ? '✓ 已检测到 ' + (embCheck.model || 'bge-m3') + '（语义检索开启）'
+      : (embCheck.note || '本机 Ollama 未检测到嵌入模型 —— 从上方列表选一个并保存'));
+  } catch (e) {}
 }
 
 /* cc-switch 导入：列出它管理的供应商，点一项填进 LLM 表单 */
@@ -2444,21 +2986,21 @@ async function loadCcswitchProviders() {
       var p = r.providers[+it.dataset.i];
       if (!p) return;
       markSelected(it);
-      document.getElementById('llmEp').value = p.endpoint;
-      if (p.model) document.getElementById('llmModel').value = p.model;
+      document.getElementById('ep_qa').value = p.endpoint;
+      if (p.model) document.getElementById('model_qa').value = p.model;
       // cc-switch secrets never cross the sidecar HTTP boundary. Fill only
       // non-secret metadata; the user pastes the key into Electron's encrypted
       // settings flow explicitly.
-      document.getElementById('llmKey').value = '';
-      var hint = document.getElementById('llmHint');
+      document.getElementById('key_qa').value = '';
+      var hint = document.getElementById('hint_qa');
       if (hint) hint.textContent = '已填入「' + p.name + '」的端点和模型；' +
         '出于密钥安全，请手动粘贴 API Key 后保存并检测连接';
     };
   });
 
   // 打开列表时自动标出与当前表单一致的供应商，一眼知道现在用的是谁
-  var currentEp = (document.getElementById('llmEp').value || '').trim().replace(/\/+$/, '');
-  var currentModel = (document.getElementById('llmModel').value || '').trim();
+  var currentEp = (document.getElementById('ep_qa').value || '').trim().replace(/\/+$/, '');
+  var currentModel = (document.getElementById('model_qa').value || '').trim();
   if (currentEp) {
     var matched = r.providers.findIndex(function (p) {
       if (p.endpoint.replace(/\/+$/, '') !== currentEp) return false;
@@ -2548,6 +3090,20 @@ document.getElementById('querySubmit').onclick = function () {
 document.getElementById('askSubmit').onclick = function () {
   runAsk(document.getElementById('askQ').value);
 };
+/* 回答档位：快速 = 单轮轻量管线（跳过逐条引用校验与重试）；
+   深度 = 全量检索 + 逐条引用校验（默认）。选择存 localStorage */
+var qaMode = localStorage.getItem('qaMode') === 'quick' ? 'quick' : 'deep';
+function applyQaMode() {
+  document.getElementById('qaModeQuick').classList.toggle('active', qaMode === 'quick');
+  document.getElementById('qaModeDeep').classList.toggle('active', qaMode === 'deep');
+  document.getElementById('composerHint').textContent = qaMode === 'quick'
+    ? 'Enter 发送 · Shift+Enter 换行 · 快速简洁回答（无引用，引用是深度档的）'
+    : 'Enter 发送 · Shift+Enter 换行 · 带可溯源引用（逐条校验）';
+  localStorage.setItem('qaMode', qaMode);
+}
+document.getElementById('qaModeQuick').onclick = function () { qaMode = 'quick'; applyQaMode(); };
+document.getElementById('qaModeDeep').onclick = function () { qaMode = 'deep'; applyQaMode(); };
+applyQaMode();
 document.getElementById('askQ').onkeydown = function (event) {
   if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault();

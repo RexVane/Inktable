@@ -33,14 +33,17 @@ test('renderer content security policy forbids eval and network exfiltration', (
   const policy = renderer.match(/http-equiv="Content-Security-Policy" content="([^"]+)"/);
   assert.ok(policy, 'renderer must declare a Content Security Policy');
   assert.match(policy[1], /default-src 'self'/);
-  // 渲染层不再直连 sidecar（改走主进程代理），网络出口整体收紧为 none：
-  // 即便脚本被注入，也无法把库内数据外传。
-  assert.match(policy[1], /connect-src 'none'/);
+  // 渲染层不直连 sidecar（改走主进程代理）；唯一的连接出口是
+  // inkdoc:// 授权文档协议 —— 即便脚本被注入，也无法把库内数据外传。
   assert.doesNotMatch(policy[1], /connect-src[^;]*127\.0\.0\.1/);
   assert.match(policy[1], /object-src 'none'/);
   assert.doesNotMatch(policy[1], /unsafe-eval/);
   assert.doesNotMatch(policy[1], /script-src[^;]*unsafe-inline/);
   assert.match(policy[1], /script-src 'self' 'sha256-/);
+  // 原文查看器：唯一的连接出口是主进程 inkdoc:// 授权文档协议，
+  // 依旧没有任何 http(s) / 本机端口出口。
+  assert.match(policy[1], /connect-src inkdoc:/);
+  assert.doesNotMatch(policy[1], /connect-src[^;]*(https?|ws|wss):/);
 });
 
 test('every inline script is CSP-hash declared, with no stale hashes', () => {
@@ -253,7 +256,8 @@ test('API-controlled renderer fields are escaped before HTML insertion', () => {
 });
 
 test('library UI keeps the filesystem read-only and treats cards as derived data', () => {
-  assert.match(libraryCss, /原始文件不会被移动、复制或改名/);
+  // 提示横幅已按用户要求移除：知识馆模式不再显示派生层说明
+  assert.doesNotMatch(libraryCss, /原始文件不会被移动、复制或改名/);
   assert.match(library, /真实文件来源/);
   assert.match(library, /window\.inktable\.revealInFinder\(path\)/);
   assert.match(library, /item\.summary/);
@@ -297,7 +301,7 @@ test('development and packaged sidecar launch modes stay separated', () => {
 });
 
 test('clear action uses an explicit flag instead of an empty key', () => {
-  assert.match(renderer, /llmSet\(\{ clear: true \}\)/);
+  assert.match(renderer, /llmSet\([^,]+, \{ clear: true \}\)/);
 });
 
 test('window control overlay is theme-driven and renderer colors are validated', () => {

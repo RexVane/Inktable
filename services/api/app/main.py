@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
 import multiprocessing
 import os
 import queue
@@ -24,7 +25,7 @@ from typing import Literal
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
@@ -894,6 +895,8 @@ class LLMConfigRequest(BaseModel):
     endpoint: str = Field(default="", max_length=2048)
     api_key: str = Field(default="", max_length=8192)
     model: str = Field(default="", max_length=512)
+    # openai = OpenAI 兼容 /chat/completions；ollama = 本地 Ollama（免密钥）
+    provider: str = Field(default="openai", max_length=16)
 
 
 @app.post("/settings/llm", dependencies=[Depends(require_token)])
@@ -905,7 +908,7 @@ def set_llm(req: LLMConfigRequest) -> dict:
     from app.qa import llm
 
     try:
-        llm.configure(req.endpoint, req.api_key, req.model)
+        llm.configure(req.endpoint, req.api_key, req.model, req.provider)
     except llm.LLMError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return llm.status()
@@ -926,11 +929,151 @@ def test_llm() -> dict:
     return llm.probe()
 
 
+# ------------------------------------------------- 模型槽位（整理 / 向量）
+
+class ModelSlotRequest(BaseModel):
+    slot: str = Field(min_length=1, max_length=16)
+    provider: str = Field(default="ollama", max_length=16)
+    endpoint: str = Field(default="", max_length=2048)
+    api_key: str = Field(default="", max_length=8192)
+    model: str = Field(default="", max_length=512)
+    clear: bool = False
+
+
+@app.get("/settings/models", dependencies=[Depends(require_token)])
+def get_model_slots() -> dict:
+    from app.config import models as model_slots
+    from app.qa import llm
+
+    return {"slots": {"qa": llm.status(), **model_slots.all_status()}}
+
+
+@app.post("/settings/models", dependencies=[Depends(require_token)])
+def set_model_slot(req: ModelSlotRequest) -> dict:
+    """写入/清除一个模型槽位；密钥只进内存，持久化在 Electron 侧。"""
+    from app.config import models as model_slots
+    from app.qa import llm
+
+    try:
+        if req.slot == "qa":
+            # qa 槽位沿用 app.qa.llm 的全局配置（/settings/llm 等价路径）
+            if req.clear:
+                llm.configure("", "", "")
+            else:
+                llm.configure(req.endpoint, req.api_key, req.model,
+                              req.provider)
+            return llm.status()
+        if req.slot not in model_slots.SLOTS:
+            raise model_slots.SlotConfigError(
+                f"未知槽位：{req.slot}（可用：qa/{'/'.join(model_slots.SLOTS)}）")
+        if req.clear:
+            model_slots.clear(req.slot)
+        else:
+            model_slots.configure(req.slot, req.provider, req.endpoint,
+                                  req.api_key, req.model)
+        if req.slot == "embedding":
+            # 换模型/换地址后丢弃旧客户端实例与探测缓存
+            from app.index import embedding
+            embedding.unload()
+        return model_slots.status(req.slot)
+    except model_slots.SlotConfigError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+class ModelSlotTestRequest(BaseModel):
+    slot: str = Field(min_length=1, max_length=16)
+
+
+@app.post("/settings/models/test", dependencies=[Depends(require_token)])
+def test_model_slot(req: ModelSlotTestRequest) -> dict:
+    """按槽位做真实探测：qa/整理发最小补全，向量试编码并报维度。"""
+    from app.config import llm_client, models as model_slots
+    from app.qa import llm
+
+    if req.slot == "qa":
+        return llm.probe()
+    if req.slot not in model_slots.SLOTS:
+        raise HTTPException(status_code=422, detail=f"未知槽位：{req.slot}")
+    if req.slot == "embedding":
+        from app.index import embedding
+        embedding.unload()
+        started = time.time()
+        try:
+            emb = embedding.Embedder()
+            vec = emb.encode_one("维度探测")
+        except embedding.EmbeddingUnavailable as exc:
+            return {"ok": False, "message": str(exc), "latency_ms": 0}
+        dim = int(vec.shape[0])
+        matched = dim == embedding.DIM
+        return {
+            "ok": matched, "model": emb.tag, "dim": dim,
+            "expected_dim": embedding.DIM,
+            "message": ("维度匹配，语义检索可用" if matched else
+                        f"该模型输出 {dim} 维，与当前向量表 {embedding.DIM} 维"
+                        "不符，不能启用（换模型会作废全部向量）"),
+            "latency_ms": int((time.time() - started) * 1000),
+        }
+    cfg = model_slots.effective(req.slot)
+    if cfg is None:
+        raise HTTPException(status_code=422, detail="该槽位尚未配置")
+    return llm_client.probe_chat(cfg)
+
+
+class ModelListRequest(BaseModel):
+    slot: str = Field(min_length=1, max_length=16)
+    provider: str = Field(default="", max_length=16)
+    endpoint: str = Field(default="", max_length=2048)
+    api_key: str = Field(default="", max_length=8192)
+
+
+@app.post("/settings/models/list", dependencies=[Depends(require_token)])
+def list_slot_models(req: ModelListRequest) -> dict:
+    """拉取可选模型名。表单值优先，缺省回退已保存配置（密钥不出服务端）。"""
+    from app.config import llm_client, models as model_slots
+
+    saved: dict | None = None
+    if req.slot == "qa":
+        from app.qa import llm
+        endpoint, api_key, _model = llm.credentials_for_proxy()
+        saved = {"provider": "openai", "endpoint": endpoint, "api_key": api_key}
+    elif req.slot in model_slots.SLOTS:
+        saved = model_slots.get(req.slot)
+    else:
+        raise HTTPException(status_code=422, detail=f"未知槽位：{req.slot}")
+
+    provider = (req.provider or (saved or {}).get("provider") or "ollama").strip()
+    endpoint = (req.endpoint or (saved or {}).get("endpoint") or "").strip().rstrip("/")
+    api_key = req.api_key or (saved or {}).get("api_key") or ""
+    if not endpoint and provider == "ollama":
+        # 本地 Ollama 没填地址就用默认本机地址（自动识别的前提）
+        from app.config.models import _DEFAULT_OLLAMA_URL
+        endpoint = _DEFAULT_OLLAMA_URL
+    if not endpoint:
+        raise HTTPException(status_code=422, detail="接口地址不能为空")
+    if provider == "openai" and not api_key:
+        raise HTTPException(
+            status_code=422, detail="拉取模型列表需要 API 密钥（先填写或保存密钥）")
+    try:
+        names = llm_client.list_models(
+            provider=provider, endpoint=endpoint, api_key=api_key)
+    except llm_client.LLMClientError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"models": names}
+
+
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=_MAX_QUESTION_CHARS)
     book_id: int | None = None
     # 最近几轮问答（[{q, a}]），用于把追问浓缩成可独立检索的问题
     history: list[dict] = Field(default_factory=list, max_length=_MAX_HISTORY_TURNS)
+    # 回答档位：quick = 单轮轻量管线（小证据预算、无重试、无蕴含校验）；
+    # deep = 全量管线（默认，原行为）
+    mode: str = Field(default="deep", max_length=8)
+
+
+def _validate_ask_mode(req: AskRequest) -> None:
+    if req.mode not in ("quick", "deep"):
+        raise HTTPException(status_code=422, detail="mode 必须是 quick 或 deep")
 
 
 @app.post("/ask", dependencies=[Depends(require_token)])
@@ -942,6 +1085,7 @@ def post_ask(req: AskRequest) -> dict:
     q = req.question.strip()
     if not q:
         raise HTTPException(status_code=400, detail="问题为空")
+    _validate_ask_mode(req)
     with _read_lock():
         conn = db()
         from app.qa.metadata import answer_metadata
@@ -956,7 +1100,8 @@ def post_ask(req: AskRequest) -> dict:
                 "trace": {"route": metadata.query_kind, "stages": [], "degraded": []},
             }
         try:
-            a = ask(conn, q, req.book_id, history=req.history[-4:])
+            a = ask(conn, q, req.book_id, history=req.history[-4:],
+                    qa_mode=req.mode)
         except LLMError as e:
             raise HTTPException(status_code=502, detail=str(e)) from e
     trace = a.trace
@@ -977,6 +1122,7 @@ def post_ask_stream(req: AskRequest):
     q = req.question.strip()
     if not q:
         raise HTTPException(status_code=400, detail="问题为空")
+    _validate_ask_mode(req)
 
     def sse(event: str, payload: dict) -> str:
         return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -1023,7 +1169,7 @@ def post_ask_stream(req: AskRequest):
                         from app.qa.answer import ask
                         answer = ask(
                             conn, q, req.book_id, history=req.history[-4:],
-                            event_callback=emit,
+                            event_callback=emit, qa_mode=req.mode,
                         )
                         trace = answer.trace
                         _remember_trace(trace)
@@ -1770,6 +1916,30 @@ def file_content(
     }
 
 
+@app.get("/files/{file_id}/raw", dependencies=[Depends(require_token)])
+def file_raw(file_id: int):
+    """原始文件字节 —— 供桌面端自定义协议（inkdoc://）流式转发给原文查看器。
+
+    授权模型：路径只来自库内登记（file_id → path），**不接受任何用户提供的
+    路径**，没有目录遍历面；未登记或文件已不在磁盘上时 404。
+    Range 请求由 FileResponse 处理（大 PDF 懒加载不整读内存）。
+    """
+    conn = db()
+    row = conn.execute(
+        "SELECT path FROM files WHERE id = ?", (file_id,)
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="文件不存在")
+    path = Path(str(row["path"]))
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="文件已不在磁盘上")
+    media_type, _ = mimetypes.guess_type(str(path))
+    return FileResponse(
+        path, media_type=media_type or "application/octet-stream",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 class SearchRequest(BaseModel):
     q: str = Field(max_length=_MAX_QUERY_CHARS)
     limit: int = Field(default=40, ge=1, le=100)
@@ -2364,7 +2534,7 @@ def stats() -> dict:
 
 
 def _read_stdin_secrets() -> None:
-    """主进程通过 stdin 传入 {"token": "...", "api_key": "..."}。"""
+    """主进程通过 stdin 传入 {"token": "...", "llm": {...}}。"""
     global SESSION_TOKEN
     try:
         line = sys.stdin.readline()
@@ -2374,10 +2544,30 @@ def _read_stdin_secrets() -> None:
         if tok := payload.get("token"):
             SESSION_TOKEN = tok
         if cfg := payload.get("llm"):
+            from app.config import models as _slots
             from app.qa import llm as _llm
 
-            _llm.configure(cfg.get("endpoint", ""), cfg.get("api_key", ""),
-                           cfg.get("model", ""))
+            if "qa" in cfg or "endpoint" in cfg:
+                # v2：{"qa": {...}, "library": {...}}；旧版平铺 {endpoint,...} 视为 qa
+                qa = cfg.get("qa") if isinstance(cfg.get("qa"), dict) else (
+                    cfg if "endpoint" in cfg else None)
+                if qa:
+                    _llm.configure(str(qa.get("endpoint") or ""),
+                                   str(qa.get("api_key") or ""),
+                                   str(qa.get("model") or ""),
+                                   str(qa.get("provider") or "openai"))
+            for slot in _slots.SLOTS:
+                slot_cfg = cfg.get(slot)
+                if not isinstance(slot_cfg, dict):
+                    continue
+                try:
+                    _slots.configure(slot, str(slot_cfg.get("provider") or "ollama"),
+                                     str(slot_cfg.get("endpoint") or ""),
+                                     str(slot_cfg.get("api_key") or ""),
+                                     str(slot_cfg.get("model") or ""))
+                except _slots.SlotConfigError as exc:
+                    logging.getLogger("inktable.main").warning(
+                        "启动推送的 %s 槽位配置不合法，已忽略：%s", slot, exc)
     except Exception:
         pass  # 开发态无 stdin 输入，使用自生成令牌
 

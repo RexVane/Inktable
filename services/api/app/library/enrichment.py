@@ -1,8 +1,11 @@
 """Local enrichment worker for Inktable AI Library.
 
-The default worker sends document excerpts only to the user's local Ollama
-instance.  It never uses the cloud QA provider implicitly: personal files must
-not leave the machine merely because they were indexed.
+Default resolution uses the ``library`` model slot (app.config.models): either
+the user's local Ollama instance or an explicit OpenAI-compatible endpoint the
+user configured for 知识馆整理. Nothing is ever sent to the *QA* provider
+implicitly: personal files must not leave the machine merely because they were
+indexed — a cloud endpoint is used only when the user pointed the library slot
+at one.
 
 Execution is deliberately two-phase::
 
@@ -24,6 +27,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Callable
 
+from app.config import llm_client, models as model_slots
 from app.db.visibility import visible_content_exists
 from app.library.core import (
     replace_library_item_tags,
@@ -40,6 +44,7 @@ MAX_SUMMARY_CHARS = 800
 MAX_TAGS = 8
 _HEAD_CHARS = 8000
 _TAIL_CHARS = 3000
+# 未推送槽位配置时的环境变量回退（headless CLI / 测试）。
 _MODEL = os.environ.get(
     "INKTABLE_LIBRARY_MODEL",
     os.environ.get("INKTABLE_ABSTRACT_MODEL", "qwen3:8b"),
@@ -70,70 +75,59 @@ class EnrichmentClaim:
 
 
 def model_name() -> str:
-    return _MODEL
+    return effective_cfg()["model"]
+
+
+def effective_cfg() -> dict:
+    """当前生效的整理模型配置（槽位优先，环境变量回退）。"""
+    return model_slots.effective("library") or {
+        "provider": "ollama", "endpoint": _OLLAMA_URL,
+        "api_key": "", "model": _MODEL,
+    }
 
 
 def model_available(*, timeout: float = 2.0) -> bool:
-    """Return whether the configured local Ollama model is installed."""
+    """整理模型是否就绪。ollama 查 /api/tags；openai 看配置是否完整
+    （真实连通性由 /settings/models/test 按需探测，这里不发云端请求）。"""
+    cfg = effective_cfg()
+    if cfg["provider"] == "openai":
+        return bool(cfg["endpoint"] and cfg["model"] and cfg["api_key"])
     try:
-        req = urllib.request.Request(f"{_OLLAMA_URL}/api/tags", method="GET")
+        req = urllib.request.Request(f"{cfg['endpoint']}/api/tags", method="GET")
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except Exception:  # local optional capability; absence is a normal state
         return False
 
-    wanted = _MODEL.split(":", 1)[0]
+    wanted = cfg["model"].split(":", 1)[0]
     for entry in data.get("models", []):
         name = str(entry.get("name") or "")
-        if name == _MODEL or name.split(":", 1)[0] == wanted:
+        if name == cfg["model"] or name.split(":", 1)[0] == wanted:
             return True
     return False
 
 
 def status() -> dict:
+    cfg = effective_cfg()
     return {
         "available": model_available(),
-        "provider": "local_ollama",
-        "model": _MODEL,
+        "provider": cfg["provider"],
+        "endpoint": cfg["endpoint"],
+        "model": cfg["model"],
         "prompt_version": PROMPT_VERSION,
-        "cloud": False,
+        "cloud": cfg["provider"] == "openai",
     }
 
 
-def _strip_thinking(text: str) -> str:
-    text = _THINK_BLOCK.sub("", text)
-    text = re.sub(r"^\s*<think>.*", "", text, flags=re.S)
-    return text.strip()
-
-
-def _ollama_generate(prompt: str) -> str:
-    payload = {
-        "model": _MODEL,
-        "prompt": prompt,
-        "stream": False,
-        "think": False,
-        # Ollama's JSON mode constrains syntax; ids are still validated below.
-        "format": "json",
-        "options": {"temperature": 0.0, "num_predict": 900},
-    }
-    req = urllib.request.Request(
-        f"{_OLLAMA_URL}/api/generate",
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
+def _configured_generate(prompt: str) -> str:
+    """按槽位配置调用模型；失败统一抛 EnrichmentUnavailable。"""
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise EnrichmentUnavailable(f"本地模型不可用：{exc}") from exc
-    except json.JSONDecodeError as exc:
-        raise EnrichmentUnavailable("本地模型响应不是 JSON") from exc
-
-    text = _strip_thinking(str(data.get("response") or ""))
-    if not text:
-        raise EnrichmentUnavailable("本地模型返回空结果")
-    return text
+        return llm_client.generate_text(
+            prompt, cfg=effective_cfg(), json_mode=True,
+            max_tokens=900, timeout=_TIMEOUT,
+        )
+    except llm_client.LLMClientError as exc:
+        raise EnrichmentUnavailable(str(exc)) from exc
 
 
 def _document_packet(conn: sqlite3.Connection, claim: EnrichmentClaim) -> dict | None:
@@ -464,24 +458,28 @@ def run_enrichment_batch(
     """Run a bounded, resumable enrichment batch.
 
     Supplying ``generate_fn`` is primarily for deterministic tests. Production
-    calls use the local Ollama generator and first verify the configured model
-    exists, so merely indexing files never triggers a cloud request.
+    calls resolve the ``library`` slot (local Ollama, or an OpenAI-compatible
+    endpoint the user explicitly assigned to 知识馆整理) and first verify the
+    configured model is available, so merely indexing files never triggers a
+    cloud request.
     """
+    cfg = effective_cfg()
     if generate_fn is None:
         if not model_available():
             return {
                 "available": False,
-                "provider": "local_ollama",
-                "model": _MODEL,
+                "provider": cfg["provider"],
+                "model": cfg["model"],
                 "prompt_version": PROMPT_VERSION,
                 "claimed": 0,
                 "ready": 0,
                 "failed": 0,
                 "stale": 0,
-                "error": "本地 Ollama 模型未安装或不可用",
+                "error": ("整理模型未配置或不可用" if cfg["provider"] == "openai"
+                          else "本地 Ollama 模型未安装或不可用"),
             }
-        generate_fn = _ollama_generate
-    active_model = model or _MODEL
+        generate_fn = _configured_generate
+    active_model = model or cfg["model"]
 
     with write_lock:
         conn = db_provider()
@@ -539,7 +537,7 @@ def run_enrichment_batch(
 
     return {
         "available": True,
-        "provider": "local_ollama" if model is None else "injected",
+        "provider": "injected" if model is not None else cfg["provider"],
         "model": active_model,
         "prompt_version": PROMPT_VERSION,
         "claimed": len(claims),

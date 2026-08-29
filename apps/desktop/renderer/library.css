@@ -30,18 +30,6 @@
 /* Knowledge mode and physical-tree mode are mutually exclusive. The selector
    follows the mode button itself, so there is no second JS state to drift. */
 #navPanel:has(#libraryModeLibrary.on) #nav { display: none; }
-#navPanel:has(#libraryModeLibrary.on)::after {
-  content: "AI 知识馆是文件系统之上的派生知识层。原始文件不会被移动、复制或改名。";
-  display: block;
-  margin: 12px;
-  padding: 12px;
-  border-radius: var(--radius-pop);
-  background: var(--wash-surface);
-  color: var(--text-3);
-  font-size: 10px;
-  line-height: 1.6;
-  user-select: text;
-}
 
 .library-surface {
   min-height: 0;
@@ -266,4 +254,83 @@
 @media (max-width: 980px) {
   .library-status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .library-grid { grid-template-columns: 1fr; }
+}
+
+/* ---------- 左栏知识馆树（仅知识馆模式显示） ---------- */
+.library-nav { display: none; }
+
+#navPanel:has(#libraryModeLibrary.on) .library-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 8px;
+  overflow: auto;
+  min-height: 0;
+}
+
+.ln-head {
+  margin: 10px 8px 4px;
+  color: var(--text-3);
+  font: 600 10px/1.2 var(--font-sans);
+  letter-spacing: .04em;
+}
+
+.ln-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: var(--radius-ctl);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: background .12s ease, color .12s ease;
+  overflow: hidden;
+}
+
+.ln-item:hover { background: var(--hover); color: var(--text); }
+
+.ln-chev {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  margin-right: 6px;
+  transition: transform .12s ease;
+}
+
+.ln-chev.open { transform: rotate(90deg); }
+
+.ln-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.ln-item.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.ln-count {
+  flex-shrink: 0;
+  color: var(--text-3);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ln-item.on .ln-count { color: var(--accent); }
+
+.library-filter-chip {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
 }

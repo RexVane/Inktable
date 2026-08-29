@@ -24,6 +24,10 @@ from urllib.parse import urlparse
 
 log = logging.getLogger("inktable.llm")
 
+# 部分中转站（Cloudflare 系）会拦截 Python-urllib 默认 UA（403）：
+# 密钥是对的也被当成机器人。所有外发模型请求都带自报家门的 UA。
+USER_AGENT = "Inktable/0.3"
+
 
 class LLMError(RuntimeError):
     pass
@@ -50,6 +54,9 @@ class _Config:
         self.endpoint: str = ""
         self.api_key: str = ""
         self.model: str = ""
+        # openai = OpenAI 兼容 /chat/completions（云端 / 中转 / 本地 /v1）；
+        # ollama = 本地 Ollama（免密钥，地址自动补 /v1，模型可自动识别）
+        self.provider: str = "openai"
 
 
 _cfg = _Config()
@@ -76,14 +83,31 @@ def _validate_endpoint(endpoint: str) -> str:
     return value
 
 
-def configure(endpoint: str, api_key: str, model: str) -> None:
+def configure(endpoint: str, api_key: str, model: str,
+              provider: str = "openai") -> None:
     """运行时配置。传空串 = 清除（回到纯本地模式）。"""
     value = _validate_endpoint(endpoint)
+    if provider not in ("openai", "ollama"):
+        provider = "openai"
     with _lock:
         _cfg.endpoint = value
         _cfg.api_key = (api_key or "").strip()
         _cfg.model = (model or "").strip()
-    log.info("LLM %s", "已配置" if is_configured() else "已清除")  # 不打印任何值
+        _cfg.provider = provider
+    log.info("LLM %s（%s）", "已配置" if is_configured() else "已清除",
+             _cfg.provider)  # 不打印任何值
+
+
+def _chat_url(endpoint: str, provider: str) -> str:
+    """OpenAI 兼容端点直拼 /chat/completions；本地 Ollama 自动补 /v1。"""
+    base = endpoint.rstrip("/")
+    if provider == "ollama" and not base.endswith("/v1"):
+        return base + "/v1/chat/completions"
+    return base + "/chat/completions"
+
+
+def _auth_header(api_key: str) -> dict:
+    return {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
 
 def _config_snapshot() -> tuple[str, str, str]:
@@ -92,23 +116,38 @@ def _config_snapshot() -> tuple[str, str, str]:
         return _cfg.endpoint, _cfg.api_key, _cfg.model
 
 
+def credentials_for_proxy() -> tuple[str, str, str]:
+    """服务端代为调用外部接口时取用（如拉取模型列表）。
+
+    返回值只允许在服务端内部继续使用，**绝不进任何响应体**。
+    """
+    return _config_snapshot()
+
+
+def _provider_snapshot() -> str:
+    with _lock:
+        return _cfg.provider
+
+
 def is_configured() -> bool:
     endpoint, api_key, model = _config_snapshot()
-    return bool(endpoint and api_key and model)
+    return bool(endpoint and model and (_provider_snapshot() == "ollama"
+                                        or api_key))
 
 
 def status() -> dict:
     """给设置界面看的状态。**绝不返回密钥本身**。"""
     endpoint, api_key, model = _config_snapshot()
     return {
-        "configured": bool(endpoint and api_key and model),
+        "configured": is_configured(),
+        "provider": _provider_snapshot(),
         "endpoint": endpoint,
         "model": model,
         "has_key": bool(api_key),
     }
 
 
-def probe(*, timeout: float = 20.0) -> dict:
+def probe(*, timeout: float = 30.0) -> dict:
     """真实响应测试：发一条最小对话请求，必须拿回模型生成的文本才算通过。
 
     这不是 TCP/HTTP 连通性检查 —— 鉴权失效、模型名不存在、中转站不兼容
@@ -138,6 +177,13 @@ def probe(*, timeout: float = 20.0) -> dict:
                 # A freshly started local provider can be bound before its
                 # serving thread begins accepting connections.
                 time.sleep(0.05 * (attempt + 1))
+        if not text.strip():
+            # 推理模型可能把 512 预算全花在思考上（content 为空）：
+            # 放宽预算再试一次，仍为空才判失败
+            text = chat(
+                [{"role": "user", "content": "这是一次连接测试。请只回复两个字：确认"}],
+                temperature=0, max_tokens=2048, timeout=timeout,
+            )
         latency_ms = int((time.monotonic() - started) * 1000)
         reply = " ".join(text.split())
         if not reply:
@@ -166,7 +212,8 @@ def probe(*, timeout: float = 20.0) -> dict:
         code, message = exc.code, str(exc)
     except LLMError:
         code, message = ("invalid_response",
-                         "接口连通但没有拿到有效回复（检查模型名，或该中转不兼容 OpenAI 协议）")
+                         "接口连通但没有拿到有效回复（检查模型名；推理模型可能只输出思考"
+                         "没输出正文；或该中转不兼容 OpenAI 协议）")
     return {**status(), "available": False, "code": code, "message": message}
 
 
@@ -279,7 +326,7 @@ def chat_stream(messages: list[dict], *, temperature: float = 0.1,
     provider dripping one byte at a time cannot hold an ask forever.
     """
     endpoint, api_key, model = _config_snapshot()
-    if not (endpoint and api_key and model):
+    if not is_configured():
         raise LLMNotConfigured("未配置模型服务（设置 → AI 问答）")
     payload: dict = {
         "model": model, "messages": messages,
@@ -288,10 +335,10 @@ def chat_stream(messages: list[dict], *, temperature: float = 0.1,
     if max_tokens is not None:
         payload["max_tokens"] = max_tokens
     req = urllib.request.Request(
-        f"{endpoint}/chat/completions",
+        _chat_url(endpoint, _provider_snapshot()),
         data=json.dumps(payload).encode("utf-8"), method="POST",
-        headers={"Content-Type": "application/json",
-                 "Authorization": f"Bearer {api_key}"},
+        headers={"Content-Type": "application/json", "User-Agent": USER_AGENT,
+                 **_auth_header(api_key)},
     )
     deadline = time.monotonic() + timeout
     try:
@@ -352,10 +399,10 @@ def chat(messages: list[dict], *, temperature: float = 0.1,
     就收不回。方案明确允许"首个版本先做非流式"，禁止的是"流式+不校验"。
     """
     endpoint, api_key, model = _config_snapshot()
-    if not (endpoint and api_key and model):
+    if not is_configured():
         raise LLMNotConfigured("未配置模型服务（设置 → AI 问答）")
 
-    url = f"{endpoint}/chat/completions"
+    url = _chat_url(endpoint, _provider_snapshot())
     payload: dict = {
         "model": model,
         "messages": messages,
@@ -367,10 +414,8 @@ def chat(messages: list[dict], *, temperature: float = 0.1,
     try:
         req = urllib.request.Request(
             url, data=body, method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}",
-            },
+            headers={"Content-Type": "application/json",
+                     "User-Agent": USER_AGENT, **_auth_header(api_key)},
         )
         deadline = time.monotonic() + timeout
         chunks: list[bytes] = []

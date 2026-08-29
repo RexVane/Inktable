@@ -15,8 +15,9 @@
    → LLM 不可用时行为与改动前**逐字一致**，降级路径天然存在，不需要开关。
 2. 摘要是**给检索器读的**，不是给人读的：要求覆盖主题、专有名词、别名与
    同义说法，不要求文笔通顺，也不要求完整句子。展示层不使用它。
-3. 走本机 Ollama，不碰云端 provider —— PLAN §1 约束 3「云端 AI 默认关闭」。
-   摘要输入是用户文档正文，把它发给外部服务等于把库内容外传。
+3. 走「知识馆整理」槽位（app.config.models）：默认本机 Ollama；用户把该槽位
+   显式指到 OpenAI 兼容接口时才出网 —— 与富化同一份配置、同一个选择，
+   不存在"索引时悄悄发给问答云端供应商"的路径。
 4. 输入截断到 `_INPUT_CHARS`。整篇 6.4MB 的文档发进去只会撑爆上下文，
    而摘要需要的主题信号在开头 + 结构里已经足够。
 """
@@ -30,6 +31,8 @@ import re
 import time
 import urllib.error
 import urllib.request
+
+from app.config import llm_client, models as model_slots
 
 log = logging.getLogger("inktable.abstract")
 
@@ -67,30 +70,42 @@ class AbstractUnavailable(RuntimeError):
     """摘要服务不可用（未装模型、连不上、超时）。调用方应保留 NULL。"""
 
 
-def _post(path: str, payload: dict, timeout: float) -> dict:
+def _post(url: str, payload: dict, timeout: float) -> dict:
     req = urllib.request.Request(
-        f"{_OLLAMA_URL}{path}",
+        url,
         data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json",
+                 "User-Agent": "Inktable/0.3"},
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode())
 
 
+def _cfg() -> dict:
+    """摘要跟随「知识馆整理」槽位；未配置时回退环境变量（ollama 形态）。"""
+    return model_slots.effective("library") or {
+        "provider": "ollama", "endpoint": _OLLAMA_URL,
+        "api_key": "", "model": _MODEL,
+    }
+
+
 def model_available() -> bool:
-    """摘要模型是否已拉取。不缓存：回填是长任务，中途拉模型应当被看见。"""
+    """摘要模型是否就绪。ollama 查 /api/tags；openai 看配置是否完整。"""
+    cfg = _cfg()
+    if cfg["provider"] == "openai":
+        return bool(cfg["endpoint"] and cfg["model"] and cfg["api_key"])
     try:
-        req = urllib.request.Request(f"{_OLLAMA_URL}/api/tags", method="GET")
+        req = urllib.request.Request(f"{cfg['endpoint']}/api/tags", method="GET")
         with urllib.request.urlopen(req, timeout=2.0) as resp:
             data = json.loads(resp.read().decode())
     except Exception as exc:  # noqa: BLE001 - 连不上就是不可用
         log.debug("摘要模型探测失败：%s", exc)
         return False
-    want = _MODEL.split(":")[0]
+    want = cfg["model"].split(":")[0]
     for model in data.get("models", []):
         name = str(model.get("name", ""))
-        if name == _MODEL or name.split(":")[0] == want:
+        if name == cfg["model"] or name.split(":")[0] == want:
             return True
     return False
 
@@ -112,9 +127,20 @@ def generate(title: str, body: str) -> str:
         body=(body or "")[:_INPUT_CHARS],
     )
     started = time.time()
+    cfg = _cfg()
+    if cfg["provider"] == "openai":
+        try:
+            text = llm_client.generate_text(
+                prompt, cfg=cfg, max_tokens=_MAX_TOKENS, timeout=_TIMEOUT)
+        except llm_client.LLMClientError as exc:
+            raise AbstractUnavailable(str(exc)) from exc
+        if not text:
+            raise AbstractUnavailable("模型返回空摘要")
+        log.debug("摘要生成 %.1fs / %d 字", time.time() - started, len(text))
+        return text
     try:
-        data = _post("/api/generate", {
-            "model": _MODEL,
+        data = _post(f"{cfg['endpoint']}/api/generate", {
+            "model": cfg["model"],
             "prompt": prompt,
             "stream": False,
             # 推理链对摘要没有价值，只会吃掉 token 预算并拖慢回填。

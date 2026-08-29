@@ -13,7 +13,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.library.core import sync_library_items
 from app.library.enrichment import run_enrichment_batch, status as enrichment_status
-from app.library.query import library_item_detail, library_page, library_stats
+from app.library.query import (
+    library_item_detail,
+    library_page,
+    library_stats,
+    library_taxonomy,
+    library_tree,
+)
 from app.library.relations import (
     DEFAULT_CHUNKS_PER_ITEM,
     DEFAULT_LIMIT as DEFAULT_RELATION_LIMIT,
@@ -46,17 +52,29 @@ def create_library_router(
     @router.get("/items")
     def get_items(
         status: LibraryStatus | None = None,
-        category_id: int | None = Query(None, ge=1),
+        # category_id=-1 约定为「未分类」（左栏树的未分类节点）
+        category_id: int | None = Query(None, ge=-1),
+        tag_id: int | None = Query(None, ge=1),
         limit: int = Query(100, ge=1, le=500),
         offset: int = Query(0, ge=0, le=1_000_000),
     ) -> dict:
         return library_page(
             db_provider(),
             status=status,
-            category_id=category_id,
+            category_id=category_id if category_id is not None and category_id >= 1 else None,
+            tag_id=tag_id,
+            uncategorized=category_id == -1,
             limit=limit,
             offset=offset,
         )
+
+    @router.get("/taxonomy")
+    def get_taxonomy() -> dict:
+        return library_taxonomy(db_provider())
+
+    @router.get("/tree")
+    def get_tree() -> dict:
+        return library_tree(db_provider())
 
     @router.get("/items/{item_id}")
     def get_item(item_id: int) -> dict:

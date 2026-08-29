@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath // empty' | { read -r f; case \"$f\" in */services/api/*.py) d=\"${f%%/services/api/*}/services/api\"; out=$(cd \"$d\" && uvx ruff check --no-cache --output-format concise \"$f\" 2>&1) || jq -n --arg o \"$out\" '{hookSpecificOutput:{hookEventName:\"PostToolUse\",additionalContext:(\"ruff check 发现问题，修正后再继续：\\n\" + $o)}}' ;; esac; } 2>/dev/null || true",
+            "timeout": 60,
+            "statusMessage": "ruff check"
+          }
+        ]
+      }
+    ]
+  }
+}
