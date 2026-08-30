@@ -19,10 +19,16 @@ bge-m3 向量化 → 混合检索 → 带引用问答 → 实时监听自动入�
 | Electron | 43.3.0 | 二进制经 npmmirror 手动安装，见 §6 |
 
 **Ollama 端口**：11434 落在 Windows 保留端口段（实测 11427–11526，
-`netsh int ipv4 show excludedportrange`），bind 报 WSAEACCES。解法：
-用户环境变量 `OLLAMA_HOST=127.0.0.1:18434` +
-`INKTABLE_OLLAMA_URL=http://127.0.0.1:18434`（embedding.py 原生支持该
-变量），重启 Ollama 即可，无需改代码。
+`netsh int ipv4 show excludedportrange`），bind 报 WSAEACCES。Ollama
+本身仍需改口：用户环境变量 `OLLAMA_HOST=127.0.0.1:18434` 后重启服务。
+sidecar **不再要求**同步设 `INKTABLE_OLLAMA_URL` —— `discover_ollama_url`
+按 11434、18434 探测第一个应答 `/api/tags` 的口；只有要跳过探测或指向
+非本机地址时才设该变量。
+
+**TEMP/TMP**：必须是已展开的真实路径（如 `C:\Users\<用户>\AppData\Local\Temp`）。
+若用户环境变量写成字面量 `%USERPROFILE%\AppData\Local\Temp`（REG_SZ 不会展开），
+sqlite 会在当前工作目录下建出名为 `%USERPROFILE%` 的目录，大事务报
+`unable to open database file`，工具缓存也会误写入仓库。
 
 **开发命令**（Windows）：
 

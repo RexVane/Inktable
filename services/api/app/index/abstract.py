@@ -36,8 +36,6 @@ from app.config import llm_client, models as model_slots
 
 log = logging.getLogger("inktable.abstract")
 
-_OLLAMA_URL = os.environ.get(
-    "INKTABLE_OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
 # 摘要模型与嵌入模型分开配：嵌入是 bge-m3（不能对话），摘要要一个 chat 模型。
 _MODEL = os.environ.get("INKTABLE_ABSTRACT_MODEL", "qwen3:8b")
 
@@ -85,7 +83,7 @@ def _post(url: str, payload: dict, timeout: float) -> dict:
 def _cfg() -> dict:
     """摘要跟随「知识馆整理」槽位；未配置时回退环境变量（ollama 形态）。"""
     return model_slots.effective("library") or {
-        "provider": "ollama", "endpoint": _OLLAMA_URL,
+        "provider": "ollama", "endpoint": model_slots.discover_ollama_url(),
         "api_key": "", "model": _MODEL,
     }
 

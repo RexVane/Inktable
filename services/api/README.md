@@ -47,7 +47,7 @@ uv run --group dev pyinstaller sidecar.spec --noconfirm   # 冻结打包
 - `INKTABLE_DB=/tmp/dev.db` —— 指向独立库，避免污染真实数据
 - `INKTABLE_DATA_DIR=…` —— 整体迁移数据目录（库/备份/保全副本）
 - `INKTABLE_RERANKER=rrf` —— 显式降级重排做对照
-- `INKTABLE_OLLAMA_URL=…` —— Ollama 地址（默认 `http://127.0.0.1:11434`）
+- `INKTABLE_OLLAMA_URL=…` —— Ollama 地址；不设则探测本机 11434，其次 18434
 
 语义检索依赖本机 Ollama + bge-m3（`ollama pull bge-m3`）。
 未检测到时全链路自动降级纯关键词检索；模型维度变更会在启动时

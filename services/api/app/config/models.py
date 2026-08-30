@@ -15,13 +15,78 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
+import urllib.error
+import urllib.request
 from urllib.parse import urlparse
 
 SLOTS = ("library", "embedding")
 PROVIDERS = ("openai", "ollama")
 
-_DEFAULT_OLLAMA_URL = os.environ.get(
-    "INKTABLE_OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
+# 官方默认口。探测失败时的展示/回退值，**不是** import 时从环境变量拍下来的
+# 快照 —— 环境变量每次调用都重读，否则测试里 setenv 和 sidecar 启动后才出现
+# 的 Ollama 都看不见。
+_DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
+
+# Ollama 的官方默认端口是 11434，但 Windows 上它常落在 Hyper-V/WSL 的动态保留段
+# 里，装机时只能改口（本机是 18434）。硬按平台写死任一个都会错一半人，所以这里
+# **探测**：显式 INKTABLE_OLLAMA_URL 优先，否则按候选顺序拿第一个应答的。
+# 结果缓存在进程内 —— 设置界面与嵌入模块由此共用同一个答案，不再各写一个常量。
+_OLLAMA_PORT_CANDIDATES = (11434, 18434)
+_DISCOVER_MISS_TTL = 30.0
+_discover_lock = threading.Lock()
+_discovered_ollama: str | None = None   # 成功探到的活地址，进程内粘住
+_discover_miss_at: float = 0.0          # 最近一次「候选全死」的时间；0 = 无
+
+
+def reset_discovery() -> None:
+    """测试用：清掉探测缓存，让下一次 discover_ollama_url 重新打候选口。"""
+    global _discovered_ollama, _discover_miss_at
+    with _discover_lock:
+        _discovered_ollama = None
+        _discover_miss_at = 0.0
+
+
+def _explicit_ollama_url() -> str:
+    return (os.environ.get("INKTABLE_OLLAMA_URL") or "").strip().rstrip("/")
+
+
+def _ollama_alive(url: str, timeout: float) -> bool:
+    """打 /api/tags：200 才算真能拉模型列表，不只是有东西在监听。"""
+    try:
+        req = urllib.request.Request(
+            f"{url}/api/tags", headers={"User-Agent": "Inktable/0.3"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status == 200
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return False
+
+
+def discover_ollama_url(*, timeout: float = 0.6) -> str:
+    """当前这台机器上 Ollama 的实际地址；探测不到时返回官方默认值。
+
+    成功探到的地址进程内粘住（Ollama 不会中途换口）。失败**不**当成成功缓存
+    —— sidecar 常比 Ollama 先起来，把 11434 冻死会让之后启动的 18434 永远
+    找不到。失败只记住 30 秒，避免设置页两个槽位各打一轮候选口。
+    """
+    global _discovered_ollama, _discover_miss_at
+    explicit = _explicit_ollama_url()
+    if explicit:
+        return explicit
+    with _discover_lock:
+        if _discovered_ollama is not None:
+            return _discovered_ollama
+        now = time.monotonic()
+        if _discover_miss_at and now - _discover_miss_at < _DISCOVER_MISS_TTL:
+            return _DEFAULT_OLLAMA_URL
+        for port in _OLLAMA_PORT_CANDIDATES:
+            url = f"http://127.0.0.1:{port}"
+            if _ollama_alive(url, timeout):
+                _discovered_ollama = url
+                _discover_miss_at = 0.0
+                return url
+        _discover_miss_at = now
+        return _DEFAULT_OLLAMA_URL
 
 
 class SlotConfigError(ValueError):
@@ -66,7 +131,7 @@ def configure(slot: str, provider: str, endpoint: str,
         if not (api_key or "").strip():
             raise SlotConfigError("OpenAI 兼容接口必须填写 API 密钥")
     else:
-        url = _validate_endpoint(endpoint or _DEFAULT_OLLAMA_URL)
+        url = _validate_endpoint(endpoint or discover_ollama_url())
     if not (model or "").strip():
         raise SlotConfigError("必须填写模型名")
     cfg = {"provider": provider, "endpoint": url,
@@ -97,23 +162,30 @@ def effective(slot: str) -> dict | None:
         model = os.environ.get(
             "INKTABLE_LIBRARY_MODEL",
             os.environ.get("INKTABLE_ABSTRACT_MODEL", "qwen3:8b"))
-        return {"provider": "ollama", "endpoint": _DEFAULT_OLLAMA_URL,
+        return {"provider": "ollama", "endpoint": discover_ollama_url(),
                 "api_key": "", "model": model}
     if slot == "embedding":
-        return {"provider": "ollama", "endpoint": _DEFAULT_OLLAMA_URL,
+        return {"provider": "ollama", "endpoint": discover_ollama_url(),
                 "api_key": "", "model": "bge-m3"}
     return None
 
 
 def status(slot: str) -> dict:
-    """给设置界面看的状态。**绝不返回密钥本身**。"""
+    """给设置界面看的状态。**绝不返回密钥本身**。
+
+    `default_ollama` 是本机探测到的 Ollama 地址：界面拿它当空表单的预填值，
+    这样 Mac 与 Windows 看到的都是各自机器上真实可用的那个口。
+    """
+    default_ollama = discover_ollama_url()
     cfg = get(slot)
     if cfg is None:
         return {"configured": False, "provider": None,
-                "endpoint": "", "model": "", "has_key": False}
+                "endpoint": "", "model": "", "has_key": False,
+                "default_ollama": default_ollama}
     return {"configured": True, "provider": cfg["provider"],
             "endpoint": cfg["endpoint"], "model": cfg["model"],
-            "has_key": bool(cfg["api_key"])}
+            "has_key": bool(cfg["api_key"]),
+            "default_ollama": default_ollama}
 
 
 def all_status() -> dict:

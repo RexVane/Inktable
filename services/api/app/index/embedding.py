@@ -1,6 +1,6 @@
 """本地嵌入服务 —— Ollama bge-m3（PLAN §16.1a，v0.3 起）。
 
-嵌入交给本机 Ollama（默认 http://127.0.0.1:11434）：
+嵌入交给本机 Ollama（未设 INKTABLE_OLLAMA_URL 时探测 11434，其次 18434）：
 
     模型      bge-m3（BAAI）：1024 维、多语言、8192 上下文
     检测      GET /api/tags 看已拉取列表里有没有 bge-m3*，结果缓存 30 秒
@@ -22,7 +22,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import threading
 import time
 import urllib.error
@@ -43,7 +42,10 @@ BATCH = 64
 # 探测结果缓存时长：查询路径每次问一遍 /api/tags 太浪费
 _PROBE_TTL = 30.0
 
-_OLLAMA_URL = os.environ.get("INKTABLE_OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
+# 测试 monkeypatch 这个名字指向假服务器。生产保持 None，每次走
+# discover_ollama_url —— 不能在 import 时把地址冻死，否则 sidecar 先于
+# Ollama 启动时会永远打 11434，Windows 上改口到 18434 的实例就静默消失。
+_OLLAMA_URL: str | None = None
 # 查询路径上同一句话常被向量路与精排各编一次；短 LRU 避免重复 HTTP。
 # 只缓存短文本：索引回填的长分片会把查询向量挤掉。
 _ENCODE_CACHE_MAX = 64
@@ -99,14 +101,17 @@ def _cache_put(key: str, vec: np.ndarray) -> None:
 
 
 def _embedding_slot() -> dict | None:
-    """显式配置的向量槽位。不含环境变量回退 —— URL 回退走模块全局
-    _OLLAMA_URL（测试用 monkeypatch 替换的对象）。"""
+    """显式配置的向量槽位。不含环境变量回退 —— URL 回退走 _base_url。"""
     return model_slots.get("embedding")
 
 
 def _base_url() -> str:
     cfg = _embedding_slot()
-    return (cfg or {}).get("endpoint") or _OLLAMA_URL
+    if (cfg or {}).get("endpoint"):
+        return cfg["endpoint"]
+    if _OLLAMA_URL:
+        return _OLLAMA_URL
+    return model_slots.discover_ollama_url()
 
 
 def _http_json(path: str, payload: dict | None = None, timeout: float = 3.0) -> dict:
@@ -175,7 +180,7 @@ class Embedder:
             cfg = model_slots.effective("embedding") or {}
             wanted = str(cfg.get("model") or MODEL_PREFIX)
             raise EmbeddingUnavailable(
-                f"未在 Ollama（{cfg.get('endpoint') or _OLLAMA_URL}）检测到嵌入模型"
+                f"未在 Ollama（{_base_url()}）检测到嵌入模型"
                 f"「{wanted}」。确认 Ollama 在运行后执行：ollama pull {wanted}"
             )
         self.tag = tag

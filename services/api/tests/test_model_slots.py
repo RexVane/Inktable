@@ -129,9 +129,11 @@ def ollama_server():
 def clean_slots():
     model_slots.clear("library")
     model_slots.clear("embedding")
+    model_slots.reset_discovery()
     yield
     model_slots.clear("library")
     model_slots.clear("embedding")
+    model_slots.reset_discovery()
 
 
 # ---------------------------------------------------------------- 配置校验
@@ -169,6 +171,59 @@ def test_library_env_fallback(monkeypatch):
     cfg = model_slots.effective("library")
     assert cfg["provider"] == "ollama"
     assert cfg["model"] == "env-model-7b"
+
+
+# ------------------------------------------------------------ Ollama 地址探测
+#
+# 官方默认端口 11434 在 Windows 上常落进 Hyper-V/WSL 的动态保留段，装机时只能
+# 改口。按平台写死任一个都会错一半人，所以探测：显式 env 优先，否则取第一个
+# 应答的候选口。界面拿 status()["default_ollama"] 当空表单预填值。
+
+def test_discover_prefers_explicit_env(monkeypatch):
+    monkeypatch.setenv("INKTABLE_OLLAMA_URL", "http://127.0.0.1:6553")
+    assert model_slots.discover_ollama_url() == "http://127.0.0.1:6553"
+
+
+def test_discover_picks_second_candidate_when_first_is_dead(
+        monkeypatch, ollama_server):
+    """第一个候选口不通就换下一个 —— 这正是 Windows 上 11434 → 18434 的形状。"""
+    live_port = int(ollama_server.rsplit(":", 1)[1])
+    monkeypatch.delenv("INKTABLE_OLLAMA_URL", raising=False)
+    # 1 号是保证没人听的口，2 号是真服务器
+    monkeypatch.setattr(model_slots, "_OLLAMA_PORT_CANDIDATES", (6553, live_port))
+    assert model_slots.discover_ollama_url(timeout=0.05) == (
+        f"http://127.0.0.1:{live_port}")
+
+
+def test_discover_falls_back_to_official_default_when_nothing_answers(monkeypatch):
+    monkeypatch.delenv("INKTABLE_OLLAMA_URL", raising=False)
+    monkeypatch.setattr(model_slots, "_OLLAMA_PORT_CANDIDATES", (6553, 6554))
+    assert model_slots.discover_ollama_url(timeout=0.05) == (
+        model_slots._DEFAULT_OLLAMA_URL)
+
+
+def test_discover_does_not_cache_a_miss(monkeypatch, ollama_server):
+    """失败不能冻成成功：sidecar 常比 Ollama 先起，随后 18434 必须还能探到。"""
+    live_port = int(ollama_server.rsplit(":", 1)[1])
+    monkeypatch.delenv("INKTABLE_OLLAMA_URL", raising=False)
+    monkeypatch.setattr(model_slots, "_OLLAMA_PORT_CANDIDATES", (6553, 6554))
+    assert model_slots.discover_ollama_url(timeout=0.05) == (
+        model_slots._DEFAULT_OLLAMA_URL)
+    monkeypatch.setattr(model_slots, "_DISCOVER_MISS_TTL", 0.0)
+    monkeypatch.setattr(model_slots, "_OLLAMA_PORT_CANDIDATES", (6553, live_port))
+    assert model_slots.discover_ollama_url(timeout=0.05) == (
+        f"http://127.0.0.1:{live_port}")
+
+
+def test_status_reports_default_ollama_for_unconfigured_slot(monkeypatch):
+    """界面靠这个字段预填地址；缺了它就会退回自己硬写的常量。"""
+    monkeypatch.delenv("INKTABLE_OLLAMA_URL", raising=False)
+    monkeypatch.setattr(model_slots, "_discovered_ollama",
+                        "http://127.0.0.1:18434")
+    model_slots.clear("embedding")
+    st = model_slots.status("embedding")
+    assert st["configured"] is False
+    assert st["default_ollama"] == "http://127.0.0.1:18434"
 
 
 # ---------------------------------------------------------------- 双协议客户端
