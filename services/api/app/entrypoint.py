@@ -1,4 +1,4 @@
-"""Stable Inktable sidecar entrypoint.
+"""Stable Ordo sidecar entrypoint.
 
 `app.main` still owns the sidecar lifecycle, database singleton, auth boundary,
 watcher and legacy routes.  This module is intentionally thin: it composes
@@ -23,13 +23,13 @@ from app.library.api import create_library_router
 
 def install_feature_routers() -> None:
     """Mount feature routers exactly once on the existing FastAPI app."""
-    if getattr(sidecar.app.state, "inktable_feature_routers_installed", False):
+    if getattr(sidecar.app.state, "ordo_feature_routers_installed", False):
         return
 
     sidecar.app.include_router(
         create_library_router(sidecar.db, sidecar._db_lock, sidecar.require_token)
     )
-    sidecar.app.state.inktable_feature_routers_installed = True
+    sidecar.app.state.ordo_feature_routers_installed = True
 
 
 install_feature_routers()

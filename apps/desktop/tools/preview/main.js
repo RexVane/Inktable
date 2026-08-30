@@ -1,13 +1,13 @@
 /**
  * UI 预览截图工具：加载真实 renderer + 模拟后端数据，产出各状态截图。
- * 用法：npx electron tools/preview/main.js [输出目录，默认 /tmp/inktable-ui]
+ * 用法：npx electron tools/preview/main.js [输出目录，默认 /tmp/ordo-ui]
  */
 const { app, BrowserWindow, protocol, nativeTheme } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const mock = require('./mock-data');
 
-const outDir = process.argv[2] || '/tmp/inktable-ui';
+const outDir = process.argv[2] || '/tmp/ordo-ui';
 fs.mkdirSync(outDir, { recursive: true });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

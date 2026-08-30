@@ -115,7 +115,7 @@ OneDrive\文档\GitHub\InkHole\docs\跨网络传输方案.md
 实测清理掉 **845 个**（`filename` 383 + `policy` 462），受保护 0、误伤 0。
 
 清理侧同时补了一个缺口：`ingestion_cleanup` 原来只用占位文件名
-`__inktable_policy_probe__.txt` 做**目录级**探测，评估不到与真实文件名相关的
+`__ordo_policy_probe__.txt` 做**目录级**探测，评估不到与真实文件名相关的
 规则，导致 348 个 `README.md` 一直躲过清理。现在按真实路径再判一次。
 
 ### 3.2 安装目录剪枝与代码项目剪枝分开门控（已生效，零 PDF/DOCX 风险）
@@ -219,7 +219,7 @@ provider 恢复后：
 
 ```bash
 cd services/api
-INKTABLE_DB=../../output/release-gate-20260817/library-working.db INKTABLE_OLLAMA_URL=http://127.0.0.1:18434 .venv/Scripts/python.exe scripts/run_qa_eval.py   --provider myself --model gpt-5.6-luna --reranker auto   --ollama-url http://127.0.0.1:18434 --case-delay 2 --judge-retries 3   --json ../../output/release-gate-20260817/qa-luna-65-longer.json
+ORDO_DB=../../output/release-gate-20260817/library-working.db ORDO_OLLAMA_URL=http://127.0.0.1:18434 .venv/Scripts/python.exe scripts/run_qa_eval.py   --provider myself --model gpt-5.6-luna --reranker auto   --ollama-url http://127.0.0.1:18434 --case-delay 2 --judge-retries 3   --json ../../output/release-gate-20260817/qa-luna-65-longer.json
 ```
 
 判据：引用支持率 ≥95%、精确引用率 100%、句级引用覆盖 100%、正确拒答 12/12、

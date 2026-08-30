@@ -1,11 +1,11 @@
-"""Build or refresh the derived Inktable AI Library layer.
+"""Build or refresh the derived Ordo AI Library layer.
 
 Usage from ``services/api``::
 
     uv run python scripts/sync_ai_library.py
 
 The script never moves, copies, renames or deletes user files.  It only creates
-or refreshes derived ``library_*`` rows inside the selected Inktable database.
+or refreshes derived ``library_*`` rows inside the selected Ordo database.
 """
 
 from __future__ import annotations

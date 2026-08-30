@@ -276,7 +276,7 @@ def build(conn) -> dict:
             continue
         if case.qid in CORPUS_MISSING:
             reason = (
-                "The required Inktable PLAN source is excluded by the current "
+                "The required Ordo PLAN source is excluded by the current "
                 "source-code/config ingestion policy."
                 if case.qid in PLAN_DEPENDENT else
                 "The originally annotated document is not present in the current corpus."
@@ -338,7 +338,7 @@ def build(conn) -> dict:
         }
         if selected_hashes & scene_planning_sha:
             raise RuntimeError(
-                f"{case.qid} selected scene-planning.md as Inktable PLAN gold"
+                f"{case.qid} selected scene-planning.md as Ordo PLAN gold"
             )
         cases.append({
             "qid": case.qid,

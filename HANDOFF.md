@@ -1,4 +1,4 @@
-# Inktable Handoff
+# Ordo Handoff
 
 实施约束（H1–H18 硬约束、阅读顺序、提问约定）见 [`docs/HANDOFF.md`](docs/HANDOFF.md)。
 

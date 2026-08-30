@@ -3,7 +3,7 @@
 三项的共同要求是**不改变既有行为的默认路径**：
 - 摘要缺失时 documents_fts 的索引文本与引入该列前逐字一致；
 - 调查日志只记成功回答，且绝不作为证据进入 LLM 上下文；
-- 引文核验默认只诊断，`INKTABLE_QUOTE_ENFORCE=1` 才剔除引用。
+- 引文核验默认只诊断，`ORDO_QUOTE_ENFORCE=1` 才剔除引用。
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from app.qa.quotes import (
 
 @pytest.fixture()
 def conn(tmp_path, monkeypatch):
-    monkeypatch.setenv("INKTABLE_DB", str(tmp_path / "lib.db"))
+    monkeypatch.setenv("ORDO_DB", str(tmp_path / "lib.db"))
     c = connect()
     init_db(c)
     yield c
@@ -203,10 +203,10 @@ def test_verify_normalizes_width_and_whitespace_only():
 
 def test_quote_enforcement_is_off_by_default(monkeypatch):
     """默认只诊断：改答案行为必须先有 65 题 QA 复验的基线。"""
-    monkeypatch.delenv("INKTABLE_QUOTE_ENFORCE", raising=False)
+    monkeypatch.delenv("ORDO_QUOTE_ENFORCE", raising=False)
     from app.qa import quotes
     assert quotes.enforcing() is False
-    monkeypatch.setenv("INKTABLE_QUOTE_ENFORCE", "1")
+    monkeypatch.setenv("ORDO_QUOTE_ENFORCE", "1")
     assert quotes.enforcing() is True
 
 

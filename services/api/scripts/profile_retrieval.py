@@ -7,7 +7,7 @@
 本工具把 RetrievalTrace 的 stage 明细和 child_search 内部四条路线的单独耗时
 一起摊平输出，给出每个阶段的 P50/P95 与总占比，用来定位真正的瓶颈。
 
-    INKTABLE_DB=output/release-gate-20260817/library-working.db \
+    ORDO_DB=output/release-gate-20260817/library-working.db \
         .venv/Scripts/python.exe scripts/profile_retrieval.py --route-limit 120
 
 只读：不写库、不改索引。

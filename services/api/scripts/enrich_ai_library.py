@@ -1,4 +1,4 @@
-"""Run Inktable AI Library enrichment explicitly with the local Ollama model.
+"""Run Ordo AI Library enrichment explicitly with the local Ollama model.
 
 From ``services/api``::
 
@@ -6,7 +6,7 @@ From ``services/api``::
     uv run python scripts/enrich_ai_library.py --limit 5 --all
 
 The command acquires the same single-instance database lock as the desktop
-sidecar. If Inktable is already running, it exits instead of becoming a second
+sidecar. If Ordo is already running, it exits instead of becoming a second
 writer. Document excerpts are sent only through the local-Ollama enrichment
 worker; this command never falls through to the cloud QA provider.
 """
@@ -28,7 +28,7 @@ from app.library.enrichment import run_enrichment_batch, status
 
 
 def _args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Enrich Inktable AI Library locally")
+    parser = argparse.ArgumentParser(description="Enrich Ordo AI Library locally")
     parser.add_argument(
         "--limit",
         type=int,
@@ -61,7 +61,7 @@ def main() -> int:
     except AlreadyRunning:
         print(json.dumps({
             "ok": False,
-            "error": "Inktable 正在运行；请关闭桌面端后再使用独立 enrichment CLI",
+            "error": "Ordo 正在运行；请关闭桌面端后再使用独立 enrichment CLI",
         }, ensure_ascii=False))
         return 2
 

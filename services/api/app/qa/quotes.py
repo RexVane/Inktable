@@ -2,20 +2,20 @@
 
 **为什么加这一条**
 
-Inktable 现有的四条硬校验守的是「引用编号存在且被使用」：`[C3]` 必须指向本次
+Ordo 现有的四条硬校验守的是「引用编号存在且被使用」：`[C3]` 必须指向本次
 上下文里真实存在的第 3 片。它守不住的是**这一片里到底有没有这句话** ——
 模型可以引对了文件、却写出文件里没有的数值，而 `[C3]` 格式完全合法。这正是
 `docs/eval/README.md` 里 Gold evidence citation recall 只有 68.93% 而
 「精确引用率 100%」的原因：后者量的是格式，不是内容。
 
 marginalia 的做法是让每条引用带一段 verbatim quote 并核对它在原文出现
-（`quote_matches_source_text`）。这里移植同一条思路，但按 Inktable 的分片
+（`quote_matches_source_text`）。这里移植同一条思路，但按 Ordo 的分片
 模型落地：引文必须出现在**它所引用的那一片**里，不是"库里某处"。
 
 **默认只诊断，不改行为**
 
 核验结果写进 `validation.quotes`，并把 quote 挂到 citation 上（界面可以显示
-「引用的是这一句」）。是否因核不上而剔除引用由 `INKTABLE_QUOTE_ENFORCE`
+「引用的是这一句」）。是否因核不上而剔除引用由 `ORDO_QUOTE_ENFORCE`
 控制，默认关。理由：改答案行为必须先用 65 题 QA 复验，而那套复验此刻仍被
 provider 可用性阻塞（见 CURRENT_STATUS 第十节）。先量，再决定要不要执行 ——
 反过来做就是在没有基线的情况下动引用可靠性。
@@ -39,7 +39,7 @@ _MAX_QUOTE_CHARS = 200
 
 
 def enforcing() -> bool:
-    return os.environ.get("INKTABLE_QUOTE_ENFORCE", "0") == "1"
+    return os.environ.get("ORDO_QUOTE_ENFORCE", "0") == "1"
 
 
 def prompt_clause() -> str:

@@ -5,8 +5,8 @@
 Electron 主进程用 safeStorage 加密保存，sidecar 每次启动后收到推送。
 
 未收到推送时（headless CLI、测试）回退到环境变量，行为与拆槽位之前一致：
-    library → INKTABLE_LIBRARY_MODEL / INKTABLE_ABSTRACT_MODEL / INKTABLE_OLLAMA_URL
-    embedding → INKTABLE_OLLAMA_URL（模型固定 bge-m3 系）
+    library → ORDO_LIBRARY_MODEL / ORDO_ABSTRACT_MODEL / ORDO_OLLAMA_URL
+    embedding → ORDO_OLLAMA_URL（模型固定 bge-m3 系）
 qa 槽位不走这里 —— 它是 app.qa.llm 的全局配置（/settings/llm 原路径保留）。
 """
 
@@ -31,7 +31,7 @@ _DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 
 # Ollama 的官方默认端口是 11434，但 Windows 上它常落在 Hyper-V/WSL 的动态保留段
 # 里，装机时只能改口（本机是 18434）。硬按平台写死任一个都会错一半人，所以这里
-# **探测**：显式 INKTABLE_OLLAMA_URL 优先，否则按候选顺序拿第一个应答的。
+# **探测**：显式 ORDO_OLLAMA_URL 优先，否则按候选顺序拿第一个应答的。
 # 结果缓存在进程内 —— 设置界面与嵌入模块由此共用同一个答案，不再各写一个常量。
 _OLLAMA_PORT_CANDIDATES = (11434, 18434)
 _DISCOVER_MISS_TTL = 30.0
@@ -49,14 +49,14 @@ def reset_discovery() -> None:
 
 
 def _explicit_ollama_url() -> str:
-    return (os.environ.get("INKTABLE_OLLAMA_URL") or "").strip().rstrip("/")
+    return (os.environ.get("ORDO_OLLAMA_URL") or "").strip().rstrip("/")
 
 
 def _ollama_alive(url: str, timeout: float) -> bool:
     """打 /api/tags：200 才算真能拉模型列表，不只是有东西在监听。"""
     try:
         req = urllib.request.Request(
-            f"{url}/api/tags", headers={"User-Agent": "Inktable/0.3"})
+            f"{url}/api/tags", headers={"User-Agent": "Ordo/0.3"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.status == 200
     except (urllib.error.URLError, TimeoutError, OSError):
@@ -152,8 +152,8 @@ def effective(slot: str) -> dict | None:
         return cfg
     if slot == "library":
         model = os.environ.get(
-            "INKTABLE_LIBRARY_MODEL",
-            os.environ.get("INKTABLE_ABSTRACT_MODEL", "qwen3:8b"))
+            "ORDO_LIBRARY_MODEL",
+            os.environ.get("ORDO_ABSTRACT_MODEL", "qwen3:8b"))
         return {"provider": "ollama", "endpoint": discover_ollama_url(),
                 "api_key": "", "model": model}
     if slot == "embedding":

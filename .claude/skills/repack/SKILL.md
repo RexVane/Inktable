@@ -4,7 +4,7 @@ description: 重新打包 Python sidecar（PyInstaller）并启动 Electron 桌�
 disable-model-invocation: true
 ---
 
-桌面端开发态加载的是**冻结产物** `services/api/dist/inktable-sidecar`（路径写死在 `apps/desktop/electron/main.js:89`）。改完后端不重新打包，桌面端看到的还是旧代码。
+桌面端开发态加载的是**冻结产物** `services/api/dist/ordo-sidecar`（路径写死在 `apps/desktop/electron/main.js:89`）。改完后端不重新打包，桌面端看到的还是旧代码。
 
 日常改后端不需要走这个流程——直接 `uv run uvicorn app.main:app` 起来验证更快。只有需要在桌面 UI 里验证时才打包。
 
@@ -34,7 +34,7 @@ uv run --group dev pyinstaller sidecar.spec --clean --noconfirm
 
 ```bash
 cd services/api
-INKTABLE_TOKEN=smoke ./dist/inktable-sidecar &
+ORDO_TOKEN=smoke ./dist/ordo-sidecar &
 # 从 stdout 拿到端口号后：
 curl -s http://127.0.0.1:<端口>/health
 ```

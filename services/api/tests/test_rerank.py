@@ -39,7 +39,7 @@ def _candidates():
 def test_rrf_fallback_preserves_exact_order(monkeypatch):
     conn = _db()
     try:
-        monkeypatch.setenv("INKTABLE_RERANKER", "rrf")
+        monkeypatch.setenv("ORDO_RERANKER", "rrf")
         result = rerank.run_rerank(conn, "问题", _candidates())
     finally:
         conn.close()
@@ -53,7 +53,7 @@ def test_rrf_fallback_preserves_exact_order(monkeypatch):
 def test_local_failure_degrades_without_reordering(monkeypatch):
     conn = _db()
     try:
-        monkeypatch.setenv("INKTABLE_RERANKER", "local")
+        monkeypatch.setenv("ORDO_RERANKER", "local")
         monkeypatch.setattr(
             rerank.LocalStaticReranker, "rerank",
             lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("fail")),
@@ -79,7 +79,7 @@ def test_soft_cap_limits_long_document_before_local_rerank(monkeypatch):
         ]
 
     try:
-        monkeypatch.setenv("INKTABLE_RERANKER", "local")
+        monkeypatch.setenv("ORDO_RERANKER", "local")
         monkeypatch.setattr(rerank.LocalStaticReranker, "rerank", record)
         result = rerank.run_rerank(conn, "问题", _candidates())
     finally:
@@ -122,7 +122,7 @@ def test_cross_content_near_duplicates_softly_demoted():
     inputs = [
         rerank.RerankInput(1, 1, text, "", 0.9),
         rerank.RerankInput(2, 2, text, "", 0.8),
-        rerank.RerankInput(3, 3, "Inktable 的 AI 问答通过引用校验保证可信", "", 0.7),
+        rerank.RerankInput(3, 3, "Ordo 的 AI 问答通过引用校验保证可信", "", 0.7),
     ]
     ranked = rerank.LocalStaticReranker().rerank("大湾区 AI 应用", inputs)
     scores = {output.chunk_id: output.score for output in ranked}
@@ -180,7 +180,7 @@ def test_cross_encoder_failure_falls_back_to_local_with_degraded_trace(monkeypat
         ]
 
     try:
-        monkeypatch.setenv("INKTABLE_RERANKER", "cross")
+        monkeypatch.setenv("ORDO_RERANKER", "cross")
         monkeypatch.setattr(rerank, "CrossEncoderReranker", fail_cross)
         monkeypatch.setattr(rerank.LocalStaticReranker, "rerank", local_order)
         result = rerank.run_rerank(conn, "问题", _candidates())
@@ -286,7 +286,7 @@ def test_cascade_falls_back_to_local_when_cross_encoder_missing(monkeypatch):
         ]
 
     try:
-        monkeypatch.setenv("INKTABLE_RERANKER", "cascade")
+        monkeypatch.setenv("ORDO_RERANKER", "cascade")
         monkeypatch.setattr(
             "app.retrieval.cross_encoder.get_runtime", fail_runtime,
         )
@@ -525,7 +525,7 @@ def test_auto_falls_back_to_local_when_cross_encoder_is_not_installed(monkeypatc
         raise AssertionError("auto must not instantiate a rejected Cross-Encoder candidate")
 
     try:
-        monkeypatch.setenv("INKTABLE_RERANKER", "auto")
+        monkeypatch.setenv("ORDO_RERANKER", "auto")
         monkeypatch.setattr(rerank, "CrossEncoderReranker", reject_cross)
         monkeypatch.setattr(
             "app.retrieval.cross_encoder.is_available", lambda: False,
@@ -556,7 +556,7 @@ def test_auto_uses_gated_cascade_when_cross_encoder_is_installed(monkeypatch):
             return np.zeros(len(documents), dtype=np.float32)
 
     try:
-        monkeypatch.setenv("INKTABLE_RERANKER", "auto")
+        monkeypatch.setenv("ORDO_RERANKER", "auto")
         monkeypatch.setattr(rerank, "CrossEncoderReranker", reject_cross)
         monkeypatch.setattr(
             "app.retrieval.cross_encoder.is_available", lambda: True,

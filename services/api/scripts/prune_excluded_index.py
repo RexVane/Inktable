@@ -171,13 +171,13 @@ def main() -> int:
         if not backup_is_restorable(args.backup):
             parser.error(f"备份不可恢复: {args.backup}")
 
-    os.environ["INKTABLE_DB"] = str(args.db)
+    os.environ["ORDO_DB"] = str(args.db)
     locked = False
     if is_real:
         try:
             acquire_single_instance_lock()
         except AlreadyRunning:
-            parser.error("应用正在运行，先退出 Inktable 再执行（避免并发写）")
+            parser.error("应用正在运行，先退出 Ordo 再执行（避免并发写）")
         locked = True
     try:
         conn = connect()

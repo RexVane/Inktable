@@ -1,5 +1,5 @@
 /**
- * Inktable 主进程 —— sidecar 生命周期 + 窗口管理。
+ * Ordo 主进程 —— sidecar 生命周期 + 窗口管理。
  *
  * sidecar 契约（PLAN §6.2）：
  *   · 子进程绑定 127.0.0.1:0，内核分配端口
@@ -22,15 +22,15 @@ const { trashFileById } = require('./file-operations');
 const { prepareSlotConfig } = require('./model-config');
 const { copyDataDirectory, pathsOverlap, writeJsonAtomic } = require('./data-migration');
 
-// ---- inkdoc:// 自定义协议：原文查看器的文件字节通道 ----
+// ---- ordodoc:// 自定义协议：原文查看器的文件字节通道 ----
 // 渲染层 connect-src 'none'，不能自己发请求；PDF.js / docx-preview 需要
-// 用 fetch 拿文件字节与字体资源。inkdoc 只做两件事，且都先过授权：
-//   inkdoc://file/{file_id}/{name}  → 转发 sidecar /files/{id}/raw（库内登记路径，
+// 用 fetch 拿文件字节与字体资源。ordodoc 只做两件事，且都先过授权：
+//   ordodoc://file/{file_id}/{name}  → 转发 sidecar /files/{id}/raw（库内登记路径，
 //                                     Range 透传，大 PDF 懒加载）
-//   inkdoc://app/vendor/{path}      → 提供应用内嵌的 pdfjs cmaps/standard_fonts
+//   ordodoc://app/vendor/{path}      → 提供应用内嵌的 pdfjs cmaps/standard_fonts
 // 密钥只在主进程，渲染层拿不到 sidecar 端口与令牌。
 protocol.registerSchemesAsPrivileged([
-  { scheme: 'inkdoc',
+  { scheme: 'ordodoc',
     // corsEnabled：file:// 页面对自定义协议的 fetch 会被 Chromium 当成跨源。
     // 不打开这项，原文查看器会报 CORS，PDF/DOCX/MD 全部空白。
     privileges: { standard: true, stream: true, supportFetchAPI: true,
@@ -39,7 +39,7 @@ protocol.registerSchemesAsPrivileged([
 
 const VENDOR_ROOT = path.resolve(__dirname, '..', 'renderer', 'vendor');
 
-async function handleInkdocRequest(request) {
+async function handleOrdodocRequest(request) {
   let url;
   try {
     url = new URL(request.url);
@@ -52,7 +52,7 @@ async function handleInkdocRequest(request) {
   }
 
   if (url.host === 'file') {
-    // inkdoc://file/{file_id}/{name} —— id 必须是纯数字，其余由 sidecar 校验
+    // ordodoc://file/{file_id}/{name} —— id 必须是纯数字，其余由 sidecar 校验
     const match = url.pathname.match(/^\/(\d+)(?:\/.*)?$/);
     if (!match) return new Response('not found', { status: 404 });
     const headers = { Authorization: `Bearer ${sidecarInfo.token}` };
@@ -74,7 +74,7 @@ async function handleInkdocRequest(request) {
   }
 
   if (url.host === 'app') {
-    // inkdoc://app/vendor/{path} —— 只读应用内嵌 vendor 目录，拒绝任何穿越
+    // ordodoc://app/vendor/{path} —— 只读应用内嵌 vendor 目录，拒绝任何穿越
     const match = url.pathname.match(/^\/vendor\/(.+)$/);
     if (!match) return new Response('not found', { status: 404 });
     const target = path.resolve(VENDOR_ROOT, decodeURIComponent(match[1]));
@@ -114,6 +114,27 @@ let sidecarStatusRevision = 0;
 let lastSidecarStatus = { state: 'starting', revision: sidecarStatusRevision };
 
 const SESSION_TOKEN = crypto.randomBytes(32).toString('base64url');
+
+app.setName('Ordo');
+(function adoptLegacyUserData() {
+  // productName 从 Inktable 换成 Ordo 后，Electron 默认 userData 会变成空目录。
+  // 旧安装的库、llm.enc、data-dir.json 还在 Inktable 目录里 —— 先接着用。
+  const appData = app.getPath('appData');
+  const ordoDir = path.join(appData, 'Ordo');
+  const inkDir = path.join(appData, 'Inktable');
+  const hasState = (dir) => {
+    try {
+      return ['library.db', path.join('data', 'library.db'), 'llm.enc', 'data-dir.json']
+        .some((rel) => fs.existsSync(path.join(dir, rel)));
+    } catch {
+      return false;
+    }
+  };
+  if (!hasState(ordoDir) && hasState(inkDir)) {
+    app.setPath('userData', inkDir);
+  }
+})();
+
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 if (!hasSingleInstanceLock) {
@@ -227,7 +248,7 @@ async function pushLLMToSidecar(cfg, slot) {
 
 function resolveSidecarPath() {
   // 发布态只使用随应用分发的 PyInstaller 产物，避免误用开发机环境。
-  const exeName = process.platform === 'win32' ? 'inktable-sidecar.exe' : 'inktable-sidecar';
+  const exeName = process.platform === 'win32' ? 'ordo-sidecar.exe' : 'ordo-sidecar';
   if (app.isPackaged) {
     const command = path.join(process.resourcesPath, 'sidecar', exeName);
     if (!fs.existsSync(command)) return null;
@@ -238,8 +259,8 @@ function resolveSidecarPath() {
   const repoRoot = path.resolve(__dirname, '..', '..', '..');
   const apiRoot = path.join(repoRoot, 'services', 'api');
   const pythonName = process.platform === 'win32' ? 'python.exe' : 'python';
-  const command = process.env.INKTABLE_PYTHON
-    ? path.resolve(process.env.INKTABLE_PYTHON)
+  const command = (process.env.ORDO_PYTHON || process.env.INKTABLE_PYTHON)
+    ? path.resolve(process.env.ORDO_PYTHON || process.env.INKTABLE_PYTHON)
     : path.join(apiRoot, '.venv', process.platform === 'win32' ? 'Scripts' : 'bin', pythonName);
   if (!fs.existsSync(command)) return null;
   return { command, args: ['-u', '-m', 'app.entrypoint'], cwd: apiRoot };
@@ -256,9 +277,10 @@ function startSidecar() {
     }
 
     const env = { ...process.env };
-    env.INKTABLE_DATA_DIR = currentDataDir();
+    env.ORDO_DATA_DIR = currentDataDir();
+    env.ORDO_PYTHON = env.ORDO_PYTHON || env.INKTABLE_PYTHON;
     // Ollama 地址**不**在这里写死：sidecar 自己探测（app/config/models.py
-    // discover_ollama_url）。设了 INKTABLE_OLLAMA_URL 反而会短路那次探测。
+    // discover_ollama_url）。设了 ORDO_OLLAMA_URL 反而会短路那次探测。
     const proc = spawn(launch.command, launch.args, {
       cwd: launch.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -649,7 +671,7 @@ ipcMain.handle('api:request', async (_e, req) => {
   const reqPath = req && req.path;
   const method = (req && req.method ? String(req.method) : 'GET').toUpperCase();
   if (!isAllowedApiRequest(method, reqPath)) return { ok: false, status: 0, error: 'route not allowed' };
-  // 原文查看器保底通道：inkdoc:// 不可用时以 base64 过 IPC 取文件字节
+  // 原文查看器保底通道：ordodoc:// 不可用时以 base64 过 IPC 取文件字节
   const rawMatch = method === 'GET' ? reqPath.match(/^\/files\/([0-9]+)\/raw$/) : null;
   if (rawMatch) {
     try {
@@ -921,13 +943,13 @@ ipcMain.handle('data:get', () => ({
 ipcMain.handle('data:change', async () => {
   const picked = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory', 'createDirectory'],
-    title: '选择新的数据目录（将在其下创建 Inktable 文件夹）',
+    title: '选择新的数据目录（将在其下创建 Ordo 文件夹）',
     buttonLabel: '迁移到这里',
   });
   if (picked.canceled || !picked.filePaths.length) return { ok: false, canceled: true };
 
   const oldDir = currentDataDir();
-  const target = path.join(picked.filePaths[0], 'Inktable');
+  const target = path.join(picked.filePaths[0], 'Ordo');
   if (pathsOverlap(oldDir, target)) return { ok: false, error: '新旧数据目录不能互相包含' };
   if (fs.existsSync(target)) return { ok: false, error: '目标已存在：' + target };
 
@@ -1102,11 +1124,11 @@ function setupGlobalEntry() {
     // 模板图是 macOS 概念（按菜单栏深浅自动反色）；其他平台设了没用
     if (process.platform === 'darwin') icon.setTemplateImage(true);
     tray = new Tray(icon);
-    tray.setToolTip('Inktable — 个人知识库');
+    tray.setToolTip('Ordo — 个人知识库');
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: accelerator ? `打开搜索（${accelerator}）` : '打开搜索', click: summonSearch },
       { type: 'separator' },
-      { label: '退出 Inktable', click: () => app.quit() },
+      { label: '退出 Ordo', click: () => app.quit() },
     ]));
     tray.on('click', summonSearch);
   } catch (err) {
@@ -1116,8 +1138,8 @@ function setupGlobalEntry() {
 }
 
 if (hasSingleInstanceLock) app.whenReady().then(async () => {
-  // inkdoc:// 的注册必须先于任何窗口加载（见文件头部注释的授权模型）
-  protocol.handle('inkdoc', handleInkdocRequest);
+  // ordodoc:// 的注册必须先于任何窗口加载（见文件头部注释的授权模型）
+  protocol.handle('ordodoc', handleOrdodocRequest);
 
   // 开发态（electron .）Dock 显示的是 Electron 默认图标，这里换成品牌图标；
   // 打包版由 electron-builder 从 build/icon.icns 注入，无需此步

@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.index.search import search  # noqa: E402
 
 DB = os.path.join(os.path.expanduser("~"), "Library", "Application Support",
-                  "Inktable", "library.db")
+                  "Ordo", "library.db")
 
 QUERIES = ["银行家算法", "检索延迟", "文件身份 inode", "微信"]
 

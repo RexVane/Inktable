@@ -18,8 +18,8 @@ H = {"Authorization": f"Bearer {TOKEN}"}
 
 @pytest.fixture
 def api(tmp_path, monkeypatch):
-    monkeypatch.setenv("INKTABLE_DB", str(tmp_path / "library.db"))
-    monkeypatch.setenv("INKTABLE_TOKEN", TOKEN)
+    monkeypatch.setenv("ORDO_DB", str(tmp_path / "library.db"))
+    monkeypatch.setenv("ORDO_TOKEN", TOKEN)
     from app import main as main_mod
 
     if main_mod._db is not None:

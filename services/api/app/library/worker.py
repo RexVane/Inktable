@@ -28,7 +28,7 @@ from app.library.enrichment import (
     run_enrichment_batch,
 )
 
-log = logging.getLogger("inktable.library.worker")
+log = logging.getLogger("ordo.library.worker")
 
 DEFAULT_SCAN_SECONDS = 30 * 60
 IDLE_BATCH = 1
@@ -39,7 +39,7 @@ _sidecar_lock = threading.Lock()
 
 
 def scan_interval_seconds() -> float:
-    raw = (os.environ.get("INKTABLE_LIBRARY_ENRICH_SCAN_SECONDS") or "").strip()
+    raw = (os.environ.get("ORDO_LIBRARY_ENRICH_SCAN_SECONDS") or "").strip()
     if not raw:
         return float(DEFAULT_SCAN_SECONDS)
     try:
@@ -94,7 +94,7 @@ class EnrichmentDaemon:
         else:
             self._next_idle_mono = None
         self._thread = threading.Thread(
-            target=self._loop, name="inktable-library-enrich", daemon=True,
+            target=self._loop, name="ordo-library-enrich", daemon=True,
         )
         self._thread.start()
 

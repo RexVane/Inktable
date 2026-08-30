@@ -217,7 +217,7 @@ test('clicking a file row switches the middle column to the detail page', async 
       head: { appendChild() {} },
     },
     setTimeout,
-    window: { inktable: { revealInFinder() {} } },
+    window: { ordo: { revealInFinder() {} } },
   };
 
   const result = await vm.runInNewContext(`
@@ -398,7 +398,7 @@ test('source preview exposes truncated scale before confirmation', async () => {
 
 test('sidecar lifecycle is visible and initial sidecar info counts as ready', () => {
   assert.match(renderer, /id="sidecarStatus"/);
-  assert.match(renderer, /window\.inktable\.onSidecar\(handleSidecarStatus\)/);
+  assert.match(renderer, /window\.ordo\.onSidecar\(handleSidecarStatus\)/);
 
   const statusSource = sourceBetween('function setSidecarStatus(', 'let toastTimer;');
   const safeNumberSource = renderer.match(/function safeNumber\(value\) \{[\s\S]*?\n\}/)[0];
@@ -410,7 +410,7 @@ test('sidecar lifecycle is visible and initial sidecar info counts as ready', ()
   };
   const label = { textContent: '' };
   const context = {
-    window: { inktable: null },
+    window: { ordo: null },
     document: {
       getElementById(id) {
         if (id === 'sidecarStatus') return status;

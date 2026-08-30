@@ -1,6 +1,6 @@
 """本地嵌入服务 —— Ollama bge-m3（PLAN §16.1a，v0.3 起）。
 
-嵌入交给本机 Ollama（未设 INKTABLE_OLLAMA_URL 时探测 11434，其次 18434）：
+嵌入交给本机 Ollama（未设 ORDO_OLLAMA_URL 时探测 11434，其次 18434）：
 
     模型      bge-m3（BAAI）：1024 维、多语言、8192 上下文
     检测      GET /api/tags 看已拉取列表里有没有 bge-m3*，结果缓存 30 秒
@@ -32,7 +32,7 @@ import numpy as np
 
 from app.config import models as model_slots
 
-log = logging.getLogger("inktable.embedding")
+log = logging.getLogger("ordo.embedding")
 
 DIM = 1024
 MODEL_PREFIX = "bge-m3"     # 未配置向量槽位时的默认匹配：bge-m3 / bge-m3:latest / bge-m3:567m

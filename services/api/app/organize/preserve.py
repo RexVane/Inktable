@@ -11,7 +11,7 @@
      冒充完整文件。
   3. **每次写盘记 operations 日志** —— 可审计、可撤销。
 
-副本放 `~/Library/Application Support/Inktable/preserved/<来源>/`。
+副本放 `~/Library/Application Support/Ordo/preserved/<来源>/`。
 不放用户资料目录：那里可能在 iCloud 同步范围内（§7.8），
 且用户整理文件时不该看到一堆来历不明的副本。
 """
@@ -28,7 +28,7 @@ from pathlib import Path
 
 from app.db.database import APP_DIR
 
-log = logging.getLogger("inktable.preserve")
+log = logging.getLogger("ordo.preserve")
 
 PRESERVE_ROOT = APP_DIR / "preserved"
 HASH_BLOCK = 8 * 1024 * 1024

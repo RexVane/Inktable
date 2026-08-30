@@ -6,7 +6,7 @@ import os
 import sqlite3
 
 path = os.path.join(os.path.expanduser("~"), "Library", "Application Support",
-                    "Inktable", "library.db")
+                    "Ordo", "library.db")
 uri = "file:{}?mode=ro".format(path.replace("\\", "/"))
 conn = sqlite3.connect(uri, uri=True)
 conn.row_factory = sqlite3.Row

@@ -1,6 +1,6 @@
 ---
 name: ui-shot
-description: 用 tools/preview 对 Inktable 桌面 UI 做截图回归——正常态、三个边界态、深色模式计算样式。改动 renderer/index.html 或 workbench.css 后使用。
+description: 用 tools/preview 对 Ordo 桌面 UI 做截图回归——正常态、三个边界态、深色模式计算样式。改动 renderer/index.html 或 workbench.css 后使用。
 disable-model-invocation: true
 ---
 
@@ -18,20 +18,20 @@ disable-model-invocation: true
 
 ```bash
 cd apps/desktop
-npx electron tools/preview/main.js /tmp/inktable-ui-before
-npx electron tools/preview/edge-states.js /tmp/inktable-ui-before-edge
+npx electron tools/preview/main.js /tmp/ordo-ui-before
+npx electron tools/preview/edge-states.js /tmp/ordo-ui-before-edge
 ```
 
 ### 2. 改动后再跑
 
 ```bash
 cd apps/desktop
-npx electron tools/preview/main.js /tmp/inktable-ui-after
-npx electron tools/preview/edge-states.js /tmp/inktable-ui-after-edge
+npx electron tools/preview/main.js /tmp/ordo-ui-after
+npx electron tools/preview/edge-states.js /tmp/ordo-ui-after-edge
 ```
 
-- `main.js` —— 各正常状态截图，输出目录默认 `/tmp/inktable-ui`
-- `edge-states.js` —— 四个边界态：空库首启向导 / 模型未配置 / 低置信 hedge / sidecar 故障，默认 `/tmp/inktable-ui-after`
+- `main.js` —— 各正常状态截图，输出目录默认 `/tmp/ordo-ui`
+- `edge-states.js` —— 四个边界态：空库首启向导 / 模型未配置 / 低置信 hedge / sidecar 故障，默认 `/tmp/ordo-ui-after`
 
 ### 3. 深色模式计算样式检查
 

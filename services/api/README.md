@@ -1,4 +1,4 @@
-# Inktable Sidecar（FastAPI 后端）
+# Ordo Sidecar（FastAPI 后端）
 
 Local FastAPI sidecar spawned by the Electron main process: binds
 `127.0.0.1:0`, receives the session token on stdin, and requires Bearer
@@ -14,7 +14,7 @@ app/
 ├── main.py          FastAPI 入口：sources / files（tree·content·group）/
 │                    search / ask / runs / classify / integrations / system …
 ├── db/              SQLite 连接、schema v2、备份与完整性检查；
-│                    数据目录可经 INKTABLE_DATA_DIR 迁移
+│                    数据目录可经 ORDO_DATA_DIR 迁移
 ├── discovery/       本地磁盘为顶层来源（Windows 固定盘 / macOS 卷）；
 │                    启用后按真实路径展开，可再手动添加目录
 ├── watcher/         预扫描、稳定性判据、FSEvents 实时监听
@@ -48,10 +48,10 @@ uv run --group dev pyinstaller sidecar.spec --noconfirm   # 冻结打包
 
 调试环境变量：
 
-- `INKTABLE_DB=/tmp/dev.db` —— 指向独立库，避免污染真实数据
-- `INKTABLE_DATA_DIR=…` —— 整体迁移数据目录（库/备份/保全副本）
-- `INKTABLE_RERANKER=rrf` —— 显式降级重排做对照
-- `INKTABLE_OLLAMA_URL=…` —— Ollama 地址；不设则探测本机 11434，其次 18434
+- `ORDO_DB=/tmp/dev.db` —— 指向独立库，避免污染真实数据
+- `ORDO_DATA_DIR=…` —— 整体迁移数据目录（库/备份/保全副本）
+- `ORDO_RERANKER=rrf` —— 显式降级重排做对照
+- `ORDO_OLLAMA_URL=…` —— Ollama 地址；不设则探测本机 11434，其次 18434
 
 语义检索依赖本机 Ollama + bge-m3（`ollama pull bge-m3`）。
 未检测到时全链路自动降级纯关键词检索；模型维度变更会在启动时

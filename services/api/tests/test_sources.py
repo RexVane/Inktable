@@ -15,8 +15,8 @@ TOKEN = "test-token"
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
-    monkeypatch.setenv("INKTABLE_DB", str(tmp_path / "t.db"))
-    monkeypatch.setenv("INKTABLE_TOKEN", TOKEN)
+    monkeypatch.setenv("ORDO_DB", str(tmp_path / "t.db"))
+    monkeypatch.setenv("ORDO_TOKEN", TOKEN)
     # main 在 import 时读环境变量，必须在设好之后再导入
     import importlib
 
@@ -322,20 +322,20 @@ def test_rebase_preserved_rewrites_prefixes(client, tmp_path):
 
     import os as _os
     import sqlite3 as _sq
-    conn = _sq.connect(_os.environ["INKTABLE_DB"])
+    conn = _sq.connect(_os.environ["ORDO_DB"])
     conn.execute(
-        "UPDATE files SET preserved_path = '/old/Inktable/preserved/S/文档0.md'"
+        "UPDATE files SET preserved_path = '/old/Ordo/preserved/S/文档0.md'"
     )
     conn.commit()
     conn.close()
 
     r = client.post("/system/rebase_preserved", headers=H, json={
-        "old_prefix": "/old/Inktable", "new_prefix": "/new/place/Inktable",
+        "old_prefix": "/old/Ordo", "new_prefix": "/new/place/Ordo",
     }).json()
     assert r["preserved_updated"] == 1
 
     f = client.get("/files", headers=H).json()["files"][0]
-    assert f["preserved_path"] == "/new/place/Inktable/preserved/S/文档0.md"
+    assert f["preserved_path"] == "/new/place/Ordo/preserved/S/文档0.md"
 
 
 def test_files_group_by_ext_puts_same_type_together(client, tmp_path):

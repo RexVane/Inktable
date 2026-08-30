@@ -1,6 +1,6 @@
 ---
 name: eval
-description: 跑 Inktable 的 72 题检索评测（或 M4 压缩评测），把结果与 docs/eval/ 里的冻结基线逐指标对比。改动检索、分片、融合、重排、压缩任一环节后使用。
+description: 跑 Ordo 的 72 题检索评测（或 M4 压缩评测），把结果与 docs/eval/ 里的冻结基线逐指标对比。改动检索、分片、融合、重排、压缩任一环节后使用。
 ---
 
 改动检索 / 分片 / 融合 / 重排 / 压缩后，必须跑同一评测集与基线对比（`services/api/README.md`「改动约束」）。
@@ -15,10 +15,10 @@ description: 跑 Inktable 的 72 题检索评测（或 M4 压缩评测），把�
 
 ### 1. 先确认库里有数据
 
-评测跑的是**用户真实资料库**（默认 `~/Library/Application Support/Inktable/`），不是 fixture。
+评测跑的是**用户真实资料库**（默认 `~/Library/Application Support/Ordo/`），不是 fixture。
 
 ```bash
-ls ~/Library/Application\ Support/Inktable/ 2>/dev/null || echo "数据目录不存在"
+ls ~/Library/Application\ Support/Ordo/ 2>/dev/null || echo "数据目录不存在"
 ```
 
 目录不存在或 `chunks` 表为空时，脚本会打印「库里没有分片，先启用来源并跑 /index/run」并 `return 1`。这**不是代码问题**——需要用户先启动应用、启用来源、完成索引。遇到这种情况就报告给用户并停下，不要试图绕过或改用 fixture。
@@ -42,7 +42,7 @@ uv run python tests/run_eval.py --verbose --label <这轮的标签> --json ../..
 uv run python tests/run_compress_eval.py --json ../../docs/eval/<文件名>.json
 ```
 
-想验证重排是否真的有收益，用 `INKTABLE_RERANKER=rrf` 跑一遍降级对照（仓库里已有 `v7-m3-rrf-baseline.json` / `v7-m3b-rrf-control.json` 这类对照结果）。
+想验证重排是否真的有收益，用 `ORDO_RERANKER=rrf` 跑一遍降级对照（仓库里已有 `v7-m3-rrf-baseline.json` / `v7-m3b-rrf-control.json` 这类对照结果）。
 
 ### 4. 读懂退出码
 

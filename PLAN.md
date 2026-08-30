@@ -1,4 +1,4 @@
-# Inktable Plan
+# Ordo Plan
 
 权威实施计划见 [`docs/PLAN.md`](docs/PLAN.md)。
 

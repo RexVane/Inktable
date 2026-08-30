@@ -1,4 +1,4 @@
-"""Inktable AI Library domain layer.
+"""Ordo AI Library domain layer.
 
 The physical filesystem remains the source of truth.  Everything in this
 package is derived knowledge metadata and may be rebuilt from ``contents`` and

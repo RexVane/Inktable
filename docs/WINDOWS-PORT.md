@@ -21,7 +21,7 @@ bge-m3 向量化 → 混合检索 → 带引用问答 → 实时监听自动入�
 **Ollama 端口**：11434 落在 Windows 保留端口段（实测 11427–11526，
 `netsh int ipv4 show excludedportrange`），bind 报 WSAEACCES。Ollama
 本身仍需改口：用户环境变量 `OLLAMA_HOST=127.0.0.1:18434` 后重启服务。
-sidecar **不再要求**同步设 `INKTABLE_OLLAMA_URL` —— `discover_ollama_url`
+sidecar **不再要求**同步设 `ORDO_OLLAMA_URL` —— `discover_ollama_url`
 按 11434、18434 探测第一个应答 `/api/tags` 的口；只有要跳过探测或指向
 非本机地址时才设该变量。
 
@@ -36,7 +36,7 @@ sqlite 会在当前工作目录下建出名为 `%USERPROFILE%` 的目录，大�
 # 后端
 cd services\api
 uv sync
-uv run pyinstaller sidecar.spec --clean --noconfirm   # 产出 dist\inktable-sidecar.exe
+uv run pyinstaller sidecar.spec --clean --noconfirm   # 产出 dist\ordo-sidecar.exe
 
 # 桌面端
 cd ..\..\apps\desktop
@@ -117,7 +117,7 @@ site-packages）、tmp / temp。
 1. **共享连接竞态**：全进程单条 SQLite 连接、读不加锁 —— 实时入库修好
    后写入一活跃，`files_tree` 立刻 `SQLITE_MISUSE`。改为**每线程一条
    连接**（WAL 多读一写），写路径仍走 `_db_lock` 单写者；
-   `INKTABLE_DB=:memory:` 维持单例（测试）。
+   `ORDO_DB=:memory:` 维持单例（测试）。
 2. **嵌入霸锁**：`/index/run` 在锁内逐批内联嵌入（CPU bge-m3 分钟级/批），
    py-spy 抓到 reconcile 线程等锁 20 分钟零进展。改为：批量索引
    `embed=False`（先 FTS 可搜），向量走 `embed_backfill` 分批补
@@ -137,13 +137,13 @@ site-packages）、tmp / temp。
 
 - PyInstaller sidecar：95,633,956 bytes，SHA-256
   `2670F7BFFA026E8FCBB82D0D30010DEFE0EF634FC0932D3DF647D046AE77B986`。
-- NSIS 安装包：`dist/Inktable-0.3.0-Setup-x64.exe`，194,761,734 bytes，
+- NSIS 安装包：`dist/Ordo-0.3.0-Setup-x64.exe`，194,761,734 bytes，
   SHA-256 `E24D5588968B85B380A3A9DC6A407EAEF88FF8973F1C776F47CBF08CB53006E8`。
 - 新目录静默安装退出码 0，安装目录 sidecar 与构建产物逐字节一致。
 - 冻结 sidecar 使用独立数据库端到端收录真实无文本层 PDF，
   `Windows.Media.Ocr` 识别正文后成功进入索引与搜索；同次检索 trace 为
   `local-static-v3`、`degraded=false`。
-- 使用独立 `INKTABLE_DATA_DIR` 和 `--user-data-dir` 启动安装版 Electron：
+- 使用独立 `ORDO_DATA_DIR` 和 `--user-data-dir` 启动安装版 Electron：
   首次来源引导、搜索空态、设置页、暗色主题和 sidecar ready 均通过；
   关闭后 Electron、PyInstaller 引导进程和 Python 子进程全部退出。
 - 真实库只读审计通过：`quick_check=ok`、外键错误 0，chunks、两套 FTS、
@@ -163,7 +163,7 @@ site-packages）、tmp / temp。
   目录等）；覆盖面已由整盘来源兜住。
 - 托盘图标用的 `NSTouchBarSearchTemplate` 是 mac API，Windows 无托盘
   （try/catch 兜住，不影响功能）；全局快捷键实测注册为 Ctrl+Shift+K。
-- 数据目录在 `C:\Users\<u>\Library\Application Support\Inktable`
+- 数据目录在 `C:\Users\<u>\Library\Application Support\Ordo`
   （沿用 mac 风格路径拼接，功能正常；可在设置里迁移）。
 - 回传 macOS：所有改动平台隔离，另有两处**顺带修复对 mac 同样生效**
   —— 每线程连接（同款竞态在 mac 潜伏）、设置→文件来源列表缺失的

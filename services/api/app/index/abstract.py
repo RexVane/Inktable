@@ -34,17 +34,17 @@ import urllib.request
 
 from app.config import llm_client, models as model_slots
 
-log = logging.getLogger("inktable.abstract")
+log = logging.getLogger("ordo.abstract")
 
 # 摘要模型与嵌入模型分开配：嵌入是 bge-m3（不能对话），摘要要一个 chat 模型。
-_MODEL = os.environ.get("INKTABLE_ABSTRACT_MODEL", "qwen3:8b")
+_MODEL = os.environ.get("ORDO_ABSTRACT_MODEL", "qwen3:8b")
 
 # 送进模型的正文上限。5372 字是本机库的平均文档长度，取 6000 覆盖多数文档
 # 全文；更长的文档靠「开头 + 结构」已能定主题。
-_INPUT_CHARS = int(os.environ.get("INKTABLE_ABSTRACT_INPUT_CHARS", "6000"))
+_INPUT_CHARS = int(os.environ.get("ORDO_ABSTRACT_INPUT_CHARS", "6000"))
 # 摘要输出上限（token）。摘要进 FTS 是为了带词，不是为了成文，200 足够。
-_MAX_TOKENS = int(os.environ.get("INKTABLE_ABSTRACT_MAX_TOKENS", "220"))
-_TIMEOUT = float(os.environ.get("INKTABLE_ABSTRACT_TIMEOUT", "120"))
+_MAX_TOKENS = int(os.environ.get("ORDO_ABSTRACT_MAX_TOKENS", "220"))
+_TIMEOUT = float(os.environ.get("ORDO_ABSTRACT_TIMEOUT", "120"))
 
 _PROMPT = """你在为一个本地文件检索系统建立索引。请为下面的文档写一段检索用摘要。
 
@@ -73,7 +73,7 @@ def _post(url: str, payload: dict, timeout: float) -> dict:
         url,
         data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json",
-                 "User-Agent": "Inktable/0.3"},
+                 "User-Agent": "Ordo/0.3"},
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:

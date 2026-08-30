@@ -10,9 +10,9 @@ from app.retrieval.query import (
 
 
 def test_decompose_predicate_after_marker():
-    subqueries = decompose_comparative("Inktable 和 PyFTP 分别怎样保护本地服务边界与文件路径")
+    subqueries = decompose_comparative("Ordo 和 PyFTP 分别怎样保护本地服务边界与文件路径")
     assert subqueries == [
-        "Inktable 怎样保护本地服务边界与文件路径",
+        "Ordo 怎样保护本地服务边界与文件路径",
         "PyFTP 怎样保护本地服务边界与文件路径",
     ]
 

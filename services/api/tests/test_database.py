@@ -99,6 +99,7 @@ def test_connect_readonly_cannot_write_and_sets_no_journal_mode(tmp_path) -> Non
 def test_default_data_directory_is_native_and_separate_from_control_root(
     tmp_path, monkeypatch,
 ) -> None:
+    monkeypatch.delenv("ORDO_DATA_DIR", raising=False)
     monkeypatch.delenv("INKTABLE_DATA_DIR", raising=False)
     monkeypatch.delenv("APPDATA", raising=False)
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
@@ -106,17 +107,25 @@ def test_default_data_directory_is_native_and_separate_from_control_root(
 
     monkeypatch.setattr(database.sys, "platform", "darwin")
     assert database._resolve_app_dir() == (
-        tmp_path / "Library" / "Application Support" / "Inktable" / "data"
+        tmp_path / "Library" / "Application Support" / "Ordo" / "data"
     )
     monkeypatch.setattr(database.sys, "platform", "win32")
-    assert database._resolve_app_dir() == tmp_path / "AppData" / "Roaming" / "Inktable" / "data"
+    assert database._resolve_app_dir() == tmp_path / "AppData" / "Roaming" / "Ordo" / "data"
     monkeypatch.setattr(database.sys, "platform", "linux")
-    assert database._resolve_app_dir() == tmp_path / ".local" / "share" / "Inktable"
+    assert database._resolve_app_dir() == tmp_path / ".local" / "share" / "Ordo"
 
-    legacy = tmp_path / "Library" / "Application Support" / "Inktable"
+    legacy = tmp_path / "Library" / "Application Support" / "Ordo"
     legacy.mkdir(parents=True)
     (legacy / "library.db").write_bytes(b"existing")
     assert database._resolve_app_dir() == legacy
+
+    ink = tmp_path / "Library" / "Application Support" / "Inktable"
+    ink.mkdir(parents=True)
+    (ink / "library.db").write_bytes(b"old-install")
+    # Ordo library still wins when both exist.
+    assert database._resolve_app_dir() == legacy
+    (legacy / "library.db").unlink()
+    assert database._resolve_app_dir() == ink
 
 
 def test_self_referencing_fk_columns_are_indexed() -> None:
@@ -150,7 +159,7 @@ def test_self_referencing_fk_columns_are_indexed() -> None:
 
 def test_single_instance_lock_blocks_second_holder(tmp_path, monkeypatch) -> None:
     lock_path = tmp_path / "library.db.lock"
-    monkeypatch.setenv("INKTABLE_DB", str(tmp_path / "library.db"))
+    monkeypatch.setenv("ORDO_DB", str(tmp_path / "library.db"))
     database.release_single_instance_lock()
     database.acquire_single_instance_lock()
 
@@ -173,7 +182,7 @@ def test_single_instance_lock_blocks_second_holder(tmp_path, monkeypatch) -> Non
 
 
 def test_single_instance_lock_can_be_reacquired_after_release(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("INKTABLE_DB", str(tmp_path / "library.db"))
+    monkeypatch.setenv("ORDO_DB", str(tmp_path / "library.db"))
     database.release_single_instance_lock()
 
     database.acquire_single_instance_lock()

@@ -12,7 +12,7 @@ import sys
 import time
 
 DEFAULT_SRC = os.path.join(os.path.expanduser("~"), "Library",
-                           "Application Support", "Inktable", "library.db")
+                           "Application Support", "Ordo", "library.db")
 
 
 def snapshot(src_path: str, dst_path: str) -> None:

@@ -35,7 +35,7 @@ from app.retrieval.pipeline import (
     run as run_retrieval,
 )
 
-log = logging.getLogger("inktable.qa")
+log = logging.getLogger("ordo.qa")
 
 # 档位（设置随每次请求传入）：深度 = 原默认管线；快速 = 可预期的单轮轻量管线。
 QA_MODES = ("quick", "deep")

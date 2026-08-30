@@ -456,8 +456,8 @@ def main() -> int:
             ]
     completed = {result["qid"] for result in results}
 
-    previous_reranker = os.environ.get("INKTABLE_RERANKER")
-    os.environ["INKTABLE_RERANKER"] = args.reranker
+    previous_reranker = os.environ.get("ORDO_RERANKER")
+    os.environ["ORDO_RERANKER"] = args.reranker
     sidecar = Sidecar(ollama_url=args.ollama_url)
     conn = connect()
     try:
@@ -695,9 +695,9 @@ def main() -> int:
         conn.close()
         sidecar.close()
         if previous_reranker is None:
-            os.environ.pop("INKTABLE_RERANKER", None)
+            os.environ.pop("ORDO_RERANKER", None)
         else:
-            os.environ["INKTABLE_RERANKER"] = previous_reranker
+            os.environ["ORDO_RERANKER"] = previous_reranker
 
 
 if __name__ == "__main__":

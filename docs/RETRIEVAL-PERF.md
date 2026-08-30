@@ -24,7 +24,7 @@ route_limit=120、65 条 gold 查询。工具：`scripts/profile_retrieval.py`�
 
 检索质量在这一轮**未变**（MRR@10 86.9%、nDCG@10 88.8%、Content Recall@5
 90.6%，与改前逐位一致）——这一组改动只动执行方式，不动排序逻辑，
-质量不变正是它的验收条件。已用 `INKTABLE_VECTOR_NO_MATRIX=1` 强制回到
+质量不变正是它的验收条件。已用 `ORDO_VECTOR_NO_MATRIX=1` 强制回到
 原 vec0 KNN 路径复跑整套评测，两条路径的 Recall / MRR / nDCG **完全一致**。
 
 证据压缩在检索改动后复跑，全部门槛通过且延迟略有改善：Gold Evidence
@@ -345,7 +345,7 @@ vec0 的**写**侧没有批量接口，147k 次插入仍是分钟级，这部分
 
 **生产默认保持 `auto`（local-static-v3）**：它把交互搜索留在亚秒级
 （P50 609ms），这是"顺畅"的直接来源；`cascade` 作为实装并已量化的可选模式
-保留，用 `INKTABLE_RERANKER=cascade` 开启。
+保留，用 `ORDO_RERANKER=cascade` 开启。
 
 ### 5.5 2026-08-26：cascade 在真实库上复测 —— 上表不能当生产口径读
 
@@ -392,7 +392,7 @@ Recall@20 补回 100% 并修好改写类，却差两条延迟门槛且质量仍�
 （53 题里受影响的只有 6 题，权重调优在这个样本量上无法与噪声区分），
 两者都是新的取模型/标注决策，不是参数调整。
 
-### 5.6 2026-08-26：按查询门控 CE（`INKTABLE_CASCADE_LEX_GATE`）—— Recall@5 门槛过了
+### 5.6 2026-08-26：按查询门控 CE（`ORDO_CASCADE_LEX_GATE`）—— Recall@5 门槛过了
 
 §5.5 里 CE 的收益与损害各自集中：被弄坏的都是本地打分器**本来就排第 1** 的
 exact / metadata 题，被修好的是本地完全无能的改写类。于是问题变成：能不能在
@@ -435,14 +435,14 @@ U02 4→3）全部落在 0.45 以下，而六个损害全部在 0.53 以上 —�
 
 **结论：门控是实的，但它买到的是质量而不是延迟。** 生产默认仍保持 `auto`：
 `cascade` + 门控这条路要过 Rerank P95 必须换更便宜的 CE，与 §5.5 的结论一致。
-最佳实测配置记录为 `INKTABLE_RERANKER=cascade INKTABLE_CASCADE_LEX_GATE=45`，
-默认 `INKTABLE_CASCADE_LEX_GATE=0`（关闭，行为与不引入该门控逐字一致）。
+最佳实测配置记录为 `ORDO_RERANKER=cascade ORDO_CASCADE_LEX_GATE=45`，
+默认 `ORDO_CASCADE_LEX_GATE=0`（关闭，行为与不引入该门控逐字一致）。
 
 **这条结果的脆弱之处要写清**：可用阈值窗口是 `(0.403, 0.533]`，两端各由**一道
 题**钉住（P19 与 U04）。窗口这么窄意味着换一批题很可能就不成立。扩大评测集
 之后必须重验，而不是当成已经稳的结论。
 
-### 5.7 延迟墙其实能破，但与 Recall@5 换着来（`INKTABLE_CASCADE_VEC_SHARE`）
+### 5.7 延迟墙其实能破，但与 Recall@5 换着来（`ORDO_CASCADE_VEC_SHARE`）
 
 §5.6 说 K=26 是硬下界，因为进 CE 的题里最深 gold 在**融合序**第 25 位。但头部
 凭什么只按融合序截？门控挑出来的正是词法无能的改写类题 —— 它们的 gold 本来就
@@ -454,7 +454,7 @@ U02 4→3）全部落在 0.45 以下，而六个损害全部在 0.53 以上 —�
     U02  融合第 12 位 / 向量第 32 位
 
 单用任一种都会丢题（向量序丢 M09，融合序要 K=26），但**各给一半名额**就能用
-远小于 26 的 K 覆盖前三题。实测 `INKTABLE_CASCADE_VEC_SHARE=50`、K=13：
+远小于 26 的 K 覆盖前三题。实测 `ORDO_CASCADE_VEC_SHARE=50`、K=13：
 
 | 配置 | R@5 | R@20 | nDCG@10 | 搜索 P95 | Rerank P50 | Rerank P95 |
 |---|---|---|---|---|---|---|
@@ -482,12 +482,12 @@ U02 4→3）全部落在 0.45 以下，而六个损害全部在 0.53 以上 —�
 要真正收口，需要的是**更便宜的 CE**（同样质量下每对成本降一半，K=26 就能进
 1,500ms）或**扩大评测集**（让这 4 题不再决定结论）。
 
-默认全部关闭：`INKTABLE_CASCADE_LEX_GATE=0`、`INKTABLE_CASCADE_VEC_SHARE=0`、
-`INKTABLE_CASCADE_PAIRS=26`，生产默认仍是 `auto`。两条最佳实测配置记录在案：
+默认全部关闭：`ORDO_CASCADE_LEX_GATE=0`、`ORDO_CASCADE_VEC_SHARE=0`、
+`ORDO_CASCADE_PAIRS=26`，生产默认仍是 `auto`。两条最佳实测配置记录在案：
 
-    质量优先  INKTABLE_RERANKER=cascade INKTABLE_CASCADE_LEX_GATE=45
-    延迟优先  INKTABLE_RERANKER=cascade INKTABLE_CASCADE_LEX_GATE=45 \
-              INKTABLE_CASCADE_VEC_SHARE=50 INKTABLE_CASCADE_PAIRS=13
+    质量优先  ORDO_RERANKER=cascade ORDO_CASCADE_LEX_GATE=45
+    延迟优先  ORDO_RERANKER=cascade ORDO_CASCADE_LEX_GATE=45 \
+              ORDO_CASCADE_VEC_SHARE=50 ORDO_CASCADE_PAIRS=13
 
 ### 5.8 2026-08-26 收口：四条门槛全过，已切为生产默认
 
@@ -547,14 +547,14 @@ Recall@5 保持 96.2%。这与 §5.1「截短正文会掉质量」不矛盾 —�
 
 已切为生产默认，`auto` 的含义变成：**装了 CE 资产就走门控级联，没装就走一级
 本地打分器**。没装时行为与改动前逐字一致，不会因为缺一个 279MB 模型而拿到打了
-`degraded` 标记的检索。退回旧行为：`INKTABLE_RERANKER=local`。
+`degraded` 标记的检索。退回旧行为：`ORDO_RERANKER=local`。
 
 新默认值（改任何一个都必须重跑 65 题，有测试钉着）：
 
-    INKTABLE_CASCADE_LEX_GATE=45      门控阈值
-    INKTABLE_CASCADE_VEC_SHARE=25     头部里分给向量路名次的比例
-    INKTABLE_CASCADE_PAIRS=20         CE 打分的候选数
-    INKTABLE_RERANK_MAX_TOKENS=192    单对序列长度
+    ORDO_CASCADE_LEX_GATE=45      门控阈值
+    ORDO_CASCADE_VEC_SHARE=25     头部里分给向量路名次的比例
+    ORDO_CASCADE_PAIRS=20         CE 打分的候选数
+    ORDO_RERANK_MAX_TOKENS=192    单对序列长度
 
 **仍然要写清的风险**：这套配置是在 53 道题上定的，其中真正决定结论的只有 4 题
 （A09 / P19 / U02 / M09），门控阈值的可用窗口只有 `(0.403, 0.533]`，两端各由
@@ -623,7 +623,7 @@ nDCG 90.2% 对 90.3%），速度快 1.7 倍，磁盘省 160MB。但 **bge 更稳
 纯融合序 K=26 时 bge 仍是 96.2%，新模型掉到 94.3%，即新模型依赖「配额把头部
 收窄」这个条件。取舍是：本项目是桌面应用，会跑在比 i7-14700HX 弱得多的机器上，
 1.7 倍与 160MB 换来的余量比「配置鲁棒性」更值钱；而万一评测集扩大后新模型
-退化，`INKTABLE_RERANK_MODEL=bge-base` 一个变量就切回去。
+退化，`ORDO_RERANK_MODEL=bge-base` 一个变量就切回去。
 
 模型改为**注册表 + 按偏好顺序挑已装上的那个**（`app/retrieval/cross_encoder.py`
 的 `MODELS` / `active_spec()`）。这里有一个必须避开的坑：默认若写死成新模型，
@@ -699,8 +699,8 @@ RRF 基线的 nDCG@10 已是 84.3%，+15% 意味着绝对值要达到 **97.0%**�
 
 ```bash
 cd services/api
-export INKTABLE_DB=../../output/release-gate-20260817/library-working.db
-export INKTABLE_OLLAMA_URL=http://127.0.0.1:18434
+export ORDO_DB=../../output/release-gate-20260817/library-working.db
+export ORDO_OLLAMA_URL=http://127.0.0.1:18434
 
 # 逐阶段 / 逐路线延迟
 .venv/Scripts/python.exe scripts/profile_retrieval.py --route-limit 120
@@ -710,10 +710,10 @@ export INKTABLE_OLLAMA_URL=http://127.0.0.1:18434
 
 # 门槛评测（--enforce-latency 让延迟超标直接判失败）
 .venv/Scripts/python.exe tests/run_eval.py --route-limit 120 --enforce-latency
-INKTABLE_RERANKER=cascade .venv/Scripts/python.exe tests/run_eval.py --route-limit 120
+ORDO_RERANKER=cascade .venv/Scripts/python.exe tests/run_eval.py --route-limit 120
 ```
 
-相关环境变量：`INKTABLE_RERANKER`（auto / cascade / cross / rrf / off）、
-`INKTABLE_CASCADE_PAIRS`、`INKTABLE_CASCADE_FOCUS_CHARS`、
-`INKTABLE_CASCADE_W_CROSS` / `_W_LOCAL` / `_W_RRF`、`INKTABLE_CASCADE_LEX_FULL`、
-`INKTABLE_RERANK_THREADS`、`INKTABLE_RERANK_MAX_TOKENS`。
+相关环境变量：`ORDO_RERANKER`（auto / cascade / cross / rrf / off）、
+`ORDO_CASCADE_PAIRS`、`ORDO_CASCADE_FOCUS_CHARS`、
+`ORDO_CASCADE_W_CROSS` / `_W_LOCAL` / `_W_RRF`、`ORDO_CASCADE_LEX_FULL`、
+`ORDO_RERANK_THREADS`、`ORDO_RERANK_MAX_TOKENS`。

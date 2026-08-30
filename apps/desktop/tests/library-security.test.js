@@ -32,8 +32,8 @@ test('preload loads Library only as same-origin renderer assets', () => {
   assert.ok(policy);
   assert.match(policy[1], /script-src 'self'/);
   assert.match(policy[1], /style-src 'self'/);
-  // 唯一连接出口是主进程 inkdoc:// 授权文档协议（原文查看器）
-  assert.match(policy[1], /connect-src inkdoc:/);
+  // 唯一连接出口是主进程 ordodoc:// 授权文档协议（原文查看器）
+  assert.match(policy[1], /connect-src ordodoc:/);
 });
 
 test('Library renderer has no privileged or direct network capability', () => {
@@ -42,8 +42,8 @@ test('Library renderer has no privileged or direct network capability', () => {
   assert.doesNotMatch(library, /Bearer/);
   assert.doesNotMatch(library, /127\.0\.0\.1/);
   assert.doesNotMatch(library, /\bfetch\s*\(/);
-  assert.match(library, /window\.inktable\.apiRequest/);
-  assert.match(library, /window\.inktable\.revealInFinder/);
+  assert.match(library, /window\.ordo\.apiRequest/);
+  assert.match(library, /window\.ordo\.revealInFinder/);
 });
 
 test('Library API-originated strings never flow through innerHTML', () => {

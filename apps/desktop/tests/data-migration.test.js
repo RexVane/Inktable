@@ -12,16 +12,16 @@ const {
 } = require('../electron/data-migration');
 
 test('migration copies verified data but never moves control files or the live lock', (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'inktable-migration-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ordo-migration-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const control = path.join(root, 'control');
-  const target = path.join(root, 'external', 'Inktable');
+  const target = path.join(root, 'external', 'Ordo');
   fs.mkdirSync(path.join(control, 'preserved'), { recursive: true });
   fs.writeFileSync(path.join(control, 'library.db'), Buffer.from('sqlite-data'));
   fs.writeFileSync(path.join(control, 'preserved', 'copy.pdf'), Buffer.from('pdf-data'));
   fs.writeFileSync(path.join(control, 'data-dir.json'), '{"dir":"old"}');
   fs.writeFileSync(path.join(control, 'llm.enc'), 'encrypted-secret');
-  fs.writeFileSync(path.join(control, 'inktable.lock'), '1234');
+  fs.writeFileSync(path.join(control, 'ordo.lock'), '1234');
 
   const result = copyDataDirectory(control, target, control);
 
@@ -30,7 +30,7 @@ test('migration copies verified data but never moves control files or the live l
   assert.equal(fs.readFileSync(path.join(target, 'preserved', 'copy.pdf'), 'utf8'), 'pdf-data');
   assert.equal(fs.existsSync(path.join(target, 'data-dir.json')), false);
   assert.equal(fs.existsSync(path.join(target, 'llm.enc')), false);
-  assert.equal(fs.existsSync(path.join(target, 'inktable.lock')), false);
+  assert.equal(fs.existsSync(path.join(target, 'ordo.lock')), false);
   assert.equal(fs.existsSync(path.join(control, 'library.db')), true,
     'old data must remain available for rollback');
 
@@ -39,7 +39,7 @@ test('migration copies verified data but never moves control files or the live l
 });
 
 test('overlapping paths and existing targets are rejected before copying', (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'inktable-overlap-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ordo-overlap-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   assert.equal(pathsOverlap(root, path.join(root, 'child')), true);
   assert.equal(pathsOverlap(root, path.join(path.dirname(root), 'peer')), false);
@@ -51,7 +51,7 @@ test('overlapping paths and existing targets are rejected before copying', (t) =
 });
 
 test('the data pointer is replaced atomically without leaving a temp file', (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'inktable-pointer-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ordo-pointer-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const config = path.join(root, 'data-dir.json');
   writeJsonAtomic(config, { dir: '/new/location' });

@@ -17,8 +17,8 @@ H = {"Authorization": f"Bearer {TOKEN}"}
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
-    monkeypatch.setenv("INKTABLE_DB", str(tmp_path / "t.db"))
-    monkeypatch.setenv("INKTABLE_TOKEN", TOKEN)
+    monkeypatch.setenv("ORDO_DB", str(tmp_path / "t.db"))
+    monkeypatch.setenv("ORDO_TOKEN", TOKEN)
     import importlib
 
     from app import main as main_mod

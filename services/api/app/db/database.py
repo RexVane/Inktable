@@ -1,7 +1,7 @@
 """数据库连接与初始化 —— PLAN §9.2。
 
-数据目录默认在 `~/Library/Application Support/Inktable/`，
-可经 `INKTABLE_DATA_DIR` 环境变量整体迁移（由桌面端主进程在
+数据目录默认在 `~/Library/Application Support/Ordo/`，
+可经 `ORDO_DATA_DIR` 环境变量整体迁移（由桌面端主进程在
 "设置 → 通用配置 → 数据位置" 完成搬迁后传入）。库文件位置不放
 资料库根目录 —— 后者可能落在 iCloud / 外置卷 / 网络卷上，
 多设备并发写会直接损坏（§9.2）。
@@ -35,26 +35,56 @@ else:
     import fcntl
 
 
+def _alias_legacy_env() -> None:
+    """Ordo_* is canonical; Inktable_* still wins only when Ordo_* is unset."""
+    for key, value in list(os.environ.items()):
+        if key.startswith("INKTABLE_"):
+            os.environ.setdefault("ORDO_" + key[len("INKTABLE_"):], value)
+
+
+_alias_legacy_env()
+
+
+def _dir_has_db(path: Path) -> bool:
+    return (path / "library.db").is_file()
+
+
 def _resolve_app_dir() -> Path:
-    override = os.environ.get("INKTABLE_DATA_DIR", "").strip()
+    override = (os.environ.get("ORDO_DATA_DIR") or os.environ.get("INKTABLE_DATA_DIR") or "").strip()
     if override:
         return Path(override).expanduser()
     home = Path.home()
-    legacy = home / "Library" / "Application Support" / "Inktable"
-    if (legacy / "library.db").is_file():
-        return legacy
+    roaming = Path(os.environ.get("APPDATA") or home / "AppData" / "Roaming")
+    xdg = Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share")
+    # Prefer an existing library so renaming the product does not look like
+    # data loss. New installs land in the Ordo-native path.
+    candidates = [
+        home / "Library" / "Application Support" / "Ordo" / "data",
+        home / "Library" / "Application Support" / "Ordo",
+        roaming / "Ordo" / "data",
+        roaming / "Ordo",
+        xdg / "Ordo" / "data",
+        xdg / "Ordo",
+        home / "Library" / "Application Support" / "Inktable" / "data",
+        home / "Library" / "Application Support" / "Inktable",
+        roaming / "Inktable" / "data",
+        roaming / "Inktable",
+        xdg / "Inktable" / "data",
+        xdg / "Inktable",
+    ]
+    for path in candidates:
+        if _dir_has_db(path):
+            return path
     if sys.platform == "darwin":
-        return legacy / "data"
+        return home / "Library" / "Application Support" / "Ordo" / "data"
     if sys.platform == "win32":
-        base = Path(os.environ.get("APPDATA") or home / "AppData" / "Roaming")
-        return base / "Inktable" / "data"
-    base = Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share")
-    return base / "Inktable"
+        return roaming / "Ordo" / "data"
+    return xdg / "Ordo"
 
 
 APP_DIR = _resolve_app_dir()
 DB_PATH = APP_DIR / "library.db"
-LOCK_PATH = APP_DIR / "inktable.lock"
+LOCK_PATH = APP_DIR / "ordo.lock"
 BACKUP_DIR = APP_DIR / "backups"
 BACKUP_KEEP = 7
 
@@ -74,10 +104,10 @@ def _instance_lock_path() -> Path:
     """Return the lock corresponding to the database selected for this process.
 
     Production always uses ``LOCK_PATH``.  Tests and development may point the
-    sidecar at an isolated database through ``INKTABLE_DB``; those databases
+    sidecar at an isolated database through ``ORDO_DB``; those databases
     must not contend for the production lock or for each other's locks.
     """
-    override = os.environ.get("INKTABLE_DB")
+    override = os.environ.get("ORDO_DB") or os.environ.get("INKTABLE_DB")
     if override and override != ":memory:":
         db_path = Path(override)
         return db_path.with_name(f"{db_path.name}.lock")
@@ -103,7 +133,7 @@ def acquire_single_instance_lock() -> None:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except (BlockingIOError, PermissionError):
         os.close(fd)
-        raise AlreadyRunning("Inktable 已在运行")
+        raise AlreadyRunning("Ordo 已在运行")
     except OSError:
         os.close(fd)
         raise
@@ -130,8 +160,8 @@ def release_single_instance_lock() -> None:
 
 
 def connect(path: Path | str | None = None) -> sqlite3.Connection:
-    # INKTABLE_DB 让测试与开发指向独立库，避免污染用户的真实数据
-    p = Path(path) if path else Path(os.environ.get("INKTABLE_DB") or DB_PATH)
+    # ORDO_DB 让测试与开发指向独立库，避免污染用户的真实数据
+    p = Path(path) if path else Path(os.environ.get("ORDO_DB") or os.environ.get("INKTABLE_DB") or DB_PATH)
     if p != Path(":memory:"):
         p.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(p), check_same_thread=False)
@@ -152,7 +182,7 @@ def connect_readonly(path: Path | str | None = None) -> sqlite3.Connection:
     "database is locked"（app/main.py 的 _warm_vector_matrix）。
     只读连接不设 journal_mode，也就不可能造成这种竞争。
     """
-    p = Path(path) if path else Path(os.environ.get("INKTABLE_DB") or DB_PATH)
+    p = Path(path) if path else Path(os.environ.get("ORDO_DB") or os.environ.get("INKTABLE_DB") or DB_PATH)
     conn = sqlite3.connect(f"file:{p.as_posix()}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     _load_vec_extension(conn)
@@ -407,7 +437,7 @@ def _init_vec_table(conn: sqlite3.Connection) -> None:
                 conn.execute("UPDATE chunks SET embedding_model_id = NULL")
                 conn.execute("UPDATE contents SET embedding_model_id = NULL")
                 import logging
-                logging.getLogger("inktable.db").warning(
+                logging.getLogger("ordo.db").warning(
                     "向量表维度 %s → %d：已重建，全部分片待回填重嵌",
                     m.group(1), DIM)
                 try:
@@ -629,5 +659,5 @@ def check_schema_version(conn: sqlite3.Connection) -> None:
         raise RuntimeError(f"数据库版本号无效：{raw!r}") from exc
     if v > SCHEMA_VERSION:
         raise RuntimeError(
-            f"数据库版本 {v} 高于当前程序支持的 {SCHEMA_VERSION}，请升级 Inktable"
+            f"数据库版本 {v} 高于当前程序支持的 {SCHEMA_VERSION}，请升级 Ordo"
         )

@@ -17,7 +17,7 @@ gold 命中名次应当变好。
 **不碰真实库**：从隔离评测库只读取样，在独立的探针库里建两张 FTS 表。
 
 用法：
-    INKTABLE_OLLAMA_URL=http://127.0.0.1:18434 \\
+    ORDO_OLLAMA_URL=http://127.0.0.1:18434 \\
       .venv/Scripts/python.exe scripts/probe_abstract_route.py --sample 400
 """
 
@@ -107,7 +107,7 @@ def main() -> int:
         print("找不到隔离评测库：", EVAL_DB)
         return 2
     if not model_available():
-        print("摘要模型不可用（检查 INKTABLE_OLLAMA_URL 与已拉取模型）")
+        print("摘要模型不可用（检查 ORDO_OLLAMA_URL 与已拉取模型）")
         return 2
 
     src = sqlite3.connect(f"file:{EVAL_DB.as_posix()}?mode=ro", uri=True)
@@ -219,7 +219,7 @@ def main() -> int:
             "better": better, "worse": worse, "same": same,
             "base_miss": base_miss, "abstract_miss": abs_miss,
             "mrr_base": mrr("base"), "mrr_abstract": mrr("abstract"),
-            "model": os.environ.get("INKTABLE_ABSTRACT_MODEL", "qwen3:8b"),
+            "model": os.environ.get("ORDO_ABSTRACT_MODEL", "qwen3:8b"),
             "cases": rows_out,
         }, ensure_ascii=False, indent=2), encoding="utf-8")
         print("产物：", args.json)

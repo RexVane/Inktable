@@ -1,4 +1,4 @@
-# Inktable
+# Ordo
 
 **Local-first personal knowledge base for macOS and Windows.**
 It indexes files where they already live — searchable, citable, and
@@ -70,7 +70,7 @@ citation recall 68.93%（71/103）**；`A13`、`S17` 进入可审计 fallback。
 | 保全副本 / 文件消失处理 / 文件书 | ✅ |
 | Windows / macOS（磁盘来源模型、整盘收录、窗口控件叠加 / hiddenInset） | ✅ |
 | ONNX Cross-Encoder 重排 | 🧪 已实装并冻结对照；未通过“nDCG@10 ≥90%、Recall@5 ≥95%、Recall@20 回退 ≤2pp、Rerank P95 ≤1.5s”的联合门槛 |
-| 级联重排（本地打分器 + CE 精排融合前 26 位） | 🧪 可选 `INKTABLE_RERANKER=cascade`：冻结快照 Recall@5 96.2% / Recall@20 100%，但 Rerank P95 超 1.5s 门槛约 10% |
+| 级联重排（本地打分器 + CE 精排融合前 26 位） | 🧪 可选 `ORDO_RERANKER=cascade`：冻结快照 Recall@5 96.2% / Recall@20 100%，但 Rerank P95 超 1.5s 门槛约 10% |
 | 检索延迟门槛（搜索 P95 ≤2.5s、Rerank P95 ≤1.5s） | ✅ 0.98s / 0.03s，见 `docs/RETRIEVAL-PERF.md` |
 | 真实模型 65 题 QA 冻结快照 | ✅ `v8-final-qa.json`：`kocode / gpt-5.6-sol` 流程完成 65/65；同模型自判支持率 95.16%，精确引用 100%，拒答 12/12；Gold evidence citation recall **68.93%** |
 | 代码签名（macOS / Windows） | ⬜ |
@@ -99,7 +99,7 @@ cd ..\..\services\api ; uv run --group dev pyinstaller sidecar.spec --clean --no
 cd ..\..\apps\desktop ; npm run dist -- --win --x64
 ```
 
-调试时用 `INKTABLE_DB=/tmp/dev.db` 指向独立库，避免污染真实数据。
+调试时用 `ORDO_DB=/tmp/dev.db` 指向独立库，避免污染真实数据。
 
 ## 架构
 
@@ -110,13 +110,13 @@ Electron 主进程 ──stdin: {token}──▶ Python sidecar (FastAPI)
    renderer                               ├─ ingestion/  解析、层级、增量索引
   (知识工作台) ──HTTP + Bearer────────────▶├─ retrieval/  混合召回、RRF、问答
       │                                   └─ db/         SQLite + FTS5 + sqlite-vec
-      └─ inkdoc:// 原文字节（主进程代理 sidecar /files/{id}/raw，
+      └─ ordodoc:// 原文字节（主进程代理 sidecar /files/{id}/raw，
          每次请求经库内登记路径授权；渲染层 CSP 无任何网络出口）
 ```
 
-数据目录默认在 `~/Library/Application Support/Inktable/`（Windows 为
-`C:\Users\<用户>\Library\Application Support\Inktable\`），可在
-设置 → 通用配置 → 数据位置整体迁移（经 `INKTABLE_DATA_DIR` 传入 sidecar）。
+数据目录默认在 `~/Library/Application Support/Ordo/`（Windows 为
+`C:\Users\<用户>\Library\Application Support\Ordo\`），可在
+设置 → 通用配置 → 数据位置整体迁移（经 `ORDO_DATA_DIR` 传入 sidecar）。
 不放资料库目录 —— 那里可能在 iCloud 里，多设备并发写会损坏。
 
 **files 与 contents 分离**：N 个文件 : 1 份内容。同一份内容存在多处时
@@ -177,7 +177,7 @@ Electron 主进程 ──stdin: {token}──▶ Python sidecar (FastAPI)
 safeStorage 加密落盘，sidecar 侧只存内存 —— 不进数据库、不进日志、
 不回显（测试中有专项断言）。对推理模型（DeepSeek-R 系 / Qwen3 等）
 自适应：探测与追问浓缩、拒答改写、引用校验拿不到正文时自动放宽
-预算重试；外发请求统一带 Inktable UA（部分中转站拦截 Python-urllib）。
+预算重试；外发请求统一带 Ordo UA（部分中转站拦截 Python-urllib）。
 
 **快速 / 深度双档**（问答输入框下方切换，选择持久化）：
 
@@ -195,7 +195,7 @@ PDF.js（含中文 cmaps 与标准字体）和 docx-preview 渲染真实版式 �
 PDF 分页懒渲染、页码导航、缩放；无原版式的格式回退提取文本。
 
 问答引用（深度档）点击后直达原文：按引用页码跳页，在文字层定位
-被引用片段并高亮闪烁。文件字节经主进程 `inkdoc://` 自定义协议供给
+被引用片段并高亮闪烁。文件字节经主进程 `ordodoc://` 自定义协议供给
 （每次请求先过 sidecar 授权，仅服务库内登记路径，支持 Range 懒加载），
 协议异常时自动回退 IPC 通道 —— 渲染层 CSP 始终没有任何网络出口。
 
@@ -216,7 +216,7 @@ PDF 分页懒渲染、页码导航、缩放；无原版式的格式回退提取�
 
 - 无应用图标，未代码签名（首次打开需右键→打开）
 - 原文查看器仅 PDF / DOCX 有原版式渲染，其余格式为提取文本视图；PDF.js
-  通过 `inkdoc://` Range/流式读取，IPC 降级限制为 16 MiB。DOCX 原版式查看
+  通过 `ordodoc://` Range/流式读取，IPC 降级限制为 16 MiB。DOCX 原版式查看
   限制为 64 MiB，后端正文索引另有 16 MiB 压缩包、ZIP 条目/解压量/压缩比
   和 500 万字符上限
 - 当前仍是 beta：知识馆 2000+ 叶子的懒加载、macOS/Windows 打包产物 smoke、
@@ -226,7 +226,7 @@ PDF 分页懒渲染、页码导航、缩放；无原版式的格式回退提取�
   嵌入模型输出维度必须与向量表 1024 维一致，检测连接会明确报告
 - 推理模型的思考内容会占用辅助步骤的小 token 预算（已自适应重试，
   主回答不限上限）；部分中转站拦截非常见 User-Agent，已统一带
-  Inktable UA 绕开
+  Ordo UA 绕开
 - 扫描件 PDF 无文本层使用本机系统 OCR（macOS Vision / Windows
   Windows.Media.Ocr）；没有对应系统语言包时会明确告知"未提取到文本"
 - 单文档全文索引上限 10 MB（机器生成的日志/清单不适合自然语言搜索）

@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 
 const CONTROL_FILES = new Set(['data-dir.json', 'llm.enc']);
-const TRANSIENT_ROOT_FILES = new Set(['inktable.lock']);
+const TRANSIENT_ROOT_FILES = new Set(['ordo.lock']);
 
 function normalized(value) {
   const resolved = path.resolve(value);

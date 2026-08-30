@@ -35,7 +35,7 @@ async function main() {
     height: 900,
     show: false,
     webPreferences: {
-      // 渲染层要能跑起来:它会读 window.inktable.*。这里注入一个最小假桥,
+      // 渲染层要能跑起来:它会读 window.ordo.*。这里注入一个最小假桥,
       // 而不是加载真 preload —— 真 preload 要求主进程侧的 sidecar 句柄。
       preload: path.resolve(__dirname, 'theme-shots-preload.js'),
       // show:false 的窗口会被节流，capturePage 可能取到旧帧（实测：弹层

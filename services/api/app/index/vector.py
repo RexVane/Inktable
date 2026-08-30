@@ -29,7 +29,7 @@ import numpy as np
 
 from app.index.embedding import DIM
 
-log = logging.getLogger("inktable.vector")
+log = logging.getLogger("ordo.vector")
 
 # 旧版本用固定的 100k 行数阈值决定是否建矩阵。这个阈值在不同机器上
 # 没有可比性：102,965 条在本机仍然只占约 402 MiB，而 148k 条在低内存
@@ -168,7 +168,7 @@ def _matrix_budget_allows(rows: int, dim: int = DIM) -> bool:
     """Decide whether a full matrix is safe to build on this machine."""
     if rows <= 0 or _matrix_disabled():
         return False
-    cap = _env_bytes("INKTABLE_VECTOR_CACHE_MB", _CACHE_DEFAULT_CAP_BYTES)
+    cap = _env_bytes("ORDO_VECTOR_CACHE_MB", _CACHE_DEFAULT_CAP_BYTES)
     if cap == 0:
         return False
     steady = rows * (dim * 4 + 8)  # float32 matrix + int64 row ids
@@ -177,7 +177,7 @@ def _matrix_budget_allows(rows: int, dim: int = DIM) -> bool:
         return False
     available = _available_memory_bytes()
     reserve = _env_bytes(
-        "INKTABLE_VECTOR_CACHE_RESERVE_MB",
+        "ORDO_VECTOR_CACHE_RESERVE_MB",
         _CACHE_DEFAULT_RESERVE_BYTES,
     )
     if available is not None and required > max(0, available - reserve):
@@ -229,12 +229,12 @@ _VEC_TABLE = "chunks_vec"
 
 
 def _matrix_disabled() -> bool:
-    """`INKTABLE_VECTOR_NO_MATRIX=1` 关掉矩阵路，强制走 vec0 KNN。
+    """`ORDO_VECTOR_NO_MATRIX=1` 关掉矩阵路，强制走 vec0 KNN。
 
     用于两件事：验证两条路给出的检索结果一致（把它设上跑一遍评测，指标
     应当逐位相同），以及影子表布局出问题时的现场排查开关。
     """
-    return os.environ.get("INKTABLE_VECTOR_NO_MATRIX", "").strip() in {"1", "true", "yes"}
+    return os.environ.get("ORDO_VECTOR_NO_MATRIX", "").strip() in {"1", "true", "yes"}
 
 
 def _shadow_bulk_vectors(conn: sqlite3.Connection, dim: int = DIM):

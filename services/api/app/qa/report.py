@@ -13,7 +13,7 @@ import time
 
 from app.db.database import APP_DIR
 
-log = logging.getLogger("inktable.report")
+log = logging.getLogger("ordo.report")
 
 REPORTS_DIR = APP_DIR / "reports"
 VISIBLE = "(f.source_id IS NULL OR s.enabled = 1)"

@@ -11,7 +11,7 @@
 表示不参与检索，给它们生成摘要纯属浪费。
 
 用法：
-    INKTABLE_OLLAMA_URL=http://127.0.0.1:18434 \\
+    ORDO_OLLAMA_URL=http://127.0.0.1:18434 \\
       .venv/Scripts/python.exe scripts/backfill_abstracts.py --limit 100
     # 全量（很慢，建议放后台）：省掉 --limit
 
@@ -42,7 +42,7 @@ from app.index.abstract import (  # noqa: E402
 )
 from app.index.hierarchy import document_index_text  # noqa: E402
 
-MODEL_TAG = os.environ.get("INKTABLE_ABSTRACT_MODEL", "qwen3:8b")
+MODEL_TAG = os.environ.get("ORDO_ABSTRACT_MODEL", "qwen3:8b")
 
 
 def pending(conn: sqlite3.Connection, limit: int | None) -> list[sqlite3.Row]:
@@ -66,7 +66,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if not model_available():
-        print("摘要模型不可用：检查 INKTABLE_OLLAMA_URL 与是否已拉取",
+        print("摘要模型不可用：检查 ORDO_OLLAMA_URL 与是否已拉取",
               MODEL_TAG)
         return 2
 

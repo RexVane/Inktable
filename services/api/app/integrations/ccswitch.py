@@ -43,7 +43,7 @@ _CLAUDE_MODEL_KEYS = (
 
 
 def _normalize_endpoint(base_url: str) -> str:
-    """把 base_url 规范成 Inktable 期望的 `https://host[/...]/v1` 形式。"""
+    """把 base_url 规范成 Ordo 期望的 `https://host[/...]/v1` 形式。"""
     url = (base_url or "").strip().rstrip("/")
     if not url:
         return ""

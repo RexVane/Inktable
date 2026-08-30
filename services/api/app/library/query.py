@@ -1,4 +1,4 @@
-"""Side-effect-free read model for the Inktable AI Library."""
+"""Side-effect-free read model for the Ordo AI Library."""
 
 from __future__ import annotations
 

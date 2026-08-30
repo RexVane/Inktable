@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller 打包配置 —— Inktable sidecar。
+"""PyInstaller 打包配置 —— Ordo sidecar。
 
 必须手动处理的原生依赖（PLAN §15 A0）：
   1. sqlite_vec/vec0.dylib —— SQLite 扩展，PyInstaller 不会自动收集 .dylib
@@ -51,7 +51,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="inktable-sidecar",
+    name="ordo-sidecar",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

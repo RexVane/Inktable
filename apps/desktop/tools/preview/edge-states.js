@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const mock = require('./mock-data');
 
-const outDir = process.argv[2] || '/tmp/inktable-ui-after';
+const outDir = process.argv[2] || '/tmp/ordo-ui-after';
 fs.mkdirSync(outDir, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

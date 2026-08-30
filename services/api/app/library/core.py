@@ -1,4 +1,4 @@
-"""Core data model for the Inktable AI Library.
+"""Core data model for the Ordo AI Library.
 
 This module intentionally contains no LLM calls. It turns the existing
 filesystem/content index into a rebuildable knowledge layer:
@@ -487,7 +487,7 @@ def update_enrichment(
 
     The check is independent of a prior ``sync_library_items`` call: it derives
     the active document hash directly from ``contents`` + the active document
-    representation before writing. Caller serializes writes with Inktable's
+    representation before writing. Caller serializes writes with Ordo's
     single-writer lock.
     """
     if current_input_hash(conn, item_id) != input_hash:

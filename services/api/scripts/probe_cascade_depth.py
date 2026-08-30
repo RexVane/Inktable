@@ -9,9 +9,9 @@ Cross-Encoder 每对候选约 50-80ms，1.5 秒的 rerank 门槛只够打分 16-
 那个列表里排第几位」。该列表是 pipeline 的 `_load_inputs` 输出 —— 已经
 过了每内容软上限与同文去重，位置与 RRF 名次并不相同，必须实测。
 
-一级顺序用 `INKTABLE_RERANKER=off` 从真实管线里取，不在探针里复制融合逻辑。
+一级顺序用 `ORDO_RERANKER=off` 从真实管线里取，不在探针里复制融合逻辑。
 
-    INKTABLE_DB=output/release-gate-20260817/library-working.db \
+    ORDO_DB=output/release-gate-20260817/library-working.db \
         .venv/Scripts/python.exe scripts/probe_cascade_depth.py --route-limit 120
 
 只读。
@@ -28,7 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # 必须在导入 rerank 之前定住，模块级常量在导入时求值
-os.environ["INKTABLE_RERANKER"] = "off"
+os.environ["ORDO_RERANKER"] = "off"
 
 from app.db.database import connect, init_db  # noqa: E402
 from app.retrieval.pipeline import run as run_retrieval  # noqa: E402

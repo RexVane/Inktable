@@ -1,8 +1,8 @@
-Inktable 项目当前状态总结
+Ordo 项目当前状态总结
 
 一、项目定位
 
-Inktable 是一个本地优先的个人知识库，目标是扫描固定磁盘中的资料文件，保留真实文件路径，并通过全文检索、语义检索和带引用问答帮助用户查找资料。
+Ordo 是一个本地优先的个人知识库，目标是扫描固定磁盘中的资料文件，保留真实文件路径，并通过全文检索、语义检索和带引用问答帮助用户查找资料。
 
 当前 Windows 来源模型已经统一为固定盘根目录：B:\、C:\、D:\ 等固定盘作为顶层来源，盘内的 openclaw、workspace、项目目录等不再创建独立来源，而是作为文件树节点逐层展开。文件仍然以真实路径登记，例如：
 
@@ -89,7 +89,7 @@ README/CHANGELOG、Python 文档 HTML、jupyter 的 js.LICENSE.txt 等），
 
 迁移由 scripts/migrate_working_to_real.py 执行，含备份与验证：
 
-  备份：~/Library/Application Support/Inktable/backups/
+  备份：~/Library/Application Support/Ordo/backups/
         library-pre-migration-20260818-042225.db（718MB，已校验可读）
   回滚：把该备份复制回 library.db，并删掉同名 -wal / -shm
 
@@ -158,7 +158,7 @@ Gold Evidence Recall@50 已达到 90% 门槛，压缩门槛也已经通过。
    改为后台线程与分层路由+词法四路重叠，并把所有查询变体合并成一次调用
    （实测一次调用编码 8 条也只要 719ms，成本几乎全是每请求固定开销）。
 
-已用 INKTABLE_VECTOR_NO_MATRIX=1 强制走原 vec0 KNN 路径复跑评测，
+已用 ORDO_VECTOR_NO_MATRIX=1 强制走原 vec0 KNN 路径复跑评测，
 两条路径的 Recall/MRR/nDCG 完全一致，确认只改执行方式、不改排序结果。
 
 压缩评测结果（检索改动后复跑，全部通过；压缩延迟略有改善）：
@@ -195,7 +195,7 @@ Content Recall@5 从 90.6% 提到 96.2%、Recall@20 从 98.1% 提到 100%，
 但 nDCG 会掉到 88.5%，反而低于 local-static-v3，因此不采用。
 
 生产默认保持 local-static-v3（交互搜索 P50 0.61 秒）；cascade 用
-INKTABLE_RERANKER=cascade 开启。
+ORDO_RERANKER=cascade 开启。
 
 关于 +15% 这条门槛本身：RRF 基线的 nDCG@10 已是 84.3%，+15% 意味着绝对值
 要达到 97.0%。53 道题单文档相关，rank 1 得 1.0、rank 2 得 0.631，所以 97.0%
@@ -336,7 +336,7 @@ sidecar 才会包含这些改动。
 
 代码：
   app/index/vector.py        影子表整块读重建矩阵、矩阵主路径、预热、
-                             vectors_for、INKTABLE_VECTOR_NO_MATRIX 开关
+                             vectors_for、ORDO_VECTOR_NO_MATRIX 开关
   app/index/search.py        vector_route 拆出，供管线与嵌入并行
   app/retrieval/pipeline.py  查询嵌入后台化并批量合并、词法与向量分段计时、
                              空查询不发嵌入、run() 新增 reranker 参数
@@ -382,7 +382,7 @@ coal / moss / silver / limestone / linen）带选择器，标题栏 overlay 颜�
                    400 篇探针上文档路 MRR 0.5761→0.5931，证据不足
   B 调查日志       app/qa/journal.py，右栏「历史」；有测试禁止 retrieval/* 与
                    qa/answer.py import 它（journal 存模型输出，当证据会断 H8）
-  D 逐字引文核验   app/qa/quotes.py，默认只诊断。INKTABLE_QUOTE_ENFORCE 仍关：
+  D 逐字引文核验   app/qa/quotes.py，默认只诊断。ORDO_QUOTE_ENFORCE 仍关：
                    本地 qwen3:8b 对 10 道 gold 可答题拒答 8-9 道，基线 1/10
                    没有统计功效，等一个能跟住引用协议的 provider 复验 65 题
 
@@ -449,9 +449,9 @@ CE 运行时已排除为瓶颈（14 线程是 28 核实测最优、批 8 分桶�
 
 9. 打包（2026-08-26 重出）
 
-  Inktable-0.3.0-Setup-x64.exe   194,854,395 bytes
+  Ordo-0.3.0-Setup-x64.exe   194,854,395 bytes
     SHA-256 FE7D4F32221B110C528053F1D969683D641B52CDC3BEC1128D7983779238D66E
-  inktable-sidecar.exe            95,711,954 bytes
+  ordo-sidecar.exe            95,711,954 bytes
     SHA-256 4C9CD9FB1C464201900E78A5C0F1CBC56DAE21A51695843E4B25A577F7BCF1A9
 
 【这两个产物已作废，见第十五节】它们冻结在门控级联四条改动**之前**，
@@ -464,7 +464,7 @@ CE 运行时已排除为瓶颈（14 线程是 28 核实测最优、批 8 分桶�
 sqlite-vec v0.1.9、FTS5、中文检索探针 7/7、嵌入 bge-m3 dim=1024、
 OCR windows-media-ocr。
 
-**仍无代码签名**：Get-AuthenticodeSignature 对安装包与 Inktable.exe 均返回
+**仍无代码签名**：Get-AuthenticodeSignature 对安装包与 Ordo.exe 均返回
 NotSigned，首次运行会有 SmartScreen 警告。8/26 已决定不买证书、自用接受这个
 警告，因此本项不再是阻塞项（见第十五节）。
 
@@ -511,13 +511,13 @@ U02 融合 12/向量 32），各给一半名额可用 K=13 覆盖前三题，两
 
 默认全部关闭，生产默认仍是 auto，行为与不引入这两个旋钮逐字一致，有测试守着：
 
-  INKTABLE_CASCADE_LEX_GATE=0    INKTABLE_CASCADE_VEC_SHARE=0
-  INKTABLE_CASCADE_PAIRS=26
+  ORDO_CASCADE_LEX_GATE=0    ORDO_CASCADE_VEC_SHARE=0
+  ORDO_CASCADE_PAIRS=26
 
 两条最佳实测配置：
 
-  质量优先  INKTABLE_RERANKER=cascade INKTABLE_CASCADE_LEX_GATE=45
-  延迟优先  再加 INKTABLE_CASCADE_VEC_SHARE=50 INKTABLE_CASCADE_PAIRS=13
+  质量优先  ORDO_RERANKER=cascade ORDO_CASCADE_LEX_GATE=45
+  延迟优先  再加 ORDO_CASCADE_VEC_SHARE=50 ORDO_CASCADE_PAIRS=13
 
 回归：后端 342 passed（本节新增 6 条），桌面 25 passed。
 
@@ -575,14 +575,14 @@ MRR 86.9%→88.1%，Recall@5 保持 96.2%，5 次独立运行逐位复现。
 
 已切生产默认。auto 的含义变成：装了 CE 资产走门控级联，没装走一级本地打分器
 （没装时行为与改动前逐字一致，不会因为缺一个 279MB 模型而打 degraded 标记）。
-退回旧行为：INKTABLE_RERANKER=local。
+退回旧行为：ORDO_RERANKER=local。
 
 新默认值（改任何一个都要重跑 65 题，有测试钉着）：
 
-  INKTABLE_CASCADE_LEX_GATE=45     门控阈值
-  INKTABLE_CASCADE_VEC_SHARE=25    头部里分给向量路名次的比例
-  INKTABLE_CASCADE_PAIRS=20        CE 打分的候选数
-  INKTABLE_RERANK_MAX_TOKENS=192   单对序列长度
+  ORDO_CASCADE_LEX_GATE=45     门控阈值
+  ORDO_CASCADE_VEC_SHARE=25    头部里分给向量路名次的比例
+  ORDO_CASCADE_PAIRS=20        CE 打分的候选数
+  ORDO_RERANK_MAX_TOKENS=192   单对序列长度
 
 风险（不要读成「已经稳了」）：这套配置在 53 题上定，真正决定结论的只有 4 题
 （A09/P19/U02/M09），门控阈值可用窗口只有 (0.403, 0.533]，两端各由一道题钉住。
@@ -643,9 +643,9 @@ cross_encoder.DEFAULT_MAX_TOKENS 一处，两边各写一个 192 会静默漂移
 
 6. 重出的产物（第十四节那两个作废）
 
-  Inktable-0.3.0-Setup-x64.exe   194,863,145 bytes
+  Ordo-0.3.0-Setup-x64.exe   194,863,145 bytes
     SHA-256 E31CD684566418551A49F0D87E12F518EB7DB6FB3D25107CF57AFA32DD4BBF90
-  inktable-sidecar.exe            95,719,360 bytes
+  ordo-sidecar.exe            95,719,360 bytes
     SHA-256 10A2477294B733D4EF6312CAAEC787D8AECF3E258C8878DA49E4B5528B30DAC4
 
 构建产物与包内副本逐字节一致（两边 SHA-256 相同）。
@@ -654,7 +654,7 @@ toggleDrawer 5、renderJournal 4。
 冻结冒烟全绿且**含配置核对**：frozen=True、status=ok、sqlite-vec v0.1.9、
 FTS5、中文检索探针 7/7（missed=[]）、嵌入 ollama-bge-m3 dim=1024 已加载、
 OCR windows-media-ocr、四个旋钮逐个对上。
-签名：Get-AuthenticodeSignature 对安装包与 Inktable.exe 均 NotSigned（见第 1 条）。
+签名：Get-AuthenticodeSignature 对安装包与 Ordo.exe 均 NotSigned（见第 1 条）。
 
 CE 资产不在安装包里，也没有应用内下载入口：只装安装包的用户拿到的是
 auto → 一级本地打分器（R@5 92.5%），不是 96.2%。要拿门控级联得从仓库跑

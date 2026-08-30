@@ -166,9 +166,9 @@ def test_vector_search_above_legacy_limit_uses_matrix_when_budget_allows(monkeyp
 def test_matrix_budget_respects_available_memory_and_explicit_cap(monkeypatch):
     from app.index import vector as vec
 
-    monkeypatch.delenv("INKTABLE_VECTOR_NO_MATRIX", raising=False)
-    monkeypatch.setenv("INKTABLE_VECTOR_CACHE_MB", "1024")
-    monkeypatch.setenv("INKTABLE_VECTOR_CACHE_RESERVE_MB", "512")
+    monkeypatch.delenv("ORDO_VECTOR_NO_MATRIX", raising=False)
+    monkeypatch.setenv("ORDO_VECTOR_CACHE_MB", "1024")
+    monkeypatch.setenv("ORDO_VECTOR_CACHE_RESERVE_MB", "512")
     monkeypatch.setattr(vec, "_available_memory_bytes", lambda: 2 * 1024**3)
     assert vec._matrix_budget_allows(100_001)
 
@@ -176,7 +176,7 @@ def test_matrix_budget_respects_available_memory_and_explicit_cap(monkeypatch):
     assert not vec._matrix_budget_allows(100_001)
 
     monkeypatch.setattr(vec, "_available_memory_bytes", lambda: 4 * 1024**3)
-    monkeypatch.setenv("INKTABLE_VECTOR_CACHE_MB", "256")
+    monkeypatch.setenv("ORDO_VECTOR_CACHE_MB", "256")
     assert not vec._matrix_budget_allows(100_001)
 
 

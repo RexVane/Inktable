@@ -33,13 +33,13 @@ def wait_health(timeout=25):
 
 
 def main() -> int:
-    work = Path(tempfile.mkdtemp(prefix="inktable-e2e-"))
+    work = Path(tempfile.mkdtemp(prefix="ordo-e2e-"))
     watch_dir = work / "inbox"
     stage = work / "stage"
     watch_dir.mkdir()
     stage.mkdir()
 
-    env = dict(os.environ, INKTABLE_TOKEN=TOKEN, INKTABLE_DB=str(work / "e2e.db"))
+    env = dict(os.environ, ORDO_TOKEN=TOKEN, ORDO_DB=str(work / "e2e.db"))
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "app.main:app",
          "--host", "127.0.0.1", "--port", str(PORT), "--log-level", "warning"],

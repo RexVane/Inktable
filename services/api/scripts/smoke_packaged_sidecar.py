@@ -25,8 +25,8 @@ import urllib.error
 import urllib.request
 
 EXE = sys.argv[1] if len(sys.argv) > 1 else (
-    "D:/AIApp/Inktable/Inktable/dist/win-unpacked/resources/sidecar/"
-    "inktable-sidecar.exe")
+    "D:/AIApp/Ordo/Ordo/dist/win-unpacked/resources/sidecar/"
+    "ordo-sidecar.exe")
 
 # 发布配置。改这里之前先重跑 65 题（services/api/tests/test_rerank.py 也钉着）。
 EXPECTED_RETRIEVAL = {
@@ -42,9 +42,9 @@ def main() -> int:
     if not os.path.exists(EXE):
         print("找不到打包出的 sidecar: %s" % EXE)
         return 1
-    data_dir = tempfile.mkdtemp(prefix="inktable-smoke-")
-    env = dict(os.environ, INKTABLE_DATA_DIR=data_dir)
-    env.pop("INKTABLE_DB", None)
+    data_dir = tempfile.mkdtemp(prefix="ordo-smoke-")
+    env = dict(os.environ, ORDO_DATA_DIR=data_dir)
+    env.pop("ORDO_DB", None)
     proc = subprocess.Popen(
         [EXE], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",

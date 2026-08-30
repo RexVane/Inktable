@@ -29,7 +29,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8",
                               errors="replace", line_buffering=True)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-os.environ["INKTABLE_RERANKER"] = "off"
+os.environ["ORDO_RERANKER"] = "off"
 
 from app.db.database import connect, init_db  # noqa: E402
 from app.index.search import extract_query_terms  # noqa: E402

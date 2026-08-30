@@ -75,7 +75,7 @@ def main() -> int:
     try:
         acquire_single_instance_lock()
     except AlreadyRunning:
-        print("Inktable 正在运行 —— 请先退出桌面端，避免两个进程同时写库（H18）。")
+        print("Ordo 正在运行 —— 请先退出桌面端，避免两个进程同时写库（H18）。")
         return 1
 
     try:

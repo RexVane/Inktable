@@ -12,7 +12,7 @@ monorepo，两个独立模块，各有自己的依赖与 README：
 
 ## 命令
 
-后端命令**必须在 `services/api/` 目录下执行**。`app/` 不是已安装包（`pyproject.toml` 声明的 src-layout `src/inktable_api/` 是脚手架残留），测试靠 pytest rootdir 解析 `from app.xxx import`，从仓库根跑会 ImportError。
+后端命令**必须在 `services/api/` 目录下执行**。`app/` 不是已安装包（`pyproject.toml` 声明的 src-layout `src/ordo_api/` 是脚手架残留），测试靠 pytest rootdir 解析 `from app.xxx import`，从仓库根跑会 ImportError。
 
 ```bash
 cd services/api
@@ -27,10 +27,10 @@ uv run python tests/e2e_watch.py          # 端到端：投放文件→自动入
 
 ```bash
 cd services/api
-INKTABLE_TOKEN=dev INKTABLE_DB=/tmp/dev.db uv run uvicorn app.main:app --port 8790
+ORDO_TOKEN=dev ORDO_DB=/tmp/dev.db uv run uvicorn app.main:app --port 8790
 ```
 
-**但改动要在桌面端生效必须重新打包**：`apps/desktop/electron/main.js:89` 把开发态 sidecar 路径写死为 `services/api/dist/inktable-sidecar`（PyInstaller 产物），产物不存在时 `npm start` 直接报错。
+**但改动要在桌面端生效必须重新打包**：`apps/desktop/electron/main.js:89` 把开发态 sidecar 路径写死为 `services/api/dist/ordo-sidecar`（PyInstaller 产物），产物不存在时 `npm start` 直接报错。
 
 ```bash
 cd services/api && uv run --group dev pyinstaller sidecar.spec --clean --noconfirm
@@ -62,7 +62,7 @@ uv run python tests/run_eval.py --verbose --label <标签> --json ../../docs/eva
 ```
 
 - **K6 / H12：gold 标注只在资料变化或标注确实错误时才改，不得为了让某个检索实现分数变好而调。**
-- 评测跑的是用户真实资料库（默认 `~/Library/Application Support/Inktable/`），不是 fixture。`chunks` 表为空时脚本打印提示并 `return 1`——先启用来源并跑 `/index/run` 才有数字。结果不可跨机复现。
+- 评测跑的是用户真实资料库（默认 `~/Library/Application Support/Ordo/`），不是 fixture。`chunks` 表为空时脚本打印提示并 `return 1`——先启用来源并跑 `/index/run` 才有数字。结果不可跨机复现。
 - **退出码 1 不一定是脚本失败**：也可能是 Recall@5 低于 80% 发布门槛，属已记录的产品缺口（见 `docs/eval/README.md`）。
 
 ## 代码风格
@@ -97,11 +97,11 @@ uv run python tests/run_eval.py --verbose --label <标签> --json ../../docs/eva
 
 | 变量 | 作用 |
 | --- | --- |
-| `INKTABLE_DB` | 指向独立库，调试必用；`:memory:` 有特殊分支 |
-| `INKTABLE_DATA_DIR` | 整体迁移数据目录（库 / 备份 / 保全副本），由 Electron 主进程传入 |
-| `INKTABLE_TOKEN` | 会话令牌；不传则随机生成。**生产路径经 stdin 传入，绝不走命令行参数**（ps 可见） |
-| `INKTABLE_RERANKER=rrf` | 显式降级重排做对照 |
-| `INKTABLE_WATCH_BACKEND=polling` | 轮询替代 FSEvents；`tests/conftest.py` 自动 setdefault 为此 |
+| `ORDO_DB` | 指向独立库，调试必用；`:memory:` 有特殊分支 |
+| `ORDO_DATA_DIR` | 整体迁移数据目录（库 / 备份 / 保全副本），由 Electron 主进程传入 |
+| `ORDO_TOKEN` | 会话令牌；不传则随机生成。**生产路径经 stdin 传入，绝不走命令行参数**（ps 可见） |
+| `ORDO_RERANKER=rrf` | 显式降级重排做对照 |
+| `ORDO_WATCH_BACKEND=polling` | 轮询替代 FSEvents；`tests/conftest.py` 自动 setdefault 为此 |
 
 **LLM 密钥没有环境变量注入口**：用户在「设置 → 模型配置」填写，经 Electron `safeStorage` 加密落 `llm.enc`，sidecar 侧只存内存，不进库 / 日志 / 回显（有专项断言）。
 

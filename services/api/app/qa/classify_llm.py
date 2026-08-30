@@ -20,7 +20,7 @@ import sqlite3
 from app.organize.classify import assign_category, category_tree
 from app.qa import llm
 
-log = logging.getLogger("inktable.classify_llm")
+log = logging.getLogger("ordo.classify_llm")
 
 BATCH = 20            # 单次调用最多归几个文件
 HEAD_CHARS = 300      # 每个文件发送的正文开头长度 —— 只发必要文本（§16.1）

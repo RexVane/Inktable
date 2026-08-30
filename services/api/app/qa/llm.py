@@ -27,11 +27,11 @@ from app.config.endpoints import (
     open_model_request,
 )
 
-log = logging.getLogger("inktable.llm")
+log = logging.getLogger("ordo.llm")
 
 # 部分中转站（Cloudflare 系）会拦截 Python-urllib 默认 UA（403）：
 # 密钥是对的也被当成机器人。所有外发模型请求都带自报家门的 UA。
-USER_AGENT = "Inktable/0.3"
+USER_AGENT = "Ordo/0.3"
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 MAX_SSE_LINE_BYTES = 1024 * 1024
 MAX_SSE_TOTAL_BYTES = 16 * 1024 * 1024

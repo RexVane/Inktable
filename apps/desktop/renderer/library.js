@@ -1,8 +1,8 @@
-/* Inktable AI Library renderer module.
+/* Ordo AI Library renderer module.
  *
  * Loaded as a same-origin external script by preload. It never receives the
  * sidecar token and can only use the controlled main-process API proxy exposed
- * on window.inktable. All API-originated text is written through textContent.
+ * on window.ordo. All API-originated text is written through textContent.
  */
 (function () {
   'use strict';
@@ -79,7 +79,7 @@
   }
 
   async function api(path, method) {
-    var result = await window.inktable.apiRequest({ path: path, method: method || 'GET' });
+    var result = await window.ordo.apiRequest({ path: path, method: method || 'GET' });
     if (!result) throw new Error('本地服务未就绪');
     if (!result.ok) {
       var detail = result.data && result.data.detail;
@@ -825,10 +825,10 @@
     var actions = node('div', 'library-source-actions');
     if (path) {
       actions.appendChild(button('打开', 'library-mini', function () {
-        if (window.inktable.openPath) window.inktable.openPath(path);
+        if (window.ordo.openPath) window.ordo.openPath(path);
       }));
       actions.appendChild(button('定位', 'library-mini', function () {
-        window.inktable.revealInFinder(path);
+        window.ordo.revealInFinder(path);
       }));
     }
     row.appendChild(actions);
@@ -875,11 +875,11 @@
   }
 
   function boot() {
-    if (!window.inktable || !window.inktable.apiRequest) return;
+    if (!window.ordo || !window.ordo.apiRequest) return;
     ensureModeSwitch();
     ensureSurface();
     installKeyboardBoundary();
-    window.InktableLibrary = {
+    window.OrdoLibrary = {
       enter: enterLibrary,
       leave: leaveLibrary,
       refresh: function () { return refreshLibrary(true); },

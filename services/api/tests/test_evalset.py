@@ -60,7 +60,7 @@ def test_content_addressed_gold_covers_every_case_and_separates_missing_corpus()
     )
 
 
-def test_scene_planning_is_never_accepted_as_inktable_plan_gold():
+def test_scene_planning_is_never_accepted_as_ordo_plan_gold():
     scene_planning_sha = (
         "c54a8cf6cf864ff5a60d4569e4e285f0fca88e40f3cbff1350b70b099af319e0"
     )

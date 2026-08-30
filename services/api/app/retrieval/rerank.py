@@ -23,7 +23,7 @@ def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
     return max(minimum, min(value, maximum))
 
 
-RERANK_LIMIT = _env_int("INKTABLE_RERANK_LIMIT", 80, 8, 160)
+RERANK_LIMIT = _env_int("ORDO_RERANK_LIMIT", 80, 8, 160)
 SOFT_PER_CONTENT = 12
 
 # 级联重排的 Cross-Encoder 候选对预算。每对 50-80ms（bge-reranker-base int8、
@@ -31,14 +31,14 @@ SOFT_PER_CONTENT = 12
 # 融合顺序里最深的 gold 落在第 25 位（P19/P20 两道改写类问题），K 小于 25
 # 就有题永远进不了二级重排。53 题里 49 题的 gold 在前 4 位，只有 4 题需要
 # 这个深度 —— 但正是那 4 题在拉低 MRR/nDCG。
-CASCADE_PAIRS = _env_int("INKTABLE_CASCADE_PAIRS", 20, 4, 80)
+CASCADE_PAIRS = _env_int("ORDO_CASCADE_PAIRS", 20, 4, 80)
 # 上面那段「K 小于 25 就有题进不了二级重排」只在**纯融合序**截头部时成立。
 # 头部按向量路分配一部分名额后（CASCADE_VEC_SHARE），同一批 gold 浅得多：
 # A09 向量第 1 位、P19 向量第 3 位。所以默认从 26 降到 20 —— 这是 Rerank P95
 # 进 1,500ms 门槛的必要条件，且实测不牺牲 Recall@5。
 # 变体多到把 per-variant 预算压得过浅时的下限：低于这个深度，CE 连
 # 融合顺序的头部都盖不住，级联就没有意义了，宁可超一点延迟。
-CASCADE_MIN_HEAD = _env_int("INKTABLE_CASCADE_MIN_HEAD", 8, 4, 40)
+CASCADE_MIN_HEAD = _env_int("ORDO_CASCADE_MIN_HEAD", 8, 4, 40)
 # 尾部逐位衰减系数：只用于在 CE 分数之下维持本地打分器给出的相对顺序
 CASCADE_TAIL_DECAY = 0.98
 
@@ -49,9 +49,9 @@ CASCADE_TAIL_DECAY = 0.98
 # 6 道题从第 1 名掉到第 2 名 —— 其中 M08「找出…成绩单 PDF」是文件名类
 # 问题，本地打分器的 filename_cov / type_match 特征本来答对，被 0.92 的
 # CE 权重压掉了。两者各有不可替代的信号，所以融合而不是替换。
-CASCADE_W_CROSS = _env_int("INKTABLE_CASCADE_W_CROSS", 68, 0, 100) / 100.0
-CASCADE_W_LOCAL = _env_int("INKTABLE_CASCADE_W_LOCAL", 24, 0, 100) / 100.0
-CASCADE_W_RRF = _env_int("INKTABLE_CASCADE_W_RRF", 8, 0, 100) / 100.0
+CASCADE_W_CROSS = _env_int("ORDO_CASCADE_W_CROSS", 68, 0, 100) / 100.0
+CASCADE_W_LOCAL = _env_int("ORDO_CASCADE_W_LOCAL", 24, 0, 100) / 100.0
+CASCADE_W_RRF = _env_int("ORDO_CASCADE_W_RRF", 8, 0, 100) / 100.0
 
 # 本地分权重按**本次查询是否真的有词法证据**缩放。
 #
@@ -68,7 +68,7 @@ CASCADE_W_RRF = _env_int("INKTABLE_CASCADE_W_RRF", 8, 0, 100) / 100.0
 # 本地权重本就不高，缩放能起作用的余地很小，基本处于休眠。机制保留是因为
 # 它针对的失效模式（改写类问题上本地特征全零）有明确机理，而 53 题里只有
 # 2-3 题落在这个模式上，样本量不足以判定；评测集扩大后应重新验证。
-CASCADE_LEX_FULL = _env_int("INKTABLE_CASCADE_LEX_FULL", 45, 5, 100) / 100.0
+CASCADE_LEX_FULL = _env_int("ORDO_CASCADE_LEX_FULL", 45, 5, 100) / 100.0
 # 词法门控：候选头部的最强 IDF 加权词覆盖 ≥ 该值时**整个跳过 CE**，直接用一级
 # 本地排名。0 = 关闭（默认，行为与不引入该门控逐字一致）。
 #
@@ -79,17 +79,17 @@ CASCADE_LEX_FULL = _env_int("INKTABLE_CASCADE_LEX_FULL", 45, 5, 100) / 100.0
 # 高于修好组最高 0.874 并不成立），所以这不是一条干净的分界线 —— 取 0.45 是因为
 # 它本来就是 `CASCADE_LEX_FULL`「本地完全可信」的那个点，不是为了刷指标挑的。
 # n=13，扩大评测集后必须重验。
-CASCADE_LEX_GATE = _env_int("INKTABLE_CASCADE_LEX_GATE", 45, 0, 100) / 100.0
+CASCADE_LEX_GATE = _env_int("ORDO_CASCADE_LEX_GATE", 45, 0, 100) / 100.0
 # CE 头部名额里分给「向量路名次」的比例。0 = 关闭（纯融合序）。
 # 默认 25：实测下界 —— 要同时装下 U02（融合第 12 位）与 P19（向量第 3 位），
 # K=20 时需要 15 个融合名额 + 5 个向量名额。见 _split_head 的实测依据。
-CASCADE_VEC_SHARE = _env_int("INKTABLE_CASCADE_VEC_SHARE", 25, 0, 90) / 100.0
+CASCADE_VEC_SHARE = _env_int("ORDO_CASCADE_VEC_SHARE", 25, 0, 90) / 100.0
 
 # 送进 CE 的单个候选文本上限（字符）。分片正文实测 p50 383 字、p90 956 字，
 # 而 CE 截断在 384 token —— 长分片是从**开头**截的，答案落在后半段就直接
 # 看不到。改为按查询词密度取窗口：同样的 token 预算下信息量更高，长文的
 # 批次成本也随最长序列一起降下来。
-CASCADE_FOCUS_CHARS = _env_int("INKTABLE_CASCADE_FOCUS_CHARS", 420, 120, 4000)
+CASCADE_FOCUS_CHARS = _env_int("ORDO_CASCADE_FOCUS_CHARS", 420, 120, 4000)
 
 
 def _focus_window(text: str, terms: list[str], budget: int) -> str:
@@ -430,7 +430,7 @@ class CascadeReranker:
     def _split_head(self, candidates: list[RerankInput], head_size: int):
         """选出交给 CE 的头部。
 
-        默认纯融合序（`INKTABLE_CASCADE_VEC_SHARE=0`，行为逐字不变）。
+        默认纯融合序（`ORDO_CASCADE_VEC_SHARE=0`，行为逐字不变）。
         置为 >0 时把该比例的名额分给**向量路名次**，其余仍按融合序。
 
         为什么要分：实测（`scripts/probe_gated_head_order.py`，真实库）在门控
@@ -719,7 +719,7 @@ def run_rerank(conn, query: str, candidates, *,
     # 环境变量优先于调用方偏好：评测与诊断要能全局钉死一种重排实现，
     # 而调用方偏好只是「没人指定时用哪个」。
     mode = (
-        os.environ.get("INKTABLE_RERANKER", "").strip().lower()
+        os.environ.get("ORDO_RERANKER", "").strip().lower()
         or (mode or "").strip().lower()
         or "auto"
     )
@@ -733,7 +733,7 @@ def run_rerank(conn, query: str, candidates, *,
         # P95 几乎不动 —— 因为 53 题里只有 4 题的词法证据弱到需要 CE。
         #
         # 没装资产时行为与改动前逐字一致，用户不会因为缺一个 279MB 模型而
-        # 拿到降级的检索；要退回旧行为用 `INKTABLE_RERANKER=local`。
+        # 拿到降级的检索；要退回旧行为用 `ORDO_RERANKER=local`。
         try:
             from app.retrieval import cross_encoder as _ce
 

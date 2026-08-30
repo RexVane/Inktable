@@ -32,9 +32,9 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8",
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.db.visibility import visible_content_exists  # noqa: E402
 
-DB = os.environ.get("INKTABLE_DB") or os.path.join(
+DB = os.environ.get("ORDO_DB") or os.path.join(
     os.path.expanduser("~"), "Library", "Application Support",
-    "Inktable", "library.db")
+    "Ordo", "library.db")
 
 
 def pct(part: int, whole: int) -> str:

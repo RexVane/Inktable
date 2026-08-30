@@ -3,7 +3,7 @@
 **为什么是导航面而不是证据面**
 
 marginalia 的 journal 会作为召回面参与检索，让 agent 复用上次的结论。
-Inktable 不能照搬：H8 要求答案每一行都引用**库内原文**，而 journal 存的是
+Ordo 不能照搬：H8 要求答案每一行都引用**库内原文**，而 journal 存的是
 模型自己的输出。把它当证据喂回上下文，模型就可能引用「自己上次说的话」，
 证据链断在那里，而四条后置校验看到的是一个格式合法的引用 —— 校验发现不了
 这种断裂。
@@ -25,7 +25,7 @@ import time
 
 from app.index.search import build_fts_query, segment_for_index
 
-log = logging.getLogger("inktable.journal")
+log = logging.getLogger("ordo.journal")
 
 # 单条记录的正文上限。日志是索引对象，不是归档：过长的回答对「找回上次
 # 查过什么」没有帮助，只会摊薄 BM25。

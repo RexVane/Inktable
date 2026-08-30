@@ -250,7 +250,7 @@ def _check_retrieval_config() -> dict:
     except ImportError as e:
         return {"ok": False, "error": f"import failed: {e}"}
     try:
-        preference = os.environ.get("INKTABLE_RERANKER", "").strip().lower() or "auto"
+        preference = os.environ.get("ORDO_RERANKER", "").strip().lower() or "auto"
         effective = preference
         if effective == "auto":
             effective = "cascade" if is_available() else "local"

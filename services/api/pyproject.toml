@@ -1,7 +1,7 @@
 [project]
-name = "inktable-api"
+name = "ordo-api"
 version = "0.3.0"
-description = "Local-first personal knowledge base sidecar for Inktable (indexes files in place; never moves originals)"
+description = "Local-first personal knowledge base sidecar for Ordo (indexes files in place; never moves originals)"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.scripts]
-inktable-api = "inktable_api:main"
+ordo-api = "ordo_api:main"
 
 [build-system]
 requires = ["uv_build>=0.12.3,<0.13.0"]

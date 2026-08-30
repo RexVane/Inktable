@@ -1,6 +1,6 @@
-appId: com.inktable.app
-productName: Inktable
-copyright: Inktable
+appId: com.ordo.app
+productName: Ordo
+copyright: Ordo
 
 directories:
   output: ../../dist
@@ -17,8 +17,8 @@ extraResources:
   - from: ../../services/api/dist
     to: sidecar
     filter:
-      - inktable-sidecar
-      - inktable-sidecar.exe
+      - ordo-sidecar
+      - ordo-sidecar.exe
 
 win:
   target:
@@ -46,7 +46,7 @@ mac:
   gatekeeperAssess: false
 
 dmg:
-  title: Inktable
+  title: Ordo
   contents:
     - x: 130
       y: 220

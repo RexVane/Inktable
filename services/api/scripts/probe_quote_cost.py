@@ -5,12 +5,12 @@
 后者是真代价，必须先量出来再决定 D 是否默认开启 —— 反过来做，就是在没有
 基线的情况下动引用可靠性，而这正是 CURRENT_STATUS 第十节记下过的教训。
 
-唯一变量是 `INKTABLE_QUOTE_CLAUSE`（本脚本内部开关），其余（模型、库、题目、
+唯一变量是 `ORDO_QUOTE_CLAUSE`（本脚本内部开关），其余（模型、库、题目、
 检索深度）完全相同。
 
 用法：
-    INKTABLE_OLLAMA_URL=http://127.0.0.1:18434 \\
-    INKTABLE_DB=<隔离库副本> \\
+    ORDO_OLLAMA_URL=http://127.0.0.1:18434 \\
+    ORDO_DB=<隔离库副本> \\
       .venv/Scripts/python.exe scripts/probe_quote_cost.py --n 12
 """
 
@@ -58,7 +58,7 @@ def main() -> int:
     parser.add_argument("--json", type=Path)
     args = parser.parse_args()
 
-    base = os.environ.get("INKTABLE_OLLAMA_URL", "http://127.0.0.1:11434")
+    base = os.environ.get("ORDO_OLLAMA_URL", "http://127.0.0.1:11434")
     llm.configure(f"{base}/v1", "ollama-no-key-needed", args.model)
     if not llm.is_configured():
         print("LLM 未配置")

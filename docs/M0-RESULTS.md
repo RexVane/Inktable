@@ -39,7 +39,7 @@ M0 的唯一目的：在写任何业务代码之前，确认技术栈能打成�
 | Electron 拉起 sidecar | ✓ | — | ✓ |
 | 退出后无孤儿进程 | ✓ | — | ✓ |
 
-**产物**：`dist/Inktable-0.1.0-arm64.dmg`（148MB，内含 34MB sidecar）
+**产物**：`dist/Ordo-0.1.0-arm64.dmg`（148MB，内含 34MB sidecar）
 
 最关键的一条：`vec0.dylib` 在冻结环境里能 `dlopen`。这是选 sqlite-vec 而非
 LanceDB 的全部前提（方案 §4.3），现在从推断变成了实测。
@@ -163,6 +163,6 @@ jieba 把「汝窑天青釉」切成 `汝窑天 / 青釉`。查「汝窑」时�
 
 ## SESSION_TOKEN 用 pop 导致重载后失效
 
-`os.environ.pop("INKTABLE_TOKEN")` 会删掉环境变量，
+`os.environ.pop("ORDO_TOKEN")` 会删掉环境变量，
 模块重载时读不到，测试里第二个用例起全部 401。改用 `get`。
 真正的隔离靠"不把令牌写进日志与响应"，不是靠删环境变量。

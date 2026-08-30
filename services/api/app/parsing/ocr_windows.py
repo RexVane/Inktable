@@ -21,7 +21,7 @@ import tempfile
 import time
 from pathlib import Path
 
-log = logging.getLogger("inktable.ocr.windows")
+log = logging.getLogger("ordo.ocr.windows")
 
 ENGINE_ID = "windows-media-ocr"
 ENGINE_LABEL = "Windows 系统 OCR"
@@ -70,7 +70,7 @@ if ($null -eq $engine) {
 }
 if ($null -eq $engine) { throw 'No Windows OCR language pack is installed' }
 
-$imagePath = [Environment]::GetEnvironmentVariable('INKTABLE_OCR_IMAGE')
+$imagePath = [Environment]::GetEnvironmentVariable('ORDO_OCR_IMAGE')
 if ([string]::IsNullOrWhiteSpace($imagePath)) { throw 'OCR image path is missing' }
 
 $file = Await-WinRt ([Windows.Storage.StorageFile]::GetFileFromPathAsync($imagePath)) `
@@ -145,7 +145,7 @@ def _run_powershell(
         raise FileNotFoundError("Windows PowerShell is unavailable")
     env = os.environ.copy()
     if image_path is not None:
-        env["INKTABLE_OCR_IMAGE"] = str(image_path.resolve())
+        env["ORDO_OCR_IMAGE"] = str(image_path.resolve())
     creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     return subprocess.run(
         [
@@ -222,7 +222,7 @@ def ocr_pdf(path: Path) -> tuple[list[tuple[int, str]], list[str]]:
     try:
         total_pages = doc.page_count
         limit = min(total_pages, OCR_MAX_PAGES)
-        with tempfile.TemporaryDirectory(prefix="inktable-ocr-win-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="ordo-ocr-win-") as tmp:
             for pno in range(limit):
                 if time.monotonic() - started > OCR_TOTAL_BUDGET:
                     warnings.append(

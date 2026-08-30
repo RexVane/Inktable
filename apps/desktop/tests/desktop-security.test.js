@@ -34,22 +34,22 @@ test('renderer content security policy forbids eval and network exfiltration', (
   assert.ok(policy, 'renderer must declare a Content Security Policy');
   assert.match(policy[1], /default-src 'self'/);
   // 渲染层不直连 sidecar（改走主进程代理）；唯一的连接出口是
-  // inkdoc:// 授权文档协议 —— 即便脚本被注入，也无法把库内数据外传。
+  // ordodoc:// 授权文档协议 —— 即便脚本被注入，也无法把库内数据外传。
   assert.doesNotMatch(policy[1], /connect-src[^;]*127\.0\.0\.1/);
   assert.match(policy[1], /object-src 'none'/);
   assert.doesNotMatch(policy[1], /unsafe-eval/);
   assert.doesNotMatch(policy[1], /script-src[^;]*unsafe-inline/);
   assert.match(policy[1], /script-src 'self' 'sha256-/);
-  // 原文查看器：唯一的连接出口是主进程 inkdoc:// 授权文档协议，
+  // 原文查看器：唯一的连接出口是主进程 ordodoc:// 授权文档协议，
   // 依旧没有任何 http(s) / 本机端口出口。
-  assert.match(policy[1], /connect-src inkdoc:/);
+  assert.match(policy[1], /connect-src ordodoc:/);
   assert.doesNotMatch(policy[1], /connect-src[^;]*(https?|ws|wss):/);
 });
 
-test('inkdoc scheme allows fetch from the file:// renderer', () => {
+test('ordodoc scheme allows fetch from the file:// renderer', () => {
   // Chromium treats custom-scheme fetch from file:// as CORS. Without
   // corsEnabled the original viewer is a blank page with a console error.
-  assert.match(main, /scheme: 'inkdoc'/);
+  assert.match(main, /scheme: 'ordodoc'/);
   assert.match(main, /corsEnabled: true/);
   assert.match(main, /supportFetchAPI: true/);
 });
@@ -113,8 +113,8 @@ test('renderer never receives the sidecar bearer token', () => {
   // 所有 sidecar 访问改走受控主进程代理。
   assert.match(preload, /apiRequest: \(req\) => ipcRenderer\.invoke\('api:request', req\)/);
   assert.match(preload, /api:stream-start/);
-  assert.match(renderer, /window\.inktable\.apiRequest\(/);
-  assert.match(renderer, /window\.inktable\.apiStream\(/);
+  assert.match(renderer, /window\.ordo\.apiRequest\(/);
+  assert.match(renderer, /window\.ordo\.apiStream\(/);
   assert.doesNotMatch(rendererScripts, /fetch\('http:\/\/127\.0\.0\.1/);
 });
 
@@ -300,7 +300,7 @@ test('library UI keeps the filesystem read-only and treats cards as derived data
   // 提示横幅已按用户要求移除：知识馆模式不再显示派生层说明
   assert.doesNotMatch(libraryCss, /原始文件不会被移动、复制或改名/);
   assert.match(library, /真实文件来源/);
-  assert.match(library, /window\.inktable\.revealInFinder\(path\)/);
+  assert.match(library, /window\.ordo\.revealInFinder\(path\)/);
   assert.match(library, /item\.summary/);
   assert.match(library, /检索专用摘要不会在这里展示/);
   assert.match(library, /面向用户 · 与检索摘要分离/);
@@ -331,7 +331,7 @@ test('main process has single-instance, key-clear, and timeout cleanup guards', 
   assert.match(main, /trashFileById/);
   assert.doesNotMatch(main, /ipcMain\.handle\('shell:trash'/);
   assert.doesNotMatch(rendererScripts, /trashItem\(/);
-  assert.match(main, /env\.INKTABLE_DATA_DIR = currentDataDir\(\)/);
+  assert.match(main, /env\.ORDO_DATA_DIR = currentDataDir\(\)/);
   assert.match(main, /copyDataDirectory/);
   assert.match(main, /\/db\/integrity_check/);
   assert.match(main, /writeJsonAtomic\(dataDirConfigPath\(\)/);

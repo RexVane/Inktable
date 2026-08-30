@@ -1,4 +1,4 @@
-# Inktable 0.3.0 发布说明
+# Ordo 0.3.0 发布说明
 
 **日期**：2026-08-13
 **定位**：体验重构版。0.2.0 打通了「能查、能问、能回溯」的知识管线，
@@ -57,7 +57,7 @@
   重建表并清空 `embedding_model_id`，由既有回填路径分批重嵌全库。
 - 打包收益：sidecar 不再捆绑模型权重与 tokenizers/safetensors 原生库，
   仓库删除约 770 MB 模型文件。
-- 环境变量 `INKTABLE_OLLAMA_URL` 可指向非默认 Ollama 地址。
+- 环境变量 `ORDO_OLLAMA_URL` 可指向非默认 Ollama 地址。
 
 ## 语义向量补齐（关键修复）
 
@@ -76,7 +76,7 @@
 - **模型配置**：AI 问答接口表单 + 本地向量模型状态卡（读 `/health`）。
 - **数据位置可迁移**：选择新目录后自动完成 停服务 → 整体搬迁（数据库/
   备份/保全副本，跨卷回退为复制校验删除）→ 记录配置 → 以
-  `INKTABLE_DATA_DIR` 重启 sidecar → `POST /system/rebase_preserved`
+  `ORDO_DATA_DIR` 重启 sidecar → `POST /system/rebase_preserved`
   重写库内保全副本路径前缀。
 
 ## cc-switch 导入与真实连接检测
@@ -186,7 +186,7 @@
   无 provider failure 或 degraded；A13、S17 为显式 fallback。
 - Windows sidecar SHA-256：
   `2670F7BFFA026E8FCBB82D0D30010DEFE0EF634FC0932D3DF647D046AE77B986`。
-- Windows NSIS：`dist/Inktable-0.3.0-Setup-x64.exe`，194,761,734 bytes，
+- Windows NSIS：`dist/Ordo-0.3.0-Setup-x64.exe`，194,761,734 bytes，
   SHA-256 `E24D5588968B85B380A3A9DC6A407EAEF88FF8973F1C776F47CBF08CB53006E8`。
 - 冻结 sidecar 使用独立数据库收录真实无文本层 PDF，系统 OCR 识别出
   `INKTABLE OCR 2048` 并可全文搜索；检索 trace 为 `local-static-v3`，
@@ -203,7 +203,7 @@
 8/16 那份安装包早于 nebula 界面、marginalia 三项借鉴与语料/索引治理，已过时。
 本次按同一条 `npm run dist` 路径重出，产物与实测：
 
-- Windows NSIS：`dist/Inktable-0.3.0-Setup-x64.exe`，194,854,395 bytes，
+- Windows NSIS：`dist/Ordo-0.3.0-Setup-x64.exe`，194,854,395 bytes，
   SHA-256 `FE7D4F32221B110C528053F1D969683D641B52CDC3BEC1128D7983779238D66E`。
 - Windows sidecar：95,711,954 bytes，SHA-256
   `4C9CD9FB1C464201900E78A5C0F1CBC56DAE21A51695843E4B25A577F7BCF1A9`；
@@ -223,7 +223,7 @@
 
 **签名：不做，这是明确决定而非遗留项。** `electron-builder` 日志里那几行
 `signing with signtool.exe` 是尝试，没有证书就什么也没签；实测
-`Get-AuthenticodeSignature` 对安装包与 `Inktable.exe` 均返回 **NotSigned**。
+`Get-AuthenticodeSignature` 对安装包与 `Ordo.exe` 均返回 **NotSigned**。
 用户决定不购买代码签名证书，自用时接受首次运行的 SmartScreen 警告
 （2026-08-26）。因此本项**不再算作发布阻塞项** —— 它是一次权衡的结果：
 一张 OV/EV 证书按年付费，而这个工具的分发范围就是本机。

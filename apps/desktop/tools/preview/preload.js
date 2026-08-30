@@ -1,7 +1,7 @@
 // 预览工具的桥接桩：与正式 preload 暴露相同的 API 形状，数据全为演示值。
 const { contextBridge } = require('electron');
 
-contextBridge.exposeInMainWorld('inktable', {
+contextBridge.exposeInMainWorld('ordo', {
   getSidecarInfo: async () => ({ port: 45999, token: 'preview-token' }),
   getSidecarStatus: async () => ({ state: 'ready', revision: 1 }),
   revealInFinder: async () => {},

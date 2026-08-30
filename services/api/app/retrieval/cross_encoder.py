@@ -83,13 +83,13 @@ MODELS: dict[str, ModelSpec] = {
 def active_spec() -> ModelSpec:
     """当前生效的 CE 模型。
 
-    显式指定（`INKTABLE_RERANK_MODEL`）优先；否则**按偏好顺序挑已装上的那个**。
+    显式指定（`ORDO_RERANK_MODEL`）优先；否则**按偏好顺序挑已装上的那个**。
 
     「挑已装上的」这条不能省：若默认写死成新模型，已经装了旧模型的用户会因为
     新模型不存在而让 `is_available()` 返回 False，`auto` 静默退回一级本地打分器
     —— 表现是「升级之后检索变差了」，而没有任何报错。
     """
-    key = os.environ.get("INKTABLE_RERANK_MODEL", "").strip()
+    key = os.environ.get("ORDO_RERANK_MODEL", "").strip()
     if key:
         return MODELS.get(key, MODELS[_PREFERRED[0]])
     for candidate in _PREFERRED:
@@ -104,7 +104,7 @@ def _spec_installed(spec: ModelSpec) -> bool:
 
 
 def _spec_dir(spec: ModelSpec) -> Path:
-    override = os.environ.get("INKTABLE_RERANK_MODEL_DIR", "").strip()
+    override = os.environ.get("ORDO_RERANK_MODEL_DIR", "").strip()
     if override:
         return Path(override).expanduser()
     return APP_DIR / "models" / spec.model_id
@@ -116,7 +116,7 @@ def _spec_dir(spec: ModelSpec) -> Path:
 #
 # 但要记住 bge 更**稳**：把头部换成纯融合序 K=26 时 bge 仍是 96.2%，
 # mMiniLM 掉到 94.3%。也就是说 mMiniLM 依赖「向量配额把头部收窄」这个条件。
-# 评测集扩大后若 mMiniLM 退化，用 INKTABLE_RERANK_MODEL=bge-base 一个变量切回。
+# 评测集扩大后若 mMiniLM 退化，用 ORDO_RERANK_MODEL=bge-base 一个变量切回。
 _PREFERRED = ("mminilm-l12-h384", "bge-base")
 
 
@@ -145,7 +145,7 @@ def resolved_max_tokens() -> int:
     做成函数是为了只有一处默认值：`/health` 要把生效值报出来（发布产物是否
     真的含发布配置只能靠它看出来），若两边各写一个 192，改一处就会静默错配。
     """
-    return _env_int("INKTABLE_RERANK_MAX_TOKENS", DEFAULT_MAX_TOKENS, 64, 512)
+    return _env_int("ORDO_RERANK_MAX_TOKENS", DEFAULT_MAX_TOKENS, 64, 512)
 
 
 def is_available() -> bool:
@@ -153,7 +153,7 @@ def is_available() -> bool:
 
     不是「默认模型装上了」—— 那会让装了旧模型的用户在换默认之后静默降级。
     """
-    if os.environ.get("INKTABLE_RERANK_MODEL", "").strip():
+    if os.environ.get("ORDO_RERANK_MODEL", "").strip():
         return _spec_installed(active_spec())
     return any(_spec_installed(spec) for spec in MODELS.values())
 
@@ -185,7 +185,7 @@ class OnnxCrossEncoder:
         # 28 线程 1336ms —— 拉满核数反而变慢，int8 GEMM 在这个尺寸上会被
         # 线程同步开销吃掉。上限取 14，够用且不超订。
         options.intra_op_num_threads = _env_int(
-            "INKTABLE_RERANK_THREADS",
+            "ORDO_RERANK_THREADS",
             max(1, min((os.cpu_count() or 4) // 2, 14)),
             1, 64,
         )
@@ -215,7 +215,7 @@ class OnnxCrossEncoder:
         self.tokenizer.enable_padding(pad_id=1, pad_token="<pad>")
         self.input_names = {item.name for item in self.session.get_inputs()}
         try:
-            batch_size = int(os.environ.get("INKTABLE_RERANK_BATCH", "8"))
+            batch_size = int(os.environ.get("ORDO_RERANK_BATCH", "8"))
         except ValueError:
             batch_size = 8
         self.batch_size = max(1, min(batch_size, 64))

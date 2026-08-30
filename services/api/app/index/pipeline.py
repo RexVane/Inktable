@@ -57,7 +57,7 @@ def _content_savepoint(conn: sqlite3.Connection):
     创建的空外层事务。调用方已有事务时只 ROLLBACK TO 本 content 的 savepoint，
     调用方在进入本函数前的写入不会被回滚。
     """
-    name = f"inktable_content_{next(_savepoint_ids)}"
+    name = f"ordo_content_{next(_savepoint_ids)}"
     owns_transaction = not conn.in_transaction
     if owns_transaction:
         conn.execute("BEGIN")
@@ -459,7 +459,7 @@ def _embed_chunks(conn, inserted: list[tuple[int, object]]) -> str | None:
     )
 
     if reused:
-        logging.getLogger("inktable.pipeline").info(
+        logging.getLogger("ordo.pipeline").info(
             "向量复用 %d 片，仅编码 %d 片", reused, len(need))
     return model_id
 
@@ -546,7 +546,7 @@ def embed_backfill(
         [m.model_id, *content_ids, m.model_id],
     )
     remaining = conn.execute(remaining_sql, remaining_params).fetchone()["c"]
-    logging.getLogger("inktable.pipeline").info(
+    logging.getLogger("ordo.pipeline").info(
         "向量补齐 %d 片，剩余 %d 片", len(rows), remaining)
     return {"embedded": len(rows), "remaining": remaining,
             "available": True, "model": m.model_id}
@@ -826,7 +826,7 @@ def index_pending(
                 if result["state"] not in {"parse_failed", "unsupported"}:
                     break
         except Exception as e:  # 单文档已由 savepoint 回滚；批处理继续其余文档
-            logging.getLogger("inktable.pipeline").exception(
+            logging.getLogger("ordo.pipeline").exception(
                 "索引 content_id=%s 失败，已回滚该文档：%s", row["id"], e
             )
             conn.execute(

@@ -1,4 +1,4 @@
-"""Document relationships derived from Inktable's existing chunk vectors.
+"""Document relationships derived from Ordo's existing chunk vectors.
 
 No extra embedding request is required. Each visible Library item samples a
 bounded set of active child chunks, averages their already-normalized bge-m3
@@ -9,7 +9,7 @@ Top-K neighbours and their cosine must clear ``min_score``. This avoids turning
 an unrelated personal library into a visually busy but meaningless graph.
 
 Planning is read/CPU-only and can be slow. Applying the resulting edges is a
-short transaction under Inktable's single-writer lock.
+short transaction under Ordo's single-writer lock.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ MAX_TOP_K = 24
 DEFAULT_CHUNKS_PER_ITEM = 16
 MAX_CHUNKS_PER_ITEM = 48
 DEFAULT_MIN_SCORE = float(
-    os.environ.get("INKTABLE_LIBRARY_RELATION_MIN_SCORE", "0.60")
+    os.environ.get("ORDO_LIBRARY_RELATION_MIN_SCORE", "0.60")
 )
 RELATION_SOURCE = "embedding-centroid-v1"
 _QUERY_BLOCK = 128

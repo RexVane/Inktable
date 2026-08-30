@@ -2,8 +2,8 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-+bogcxA9rN61l4U27NYWKv0PEc6ckm34si88nWr7EMQ=' 'sha256-6VP9imWeJ3KKwg0jtWFbnNpVIG8IOY8BIjal2pFJRhQ='; style-src 'self' 'unsafe-inline'; connect-src inkdoc:; worker-src 'self' inkdoc:; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'" />
-<title>Inktable</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-+bogcxA9rN61l4U27NYWKv0PEc6ckm34si88nWr7EMQ=' 'sha256-1ZZczYBfO+tXru2A5HSg4dt1h0RIw5GmWuSEx7nyMZk='; style-src 'self' 'unsafe-inline'; connect-src ordodoc:; worker-src 'self' ordodoc:; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'" />
+<title>Ordo</title>
 <style>
   /* 结构性 reset —— 全部视觉规则集中在 workbench.css，避免两处定义漂移 */
   * { box-sizing: border-box; }
@@ -161,7 +161,7 @@
 <script>
 // 平台类：非 macOS 没有窗口红绿灯，CSS 据此去掉预留空隙（见 workbench.css 平台适配段）
 document.documentElement.classList.add(
-  'is-' + ((window.inktable && window.inktable.platform) || 'unknown'));
+  'is-' + ((window.ordo && window.ordo.platform) || 'unknown'));
 
 const PAGE_SIZE = 300;
 let sources = [], files = [], activeSource = null, stats = null;
@@ -461,7 +461,7 @@ function showEvidence(evidence) {
       '</div>' : '') +
     '</div>';
   var button = document.getElementById('revealEvidence');
-  if (button) button.onclick = function () { window.inktable.revealInFinder(path); };
+  if (button) button.onclick = function () { window.ordo.revealInFinder(path); };
   var detailButton = document.getElementById('openEvidenceDetail');
   if (detailButton) detailButton.onclick = function () {
     showFileDetail({ file_id: fileId, name: evidence.file_name, path: path },
@@ -502,11 +502,11 @@ function renderFileDetail(detail) {
     '<div class="detail-sections" id="readerBody"></div>' +
     '<div class="detail-more" id="readerFoot"></div></div>';
   var button = document.getElementById('revealEvidence');
-  if (button) button.onclick = function () { window.inktable.revealInFinder(path); };
+  if (button) button.onclick = function () { window.ordo.revealInFinder(path); };
   var openBtn = document.getElementById('openFileBtn');
   if (openBtn) openBtn.onclick = function () {
-    if (window.inktable.openPath) window.inktable.openPath(path);
-    else window.inktable.revealInFinder(path);
+    if (window.ordo.openPath) window.ordo.openPath(path);
+    else window.ordo.revealInFinder(path);
   };
   var trashBtn = document.getElementById('trashFileBtn');
   if (trashBtn) trashBtn.onclick = function () {
@@ -538,8 +538,8 @@ function renderFileDetail(detail) {
   }
 }
 
-/* ---------- 原文查看器（inkdoc:// + PDF.js / docx-preview / marked） ----------
-   字节通道：主进程 inkdoc:// 协议（每次请求过 sidecar 授权）。
+/* ---------- 原文查看器（ordodoc:// + PDF.js / docx-preview / marked） ----------
+   字节通道：主进程 ordodoc:// 协议（每次请求过 sidecar 授权）。
    PDF：页面 canvas 懒渲染（滚到才画），引用按页码直达 + 文字层定位高亮。
    DOCX：docx-preview 保版式渲染，按片段文本定位高亮。
    MD：marked 渲染 + DOMPurify 消毒（md 是用户文件内容，可以内嵌脚本）。
@@ -601,8 +601,8 @@ function decodeBytes(buf) {
   return new TextDecoder('utf-8').decode(bytes);   // 兜底：坏字节变 U+FFFD
 }
 
-function inkdocUrl(fileId, name) {
-  return 'inkdoc://file/' + encodeURIComponent(String(fileId)) + '/' +
+function ordodocUrl(fileId, name) {
+  return 'ordodoc://file/' + encodeURIComponent(String(fileId)) + '/' +
     encodeURIComponent(name || '');
 }
 
@@ -652,12 +652,12 @@ function readResponseBytesLimited(resp, limit) {
 function fetchOriginalBytes(fileId, name, limit, signal) {
   // DOCX 需要完整 ZIP，但必须有硬上限；PDF 不走这里，直接把 URL 交给
   // PDF.js，才能保留 Range/流式加载。
-  return fetch(inkdocUrl(fileId, name), { signal: signal }).then(function (resp) {
+  return fetch(ordodocUrl(fileId, name), { signal: signal }).then(function (resp) {
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     return readResponseBytesLimited(resp, limit);
   }).catch(function (err) {
     if (signal && signal.aborted) throw err;
-    return window.inktable.apiRequest({
+    return window.ordo.apiRequest({
       path: '/files/' + encodeURIComponent(String(fileId)) + '/raw',
       method: 'GET',
     }).then(function (result) {
@@ -709,7 +709,7 @@ function loadPdfJs() {
       // 协议即便 standard:true 也不被 Chromium 当作合法的 module 来源
       // （报 "Failed to fetch dynamically imported module"）。库本体已从
       // file:// 成功加载，worker 同源同理。
-      // cmaps / 字体仍用 inkdoc://：那两类是 fetch 取的，file:// 下会被判跨源。
+      // cmaps / 字体仍用 ordodoc://：那两类是 fetch 取的，file:// 下会被判跨源。
       lib.GlobalWorkerOptions.workerSrc =
         new URL('./vendor/pdfjs/pdf.worker.min.mjs', document.baseURI).href;
       return lib;
@@ -768,10 +768,10 @@ function openPdfOriginal(fileId, name, jump, body, token) {
   return loadPdfJs().then(function (pdfjsLib) {
     if (token !== originalViewToken) return null;
     session.loadingTask = pdfjsLib.getDocument({
-      url: inkdocUrl(fileId, name),
-      cMapUrl: 'inkdoc://app/vendor/pdfjs/cmaps/',
+      url: ordodocUrl(fileId, name),
+      cMapUrl: 'ordodoc://app/vendor/pdfjs/cmaps/',
       cMapPacked: true,
-      standardFontDataUrl: 'inkdoc://app/vendor/pdfjs/standard_fonts/',
+      standardFontDataUrl: 'ordodoc://app/vendor/pdfjs/standard_fonts/',
     });
     return session.loadingTask.promise.then(function (doc) {
       if (token !== originalViewToken || !doc) return null;
@@ -1212,7 +1212,7 @@ async function showWeeklyReport(force) {
         .then(function () { toast('已复制'); });
     };
     document.getElementById('reportReveal').onclick = function () {
-      window.inktable.revealInFinder(r.path);
+      window.ordo.revealInFinder(r.path);
     };
     document.getElementById('reportRegen').onclick = function () {
       showWeeklyReport(true);
@@ -1320,12 +1320,12 @@ function showSearchFileDetail(file) {
     (path ? '<div class="file-detail-path">' + esc(path) + '</div><button class="text-button" id="revealEvidence" type="button">在 Finder 中显示</button>' : '') + '</div>' +
     '<div class="detail-sections">' + (snippets.length ? snippets.map(detailSectionHtml).join('') : '<div class="detail-empty">没有可显示的命中片段</div>') + '</div></div>';
   var button = document.getElementById('revealEvidence');
-  if (button) button.onclick = function () { window.inktable.revealInFinder(path); };
+  if (button) button.onclick = function () { window.ordo.revealInFinder(path); };
 }
 
 async function api(path, opts = {}) {
   // 经主进程受控代理访问 sidecar；鉴权令牌只存在于主进程，渲染层拿不到。
-  const result = await window.inktable.apiRequest({
+  const result = await window.ordo.apiRequest({
     path: path,
     method: opts.method || 'GET',
     body: typeof opts.body === 'string' ? opts.body : undefined,
@@ -1337,7 +1337,7 @@ async function api(path, opts = {}) {
 
 function apiStream(path, payload, onEvent) {
   // 流式同样经主进程代理：主进程解析 SSE 后逐条回传 (event, data)。
-  return window.inktable.apiStream(path, payload || {}, onEvent);
+  return window.ordo.apiStream(path, payload || {}, onEvent);
 }
 
 function fmtSize(b) {
@@ -1596,7 +1596,7 @@ function renderRows() {
       showFileDetail(files[idx]);
     };
     r.ondblclick = function () {
-      window.inktable.revealInFinder(decodeURIComponent(r.dataset.path));
+      window.ordo.revealInFinder(decodeURIComponent(r.dataset.path));
     };
     r.oncontextmenu = function (e) {
       e.preventDefault();
@@ -1650,7 +1650,7 @@ async function removeFileFromLibrary(file) {
 
 async function trashFile(file) {
   try {
-    var result = await window.inktable.trashFile(file.file_id || file.id);
+    var result = await window.ordo.trashFile(file.file_id || file.id);
     if (result && result.cancelled) return;
     if (!result || !result.ok) {
       toast('删除失败：' + ((result && result.error) || '未知错误'));
@@ -1889,7 +1889,7 @@ function renderHits(result, q) {
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); r.onclick(); }
     };
     r.ondblclick = function () {
-      window.inktable.revealInFinder(decodeURIComponent(r.dataset.path));
+      window.ordo.revealInFinder(decodeURIComponent(r.dataset.path));
     };
   });
 }
@@ -2075,7 +2075,7 @@ function bindQaThread(el) {
       if (citation) showEvidence(citation);
     };
     r.ondblclick = function () {
-      window.inktable.revealInFinder(decodeURIComponent(r.dataset.path));
+      window.ordo.revealInFinder(decodeURIComponent(r.dataset.path));
     };
   });
   el.querySelectorAll('.refs-more').forEach(function (b) {
@@ -2951,9 +2951,9 @@ function applyTheme() {
   // 原生 chrome（右键菜单、原生滚动条）跟着走深浅，否则深色主题下会露出
   // 一圈浅色系统控件。Windows 的窗口控件叠加层还需要**确切颜色** —— 从
   // CSS 现场读出，这样 CSS 始终是唯一颜色来源，加主题不必改主进程。
-  if (window.inktable.setTheme) {
+  if (window.ordo.setTheme) {
     var cs = getComputedStyle(document.documentElement);
-    window.inktable.setTheme({
+    window.ordo.setTheme({
       mode: LIGHT_THEMES[id] ? 'light' : 'dark',
       color: hexFromCss(cs.getPropertyValue('--shell')),
       symbolColor: hexFromCss(cs.getPropertyValue('--ink')),
@@ -3024,7 +3024,7 @@ async function renderGeneralPane(pane) {
         '<button class="mini" id="dataDirChange">更改位置…</button></div></div>';
   bindSeg('zoomSeg', function (v) {
     localStorage.setItem('uiZoom', v);
-    if (window.inktable.setZoom) window.inktable.setZoom(parseFloat(v));
+    if (window.ordo.setZoom) window.ordo.setZoom(parseFloat(v));
   });
   bindSeg('followSeg', function (v) {
     localStorage.setItem('uiFollowSystem', v);
@@ -3081,13 +3081,13 @@ async function bindDataDirRow() {
   var label = document.getElementById('dataDirLabel');
   var btn = document.getElementById('dataDirChange');
   if (!label || !btn) return;
-  if (!window.inktable.dataGet) {
-    label.textContent = '~/Library/Application Support/Inktable';
+  if (!window.ordo.dataGet) {
+    label.textContent = '~/Library/Application Support/Ordo';
     btn.style.display = 'none';
     return;
   }
   try {
-    var info = await window.inktable.dataGet();
+    var info = await window.ordo.dataGet();
     label.textContent = String(info.dir || '').replace(new RegExp('^/Users/[^/]+'), '~') +
       (info.isDefault ? '（默认）' : '');
   } catch (e) { label.textContent = '读取失败'; }
@@ -3099,7 +3099,7 @@ async function bindDataDirRow() {
     var hint = document.getElementById('sheetHint');
     if (hint) hint.textContent = '正在迁移数据…';
     try {
-      var r = await window.inktable.dataChange();
+      var r = await window.ordo.dataChange();
       if (r.canceled) { if (hint) hint.textContent = ''; return; }
       if (r.ok) {
         if (hint) hint.textContent = '';
@@ -3186,7 +3186,7 @@ var modelPaneGen = 0;
 async function renderModelPane(pane) {
   var gen = ++modelPaneGen;
   document.getElementById('sheetSub').textContent = '模型配置：问答 / 知识馆整理 / 向量';
-  var savedAll = await window.inktable.llmGet();
+  var savedAll = await window.ordo.llmGet();
   var slots = (savedAll && savedAll.slots) || {};
   // 空表单的 Ollama 预填地址由**后端探测**给出（见 app/config/models.py）：
   // 11434 是官方默认，但 Windows 上常被保留端口段占掉而改口。界面不再自己
@@ -3414,7 +3414,7 @@ async function renderModelPane(pane) {
         var cfg = cfgOf(slot);
         setHint(slot, '保存中…');
         try {
-          await window.inktable.llmSet(slot, cfg);
+          await window.ordo.llmSet(slot, cfg);
         } catch (e) {
           setHint(slot, '保存失败：' + e.message);
           return;
@@ -3448,7 +3448,7 @@ async function renderModelPane(pane) {
         return fillModelList(slot, false);
       });
       bindClick('clear_' + slot, async function () {
-        await window.inktable.llmSet(slot, { clear: true });
+        await window.ordo.llmSet(slot, { clear: true });
         if (slot === 'qa') {
           try { updateModelState(await api('/settings/llm')); } catch (e) {}
         }
@@ -3689,7 +3689,7 @@ document.getElementById('sheet').onclick = function (e) {
 };
 
 async function addDirectorySource(nameHint) {
-  const dir = await window.inktable.pickDirectory();
+  const dir = await window.ordo.pickDirectory();
   if (!dir) return;
   const hint = document.getElementById('sheetHint');
   const base = dir.split(/[\\/]/).filter(Boolean).slice(-1)[0] || '所选目录';
@@ -3839,8 +3839,8 @@ function requestApplicationResume(recovered) {
 
 // 启动即应用保存的界面偏好（缩放 / 主题）；旧 preload 没有这些桥则跳过
 try {
-  if (window.inktable.setZoom) {
-    window.inktable.setZoom(parseFloat(localStorage.getItem('uiZoom') || '1') || 1);
+  if (window.ordo.setZoom) {
+    window.ordo.setZoom(parseFloat(localStorage.getItem('uiZoom') || '1') || 1);
   }
   applyTheme();
   // 跟随系统时，系统外观变化要当场重算家族成员（不必重启）。
@@ -3854,8 +3854,8 @@ restoreQaThread();
 initSplitters();
 
 // 全局快捷键（⌥Space）呼出 → 回列表页并聚焦搜索框
-if (window.inktable.onFocusSearch) {
-  window.inktable.onFocusSearch(function () {
+if (window.ordo.onFocusSearch) {
+  window.ordo.onFocusSearch(function () {
     if (detailPageOpen) showListPage();
     var q = document.getElementById('q');
     q.focus();
@@ -3863,11 +3863,11 @@ if (window.inktable.onFocusSearch) {
   });
 }
 
-if (window.inktable && typeof window.inktable.onSidecar === 'function') {
-  window.inktable.onSidecar(handleSidecarStatus);
+if (window.ordo && typeof window.ordo.onSidecar === 'function') {
+  window.ordo.onSidecar(handleSidecarStatus);
 } else {
   // 开发/旧 preload 兼容：若能直接取得可用连接信息，仍可正常启动。
-  window.inktable.getSidecarInfo().then(function (info) {
+  window.ordo.getSidecarInfo().then(function (info) {
     handleSidecarStatus(info || { state: 'failed', error: 'sidecar 未就绪' });
   });
 }

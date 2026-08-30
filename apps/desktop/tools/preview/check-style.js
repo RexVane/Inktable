@@ -29,7 +29,7 @@ app.whenReady().then(async () => {
     })()`, true);
   console.log(JSON.stringify(result, null, 2));
   const image = await win.webContents.capturePage({ x: 924, y: 520, width: 356, height: 300 });
-  require('fs').writeFileSync('/tmp/inktable-ui-after/dark-composer-crop.png', image.toPNG());
+  require('fs').writeFileSync('/tmp/ordo-ui-after/dark-composer-crop.png', image.toPNG());
   console.log('已保存 dark-composer-crop.png');
   app.quit();
 });

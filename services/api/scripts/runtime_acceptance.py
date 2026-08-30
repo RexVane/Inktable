@@ -26,8 +26,8 @@ class Sidecar:
     def __init__(self, *, ollama_url: str, executable: Path | None = None):
         self.token = secrets.token_urlsafe(24)
         env = os.environ.copy()
-        env["INKTABLE_TOKEN"] = self.token
-        env["INKTABLE_OLLAMA_URL"] = ollama_url
+        env["ORDO_TOKEN"] = self.token
+        env["ORDO_OLLAMA_URL"] = ollama_url
         command = [str(executable.resolve())] if executable else [
             sys.executable, "-m", "app.main",
         ]

@@ -1,4 +1,4 @@
-"""FastAPI router for the Inktable AI Library.
+"""FastAPI router for the Ordo AI Library.
 
 The router is built from injected database/lock/auth dependencies so this
 module stays independent from ``app.main`` and can be tested in isolation.
@@ -184,7 +184,7 @@ def create_library_router(
     def post_sync() -> dict:
         # Sync is deterministic metadata maintenance. It never touches the
         # physical filesystem, but it is still a database write and therefore
-        # participates in Inktable's single-writer lock.
+        # participates in Ordo's single-writer lock.
         with write_lock:
             conn = db_provider()
             try:

@@ -58,7 +58,7 @@ def _skip_reason(s: ScanStats) -> str:
             return field
     return "skipped"
 
-log = logging.getLogger("inktable.watch_service")
+log = logging.getLogger("ordo.watch_service")
 
 # 最近活动日志保留条数 —— 给界面"实时动态"用
 ACTIVITY_LIMIT = 50
@@ -131,7 +131,7 @@ class WatchService:
                 self._scan_stop.clear()
                 self._scan_thread = threading.Thread(
                     target=self._scan_loop,
-                    name="inktable-source-scan",
+                    name="ordo-source-scan",
                     daemon=True,
                 )
                 self._scan_thread.start()
@@ -418,7 +418,7 @@ class WatchService:
         self._reconcile_thread = threading.Thread(
             target=self._reconcile_loop,
             args=(initial_delay,),
-            name="inktable-reconcile",
+            name="ordo-reconcile",
             daemon=True,
         )
         self._reconcile_thread.start()

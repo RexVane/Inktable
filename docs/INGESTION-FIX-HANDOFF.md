@@ -1,8 +1,8 @@
-# Inktable 收录修复最终记录
+# Ordo 收录修复最终记录
 
 **完成日期**：2026-08-16（UTC+8）  
 **状态**：清理、原子切换、补扫、向量回填和真实运行时验收均已完成。  
-**安全边界**：所有清理仅修改 Inktable 数据库，未删除、移动或改写磁盘上的
+**安全边界**：所有清理仅修改 Ordo 数据库，未删除、移动或改写磁盘上的
 任何用户原文件。
 
 ## 1. 根因与修复结论
@@ -30,13 +30,13 @@
 主库：
 
 ```text
-C:\Users\guica\Library\Application Support\Inktable\library.db
+C:\Users\guica\Library\Application Support\Ordo\library.db
 ```
 
 清理前完整恢复备份：
 
 ```text
-D:\AIApp\Inktable\backups\library-pre-cleanup-20260815-235847.db
+D:\AIApp\Ordo\backups\library-pre-cleanup-20260815-235847.db
 SHA-256 BD0CD947376B8C6978A6F2168ED39B5ECD259316F901E8C070441143EA8AB5E3
 backup_is_restorable=True
 ```
@@ -44,7 +44,7 @@ backup_is_restorable=True
 原污染库原样归档：
 
 ```text
-C:\Users\guica\Library\Application Support\Inktable\library.noisy-20260816-032955.db
+C:\Users\guica\Library\Application Support\Ordo\library.noisy-20260816-032955.db
 ```
 
 逐行删除虚拟表和原库内重建都实测为小时级，最终采用“迁移保留集到新库”的

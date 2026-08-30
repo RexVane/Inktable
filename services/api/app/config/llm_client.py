@@ -33,7 +33,7 @@ class LLMClientError(RuntimeError):
 
 
 # 同 qa/llm.py：中转站拦截 Python-urllib 默认 UA，必须自报家门
-USER_AGENT = "Inktable/0.3"
+USER_AGENT = "Ordo/0.3"
 
 
 def _strip_thinking(text: str) -> str:

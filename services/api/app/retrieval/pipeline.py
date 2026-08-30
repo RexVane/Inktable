@@ -276,7 +276,7 @@ def run(conn, query: str, *, route_limit: int = 100,
     """Run the stable V1 retrieval stages and return a non-persistent trace.
 
     ``reranker`` 只是「没人指定时用哪个重排实现」的偏好，环境变量
-    `INKTABLE_RERANKER` 始终优先。重排是固定架构阶段（PLAN §0 决策 3），
+    `ORDO_RERANKER` 始终优先。重排是固定架构阶段（PLAN §0 决策 3），
     实现可替换 —— 但**搜索与问答共用同一条管线**是 v7 的明确决策，
     给两边配不同实现会让「搜到的」与「答出来的」证据顺序分叉，
     不要在没有明确决定的情况下这么做。

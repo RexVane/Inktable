@@ -9,7 +9,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-REAL = Path.home() / "Library" / "Application Support" / "Inktable" / "library.db"
+REAL = Path.home() / "Library" / "Application Support" / "Ordo" / "library.db"
 WORKING = Path(__file__).resolve().parents[3] / "output" / "release-gate-20260817" / "library-working.db"
 
 WHITELIST = {".txt", ".docx", ".pdf", ".md", ".csv", ".html", ".htm"}

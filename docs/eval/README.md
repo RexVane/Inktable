@@ -1,4 +1,4 @@
-# Inktable Retrieval Evaluation
+# Ordo Retrieval Evaluation
 
 The authoritative question set lives in `services/api/tests/evalset.py`, with
 stable evidence annotations in `gold-evidence-spans.json`. The v8 contract has
@@ -189,7 +189,7 @@ between "exact citation integrity 100%" (a format property) and "Gold-evidence
 citation recall 68.93%" (a content property): a model can cite the right file
 while stating a number that file does not contain, and the `[Cn]` stays
 well-formed. Enforcement is **off by default**
-(`INKTABLE_QUOTE_ENFORCE=1` strips citations whose quote fails), because
+(`ORDO_QUOTE_ENFORCE=1` strips citations whose quote fails), because
 changing answer behaviour needs a 65-case QA baseline and that re-verification
 is still blocked on provider availability.
 

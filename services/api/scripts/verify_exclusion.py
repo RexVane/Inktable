@@ -23,7 +23,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8",
 
 REPO = Path(__file__).resolve().parents[3]
 db = os.path.join(os.path.expanduser("~"), "Library", "Application Support",
-                  "Inktable", "library.db")
+                  "Ordo", "library.db")
 conn = sqlite3.connect("file:{}?mode=ro".format(db.replace("\\", "/")), uri=True)
 conn.row_factory = sqlite3.Row
 

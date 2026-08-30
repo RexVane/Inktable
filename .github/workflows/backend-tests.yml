@@ -1,4 +1,4 @@
-name: Inktable tests
+name: Ordo tests
 
 on:
   push:
@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: inktable-tests-${{ github.ref }}
+  group: ordo-tests-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -71,10 +71,10 @@ jobs:
         env:
           PYTHONHASHSEED: "0"
           # 打到保证没人听的口：探测逻辑遇到显式 env 就不再探活，测试保持封闭
-          INKTABLE_OLLAMA_URL: "http://127.0.0.1:9"
-          # 不设这个就会落到 ~/Library/Application Support/Inktable ——
+          ORDO_OLLAMA_URL: "http://127.0.0.1:9"
+          # 不设这个就会落到 ~/Library/Application Support/Ordo ——
           # 在开发机上那正是用户的真实库
-          INKTABLE_DB: ${{ runner.temp }}/inktable-ci.db
+          ORDO_DB: ${{ runner.temp }}/ordo-ci.db
         run: uv run pytest -q
 
   platform-paths:

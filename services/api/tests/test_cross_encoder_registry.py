@@ -15,8 +15,8 @@ from app.retrieval import cross_encoder as ce
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
-    monkeypatch.delenv("INKTABLE_RERANK_MODEL", raising=False)
-    monkeypatch.delenv("INKTABLE_RERANK_MODEL_DIR", raising=False)
+    monkeypatch.delenv("ORDO_RERANK_MODEL", raising=False)
+    monkeypatch.delenv("ORDO_RERANK_MODEL_DIR", raising=False)
 
 
 def _installed(monkeypatch, *keys: str) -> None:
@@ -57,33 +57,33 @@ def test_unavailable_only_when_nothing_is_installed(monkeypatch):
 
 def test_explicit_choice_overrides_preference(monkeypatch):
     _installed(monkeypatch, "bge-base", "mminilm-l12-h384")
-    monkeypatch.setenv("INKTABLE_RERANK_MODEL", "bge-base")
+    monkeypatch.setenv("ORDO_RERANK_MODEL", "bge-base")
     assert ce.active_spec().key == "bge-base"
 
 
 def test_explicit_choice_reports_unavailable_when_that_one_is_missing(monkeypatch):
     """显式指定了哪个就只看那个 —— 否则「我指定了 A」却跑着 B，评测结论会错配。"""
     _installed(monkeypatch, "mminilm-l12-h384")
-    monkeypatch.setenv("INKTABLE_RERANK_MODEL", "bge-base")
+    monkeypatch.setenv("ORDO_RERANK_MODEL", "bge-base")
     assert ce.active_spec().key == "bge-base"
     assert ce.is_available() is False
 
 
 def test_unknown_key_falls_back_instead_of_raising(monkeypatch):
     """拼错模型名不能让检索整条挂掉，退到偏好首选即可。"""
-    monkeypatch.setenv("INKTABLE_RERANK_MODEL", "typo-model")
+    monkeypatch.setenv("ORDO_RERANK_MODEL", "typo-model")
     assert ce.active_spec().key == ce._PREFERRED[0]
 
 
 def test_model_dir_follows_the_active_spec(monkeypatch):
     _installed(monkeypatch, "bge-base", "mminilm-l12-h384")
     assert ce.model_dir().name == ce.MODELS["mminilm-l12-h384"].model_id
-    monkeypatch.setenv("INKTABLE_RERANK_MODEL", "bge-base")
+    monkeypatch.setenv("ORDO_RERANK_MODEL", "bge-base")
     assert ce.model_dir().name == ce.MODELS["bge-base"].model_id
 
 
 def test_model_dir_override_wins(monkeypatch, tmp_path):
-    monkeypatch.setenv("INKTABLE_RERANK_MODEL_DIR", str(tmp_path))
+    monkeypatch.setenv("ORDO_RERANK_MODEL_DIR", str(tmp_path))
     assert ce.model_dir() == tmp_path
 
 
@@ -105,7 +105,7 @@ def test_health_reports_the_active_model_not_a_constant(monkeypatch):
     assert report["model"] == ce.MODELS["mminilm-l12-h384"].model_id
     assert report["installed"] == ["bge-base", "mminilm-l12-h384"]
 
-    monkeypatch.setenv("INKTABLE_RERANK_MODEL", "bge-base")
+    monkeypatch.setenv("ORDO_RERANK_MODEL", "bge-base")
     assert health._check_reranker()["model"] == ce.MODELS["bge-base"].model_id
 
 

@@ -1,4 +1,4 @@
-# Inktable 个人知识库实施计划
+# Ordo 个人知识库实施计划
 
 **版本**：v9（0.3.x 稳定性与安全收口）
 
@@ -8,7 +8,7 @@
 
 **状态**：本文件是产品、架构、实现和验收的唯一计划依据。v7/v8 的设计与验收日志保留用于追溯；v9 新增的当前基线和 M9 发布门槛覆盖旧的“已发布/全绿”结论。
 
-> Inktable 是一个本地优先的个人知识库。文件管理负责让知识来源可靠、可追踪、可治理；分层索引、混合检索、Rerank、上下文压缩和带引用问答负责让知识可查、可问、可复用。
+> Ordo 是一个本地优先的个人知识库。文件管理负责让知识来源可靠、可追踪、可治理；分层索引、混合检索、Rerank、上下文压缩和带引用问答负责让知识可查、可问、可复用。
 
 ## 0.1 当前验收快照（2026-08-16，检索延迟一节更新至 2026-08-18）
 
@@ -18,7 +18,7 @@
 > **2026-08-18 更新**：§10.4 的两条延迟门槛已通过（非生成搜索 P95
 > 4121ms → **977ms**、Rerank P95 878ms → **29ms**），检索质量指标不变，
 > 已用强制回退原 vec0 KNN 路径复跑评测确认两条路径结果一致。同轮新增
-> 可选的级联重排（`INKTABLE_RERANKER=cascade`）把 Content Recall@5 提到
+> 可选的级联重排（`ORDO_RERANKER=cascade`）把 Content Recall@5 提到
 > 96.2%、Recall@20 提到 100%，但 §10.3 的「相对 RRF 提升 ≥15%」两种配置
 > 都未达到。全部实测数据、根因、退化路径与对该门槛可达性的讨论见
 > `docs/RETRIEVAL-PERF.md`。改动 `app/index/vector.py` 前必读该文档
@@ -42,7 +42,7 @@
   `git diff --check` 通过。
 - Windows x64 PyInstaller sidecar SHA-256 为
   `2670F7BFFA026E8FCBB82D0D30010DEFE0EF634FC0932D3DF647D046AE77B986`；
-  NSIS 安装包 `dist/Inktable-0.3.0-Setup-x64.exe` 为 194,761,734 bytes，
+  NSIS 安装包 `dist/Ordo-0.3.0-Setup-x64.exe` 为 194,761,734 bytes，
   SHA-256 `E24D5588968B85B380A3A9DC6A407EAEF88FF8973F1C776F47CBF08CB53006E8`。
 - Windows 冻结 sidecar 已端到端识别真实无文本层 PDF（`Windows.Media.Ocr`），
   识别正文可进入索引与搜索；同次 trace 使用 `local-static-v3` 且未降级。
@@ -68,7 +68,7 @@ CI、安全边界、跨平台、性能和可访问性。它是当前发布判断
 | Node 语法、`git diff --check` | 通过 | 只证明语法和空白格式，不证明功能链路 |
 | `uv lock --check`、`uv sync --check` | 通过 | Python 锁文件一致 |
 | `npm audit` | 0 个已知漏洞 | 依赖审计通过，不替代应用安全审查 |
-| `uv run inktable-api` | 只输出占位 Hello | Python 包入口尚未连接真实服务 |
+| `uv run ordo-api` | 只输出占位 Hello | Python 包入口尚未连接真实服务 |
 
 ### 0.2.2 当前发布决定
 
@@ -128,7 +128,7 @@ v7 作出以下不可逆转的架构决策：
 
 ### 1.1 核心任务
 
-Inktable 帮助用户完成四类任务，优先级从高到低排列：
+Ordo 帮助用户完成四类任务，优先级从高到低排列：
 
 1. **找知识**：用自然语言或关键词找到相关事实、章节和原文。
 2. **问知识**：基于个人资料得到有证据、有引用、可拒答的答案。
@@ -518,13 +518,13 @@ ExpandedEvidence
 前者量的是格式，后者量的是内容。
 
 做法（`app/qa/quotes.py`，思路借自 marginalia 的 `quote_matches_source_text`，
-按 Inktable 的分片模型落地）：模型在正文后追加 `===引文===` 块，每个用过的
+按 Ordo 的分片模型落地）：模型在正文后追加 `===引文===` 块，每个用过的
 编号一行 `C1: 原文片段`；核验该片段是否逐字出现在**它所引用的那一片**里，
 不是「库里某处」。归一化只吃全角/空白/零宽差异，不做语义改写 —— 归一化越宽，
 核验越接近永真。少于 6 字的引文单列 `too_short`，不计进通过分子：两个字在
 任何文本里都能命中。
 
-`INKTABLE_QUOTE_ENFORCE=1` 才因核不上而剔除引用，**默认关**。理由：改答案
+`ORDO_QUOTE_ENFORCE=1` 才因核不上而剔除引用，**默认关**。理由：改答案
 行为必须先有 65 题 QA 的复验基线，而那套复验此刻仍被 provider 可用性阻塞。
 先量、再决定是否执行；反过来做就是在没有基线的情况下动引用可靠性。
 
@@ -810,7 +810,7 @@ ExpandedEvidence
 
 ### M7：发布候选
 
-**执行状态（2026-08-13）**：0.2.0 发布候选已产出。全量回归后端 170 项、桌面 15 项全绿；72 题检索评测与压缩评测均已冻结（`docs/eval/`）；PyInstaller sidecar 重打包后经 headless 冒烟（health 全绿：sqlite-vec v0.1.9、FTS5、中文检索探针 7/7、嵌入模型 256 维加载）；`dist/Inktable-0.2.0-arm64.dmg`（300 MB）打包完成，asar 内确认为新界面、sidecar 与最新构建逐字节一致。README、HANDOFF 入口、发布说明（`docs/RELEASE-0.2.0.md`）已更新；根目录 HANDOFF.md 收口为入口链接。数据库为 M2 时已完成的 v2 schema（迁移前有可恢复备份），本轮无 schema 变更。损坏恢复演练已实际执行（2026-08-13，于真实库只读副本上）：建备份 → `backup_is_restorable` 通过 → 注入 4KB 中段损坏 → `quick_check` 正确检出 → 从备份恢复后分片数一致、FTS 可查；真实库存在当日自动备份。待用户完成：真机安装冒烟（无签名需右键打开）。未关闭的阻塞项如实列于发布说明「已知限制」：Cross-Encoder 选型门槛、两项真实模型 QA 指标。
+**执行状态（2026-08-13）**：0.2.0 发布候选已产出。全量回归后端 170 项、桌面 15 项全绿；72 题检索评测与压缩评测均已冻结（`docs/eval/`）；PyInstaller sidecar 重打包后经 headless 冒烟（health 全绿：sqlite-vec v0.1.9、FTS5、中文检索探针 7/7、嵌入模型 256 维加载）；`dist/Ordo-0.2.0-arm64.dmg`（300 MB）打包完成，asar 内确认为新界面、sidecar 与最新构建逐字节一致。README、HANDOFF 入口、发布说明（`docs/RELEASE-0.2.0.md`）已更新；根目录 HANDOFF.md 收口为入口链接。数据库为 M2 时已完成的 v2 schema（迁移前有可恢复备份），本轮无 schema 变更。损坏恢复演练已实际执行（2026-08-13，于真实库只读副本上）：建备份 → `backup_is_restorable` 通过 → 注入 4KB 中段损坏 → `quick_check` 正确检出 → 从备份恢复后分片数一致、FTS 可查；真实库存在当日自动备份。待用户完成：真机安装冒烟（无签名需右键打开）。未关闭的阻塞项如实列于发布说明「已知限制」：Cross-Encoder 选型门槛、两项真实模型 QA 指标。
 
 - 全量回归、离线评测、性能测试、数据库升级/回滚演练。
 - 重跑 PyInstaller、Electron DMG 和真实安装冒烟。
@@ -824,7 +824,7 @@ ExpandedEvidence
 
 **执行状态（2026-08-14 追加）**：嵌入模型换代 —— 移除内置 model2vec 静态嵌入（potion 裁剪版 256 维，含仓库约 770 MB 模型文件与 tokenizers/safetensors 依赖），改为本机 **Ollama + bge-m3**（1024 维上下文编码；`GET /api/tags` 探测 30 秒缓存，`POST /api/embed` 批量编码，未检测到自动降级纯 FTS5）。向量表维度迁移自动化（`_init_vec_table` 检测不符即重建 + 清 `embedding_model_id` 触发回填），真实库 5535 片全量重嵌完成。随后修复换代引出的性能坑：重排现场编码 80 候选耗时 6–14 秒 → 改为批量复用 `chunks_vec` 已入库向量（真实库单查询 13.9s → 0.4s / 8.1s → 2.0s），查询变体合并批量编码，问答生成超时 60s → 180s；72 题评测复测达标（Recall@5 95.0%）。引用标签支持三位数（`[C100+]` 此前前后端正则均漏）。可见性口径扩展：磁盘上已消失且无保全副本的文件从全部视图隐藏（有保全副本的继续可见，文件回归自动恢复）。回归规模：后端 209 项、桌面 15 项全绿。
 
-**执行状态（2026-08-13）**：已完成，随 0.3.0 交付（`docs/RELEASE-0.3.0.md`）。本里程碑不在 v7 原始计划内，来源于用户实际使用反馈的连续迭代。要点：① 信息架构 v3——左栏收敛为"范围 + 文件树"（`GET /files/tree` 从库内路径推导，目录点击经 `/files?dir=` 前缀过滤），中栏在"扩展名分组列表（`group=ext` 服务端窗口函数排序）⇄ 全文查看器（`GET /files/{id}/content` 分页续载）"之间整页切换；② 可见性口径统一（`VISIBLE_FILES_COND`）——停用来源的文件在列表/统计/搜索/分类计数中全部隐藏，记录与索引保留，重新启用即恢复；③ 默认自动分类（`POST /classify/auto_ext`，规则化、不覆盖手动、可关闭）；④ **语义向量存量补齐**（`POST /index/embed_backfill`）——修复"模型晚于内容入库导致 95% 分片无向量"的长期缺口，真实库从 194/3627 补齐至 3627/3627；⑤ 设置三栏（通用/来源/模型），数据目录可迁移（`INKTABLE_DATA_DIR` + 停库搬迁 + `POST /system/rebase_preserved` 路径重写）；⑥ cc-switch 供应商导入（`GET /integrations/ccswitch` 只读解析，分组展示、选中高亮），"检测连接"升级为真实补全测试（返回实际回复与耗时，512 token 防推理模型假阴性）；⑦ 来源发现扩展——QQ NT 接收目录（存在即显示）、飞书/Lark/钉钉/企业微信规则、浏览器自定义下载目录（默认 ~/Downloads 归"下载"系统来源，Chrome/Edge/Brave/Arc/Vivaldi/Safari/Firefox）。回归规模：后端 179 项、桌面 15 项全绿；72 题检索评测与压缩评测未受影响（检索管线本轮无行为变更，除 /search 增加可见性过滤）。遗留与 0.2.0 相同：Cross-Encoder 门槛、两项真实模型 QA 指标、代码签名；新增注意项：Anthropic 中转的 OpenAI 协议兼容性以"检测连接"实测为准，办公应用路径规则未在真机验证。
+**执行状态（2026-08-13）**：已完成，随 0.3.0 交付（`docs/RELEASE-0.3.0.md`）。本里程碑不在 v7 原始计划内，来源于用户实际使用反馈的连续迭代。要点：① 信息架构 v3——左栏收敛为"范围 + 文件树"（`GET /files/tree` 从库内路径推导，目录点击经 `/files?dir=` 前缀过滤），中栏在"扩展名分组列表（`group=ext` 服务端窗口函数排序）⇄ 全文查看器（`GET /files/{id}/content` 分页续载）"之间整页切换；② 可见性口径统一（`VISIBLE_FILES_COND`）——停用来源的文件在列表/统计/搜索/分类计数中全部隐藏，记录与索引保留，重新启用即恢复；③ 默认自动分类（`POST /classify/auto_ext`，规则化、不覆盖手动、可关闭）；④ **语义向量存量补齐**（`POST /index/embed_backfill`）——修复"模型晚于内容入库导致 95% 分片无向量"的长期缺口，真实库从 194/3627 补齐至 3627/3627；⑤ 设置三栏（通用/来源/模型），数据目录可迁移（`ORDO_DATA_DIR` + 停库搬迁 + `POST /system/rebase_preserved` 路径重写）；⑥ cc-switch 供应商导入（`GET /integrations/ccswitch` 只读解析，分组展示、选中高亮），"检测连接"升级为真实补全测试（返回实际回复与耗时，512 token 防推理模型假阴性）；⑦ 来源发现扩展——QQ NT 接收目录（存在即显示）、飞书/Lark/钉钉/企业微信规则、浏览器自定义下载目录（默认 ~/Downloads 归"下载"系统来源，Chrome/Edge/Brave/Arc/Vivaldi/Safari/Firefox）。回归规模：后端 179 项、桌面 15 项全绿；72 题检索评测与压缩评测未受影响（检索管线本轮无行为变更，除 /search 增加可见性过滤）。遗留与 0.2.0 相同：Cross-Encoder 门槛、两项真实模型 QA 指标、代码签名；新增注意项：Anthropic 中转的 OpenAI 协议兼容性以"检测连接"实测为准，办公应用路径规则未在真机验证。
 
 **最终发布验收（2026-08-16）**：0.3.0 的 65 题正式 QA、259 项后端测试、
 15 项桌面测试、Windows sidecar/NSIS 构建、隔离安装版 Electron 冒烟、
@@ -860,7 +860,7 @@ ExpandedEvidence
 
 1. **M9.1 基线/CI**：修复真实 `hash_failed` 重试路径、Windows 盘符测试、全部
    Ruff 问题和真实 CLI 入口；CI 增加 Ruff 与 macOS/Windows 定向 smoke。
-2. **M9.2 查看器**：PDF.js 直接读取 `inkdoc://` URL，切换时销毁 observer、
+2. **M9.2 查看器**：PDF.js 直接读取 `ordodoc://` URL，切换时销毁 observer、
    render task 和 document；IPC 降级限制 16 MiB。DOCX 增加压缩包大小、ZIP
    条目数、单项/总解压量、压缩比、非法条目和文本字符上限。
 3. **M9.3 废纸篓**：Renderer 只传 `file_id`，主进程重新解析目标并原生确认；
@@ -869,7 +869,7 @@ ExpandedEvidence
    HTTPS、loopback 可用 HTTP，拒绝 userinfo/query/fragment；候选配置由 sidecar
    先验证再加密保存，模型列表/JSON/SSE/最终答案都有硬上限。
 5. **M9.5 数据迁移**：三平台数据根默认值统一；Electron 始终显式传
-   `INKTABLE_DATA_DIR`。迁移先停 sidecar，复制到暂存目录并逐文件 SHA-256 校验，
+   `ORDO_DATA_DIR`。迁移先停 sidecar，复制到暂存目录并逐文件 SHA-256 校验，
    原子切换指针；启动/rebase 失败恢复旧目录，旧目录不自动删除。
 6. **M9.6 问答**：快速档恢复引用 ID、EvidenceSpan 归属和确定性支持度底线；
    不支持的自然语言答案降级为证据片段。明确寒暄和自包含翻译/写作在检索前
@@ -912,14 +912,14 @@ ExpandedEvidence
 - 清理 Ruff 的全部 `F821`；未使用 import 同步收口，Ruff 加入必过 CI。
 - CI 至少覆盖 Ubuntu 主测试、Windows 路径/冻结 smoke、macOS Electron/sidecar
   smoke；打包产物必须启动 sidecar、通过 `/health` 并打开最小 PDF/DOCX。
-- 修正 `services/api/pyproject.toml` 的版本、描述和 `inktable-api` 入口，使其启动
+- 修正 `services/api/pyproject.toml` 的版本、描述和 `ordo-api` 入口，使其启动
   真实服务；Electron、Python、README 和发布产物从一个版本源生成或校验。
 
 完成标准：
 
 - 后端测试、桌面测试、Ruff、Node 语法、lock check、`git diff --check` 全绿。
 - CI 在目标平台无条件通过，且“没有失败样本”不再让重试接口获得假绿结果。
-- `uv run inktable-api` 启动后可完成健康检查和受鉴权请求，不输出占位 Hello。
+- `uv run ordo-api` 启动后可完成健康检查和受鉴权请求，不输出占位 Hello。
 
 #### M9.2 修复原文查看器并建立大文件生命周期
 
@@ -927,7 +927,7 @@ ExpandedEvidence
 
 - PDF 骨架节点统一使用 `pdf-page` 容器契约；渲染成功、失败、取消都清除
   `rendering[pageNo]`，失败页面显示可重试状态。
-- PDF.js 直接接收 `inkdoc://` URL，保留 Range/流式读取；base64 降级只允许明确的
+- PDF.js 直接接收 `ordodoc://` URL，保留 Range/流式读取；base64 降级只允许明确的
   小文件上限，超过上限返回可理解错误，不复制整份文件多次。
 - 切换文件、关闭查看器或窗口销毁时，取消旧 fetch/render task，销毁 PDF document，
   断开 IntersectionObserver，并释放 canvas。
@@ -986,7 +986,7 @@ ExpandedEvidence
 - 固定控制根目录只保存 `data-dir.json`、加密模型配置、日志和迁移记录；数据库、备份、
   preserved、索引/cache 位于独立的可迁移数据根目录。
 - Electron 每次启动都解析一个规范化的最终数据目录并显式传递
-  `INKTABLE_DATA_DIR`，Python 不再用 macOS 路径作为 Windows/Linux 隐式默认值。
+  `ORDO_DATA_DIR`，Python 不再用 macOS 路径作为 Windows/Linux 隐式默认值。
 - 停止 sidecar 必须观察到进程退出；超时即中止迁移，不在数据库可能仍打开时复制。
 - 同卷使用受控原子重命名；跨卷先复制到目标临时目录，再校验文件清单、大小/哈希、
   SQLite `quick_check`、外键和关键索引数量，随后原子更新目录指针并重启健康检查。

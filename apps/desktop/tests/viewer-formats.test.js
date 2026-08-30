@@ -139,7 +139,7 @@ test('PDF.js loads as a module with a resolvable specifier', () => {
   // worker 同样必须是 file://：自定义协议不被当作合法 module 来源
   assert.match(loader,
     /workerSrc\s*=\s*\n?\s*new URL\('\.\/vendor\/pdfjs\/pdf\.worker\.min\.mjs', document\.baseURI\)/);
-  assert.doesNotMatch(loader, /workerSrc\s*=\s*'inkdoc:/);
+  assert.doesNotMatch(loader, /workerSrc\s*=\s*'ordodoc:/);
   // 加载失败不缓存，否则一次失败之后永远打不开
   assert.match(loader, /pdfjsLibPromise = null/);
 });

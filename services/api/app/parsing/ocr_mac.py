@@ -19,7 +19,7 @@ import tempfile
 import time
 from pathlib import Path
 
-log = logging.getLogger("inktable.ocr")
+log = logging.getLogger("ordo.ocr")
 
 ENGINE_ID = "macos-vision"
 ENGINE_LABEL = "macOS Vision"
@@ -102,7 +102,7 @@ def ocr_pdf(path: Path) -> tuple[list[tuple[int, str]], list[str]]:
     try:
         total_pages = doc.page_count
         limit = min(total_pages, OCR_MAX_PAGES)
-        with tempfile.TemporaryDirectory(prefix="inktable-ocr-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="ordo-ocr-") as tmp:
             for pno in range(limit):
                 if time.monotonic() - started > OCR_TOTAL_BUDGET:
                     warnings.append(

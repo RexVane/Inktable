@@ -22,9 +22,9 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8",
                               errors="replace", line_buffering=True)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-DB = os.environ.get("INKTABLE_DB") or os.path.join(
+DB = os.environ.get("ORDO_DB") or os.path.join(
     os.path.expanduser("~"), "Library", "Application Support",
-    "Inktable", "library.db")
+    "Ordo", "library.db")
 
 QUERY = "怎样防止用户用相对路径跑出自己的文件目录"
 PAIRS = int(os.environ.get("PROBE_PAIRS", "26"))
@@ -92,19 +92,19 @@ def main() -> int:
 
     grid = [
         ("默认（threads=14, batch=8, max_tokens=384）", {}),
-        ("batch=26 一次喂完", {"INKTABLE_RERANK_BATCH": "26"}),
-        ("batch=4", {"INKTABLE_RERANK_BATCH": "4"}),
-        ("threads=28", {"INKTABLE_RERANK_THREADS": "28"}),
-        ("threads=7", {"INKTABLE_RERANK_THREADS": "7"}),
-        ("max_tokens=256", {"INKTABLE_RERANK_MAX_TOKENS": "256"}),
-        ("max_tokens=192", {"INKTABLE_RERANK_MAX_TOKENS": "192"}),
+        ("batch=26 一次喂完", {"ORDO_RERANK_BATCH": "26"}),
+        ("batch=4", {"ORDO_RERANK_BATCH": "4"}),
+        ("threads=28", {"ORDO_RERANK_THREADS": "28"}),
+        ("threads=7", {"ORDO_RERANK_THREADS": "7"}),
+        ("max_tokens=256", {"ORDO_RERANK_MAX_TOKENS": "256"}),
+        ("max_tokens=192", {"ORDO_RERANK_MAX_TOKENS": "192"}),
         ("max_tokens=192 + batch=26",
-         {"INKTABLE_RERANK_MAX_TOKENS": "192", "INKTABLE_RERANK_BATCH": "26"}),
+         {"ORDO_RERANK_MAX_TOKENS": "192", "ORDO_RERANK_BATCH": "26"}),
     ]
     results = {}
     for label, env in grid:
-        for key in ("INKTABLE_RERANK_BATCH", "INKTABLE_RERANK_THREADS",
-                    "INKTABLE_RERANK_MAX_TOKENS"):
+        for key in ("ORDO_RERANK_BATCH", "ORDO_RERANK_THREADS",
+                    "ORDO_RERANK_MAX_TOKENS"):
             os.environ.pop(key, None)
         os.environ.update(env)
         # 运行时是模块级缓存的，改环境变量后必须重建才生效

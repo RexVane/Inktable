@@ -130,8 +130,8 @@ test('PDF skeletons are real page containers and the target page renders a canva
   assert.equal(session.observer.observed.length, 1);
 });
 
-test('PDF.js receives the inkdoc URL instead of a full in-memory Uint8Array', () => {
+test('PDF.js receives the ordodoc URL instead of a full in-memory Uint8Array', () => {
   const openPdf = sourceBetween('function openPdfOriginal(', 'function buildPdfView(');
-  assert.match(openPdf, /url: inkdocUrl\(fileId, name\)/);
+  assert.match(openPdf, /url: ordodocUrl\(fileId, name\)/);
   assert.doesNotMatch(openPdf, /fetchOriginalBytes|new Uint8Array\(buf\)|data:/);
 });

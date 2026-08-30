@@ -28,7 +28,7 @@ from watchdog.observers.polling import PollingObserver
 from app.watcher.scanner import should_skip_path
 from app.watcher.stability import STABILIZE_TIMEOUT, looks_like_temp, stabilize
 
-log = logging.getLogger("inktable.watcher")
+log = logging.getLogger("ordo.watcher")
 
 QUIET_PERIOD = 1.5      # 路径静默多久后才开始稳定性检测
 POLL_INTERVAL = 0.5     # 工作线程扫队列的间隔
@@ -41,9 +41,9 @@ def _default_observer():
 
     macOS 的 FSEvents 后端是原生扩展，某些 CI/共享执行环境无法创建 stream，
     甚至会在 Python 来得及捕获异常前触发进程级 Bus error。生产仍默认使用
-    FSEvents；设置 ``INKTABLE_WATCH_BACKEND=polling`` 时改用安全的轮询后端。
+    FSEvents；设置 ``ORDO_WATCH_BACKEND=polling`` 时改用安全的轮询后端。
     """
-    if os.environ.get("INKTABLE_WATCH_BACKEND", "").strip().lower() == "polling":
+    if os.environ.get("ORDO_WATCH_BACKEND", "").strip().lower() == "polling":
         return PollingObserver(timeout=0.2)
     return Observer()
 
@@ -121,7 +121,7 @@ class Watcher:
             raise
         self._observer = observer
         self._stop.clear()
-        self._worker = threading.Thread(target=self._run, name="inktable-stabilizer", daemon=True)
+        self._worker = threading.Thread(target=self._run, name="ordo-stabilizer", daemon=True)
         self._worker.start()
         log.info("watcher started")
 

@@ -437,7 +437,7 @@ def _vector_search(
         return visible
     except Exception as e:  # noqa: BLE001 - 任何异常都只降级，不冒泡
         import logging
-        logging.getLogger("inktable.search").debug("向量路跳过：%s", e)
+        logging.getLogger("ordo.search").debug("向量路跳过：%s", e)
         return []
 
 

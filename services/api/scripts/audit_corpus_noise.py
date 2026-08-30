@@ -20,7 +20,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8",
                               errors="replace", line_buffering=True)
 
 path = os.path.join(os.path.expanduser("~"), "Library", "Application Support",
-                    "Inktable", "library.db")
+                    "Ordo", "library.db")
 conn = sqlite3.connect("file:{}?mode=ro".format(path.replace("\\", "/")), uri=True)
 conn.row_factory = sqlite3.Row
 

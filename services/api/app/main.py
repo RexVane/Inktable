@@ -1,4 +1,4 @@
-"""Inktable sidecar — FastAPI 本地服务。
+"""Ordo sidecar — FastAPI 本地服务。
 
 安全约束（PLAN §6.2 / §6.3）：
 - 绑定 127.0.0.1 + 端口 0（内核分配），端口经 stdout 回传主进程
@@ -102,7 +102,7 @@ def _warm_vector_matrix() -> None:
 async def _lifespan(_app: FastAPI):
     del _app
     threading.Thread(
-        target=_warm_vector_matrix, name="inktable-vec-warmup", daemon=True,
+        target=_warm_vector_matrix, name="ordo-vec-warmup", daemon=True,
     ).start()
     from app.library.worker import start_sidecar_worker, stop_sidecar_worker
     start_sidecar_worker(db, _db_lock)
@@ -113,8 +113,8 @@ async def _lifespan(_app: FastAPI):
         _shutdown()
 
 
-app = FastAPI(title="Inktable API", version="0.3.0", lifespan=_lifespan)
-log = logging.getLogger("inktable.main")
+app = FastAPI(title="Ordo API", version="0.3.0", lifespan=_lifespan)
+log = logging.getLogger("ordo.main")
 
 _db = None
 _db_lock = threading.Lock()
@@ -147,7 +147,7 @@ def _read_lock():
     SQLITE_MISUSE interleaving that thread-local connections were introduced
     to eliminate.
     """
-    if os.environ.get("INKTABLE_DB") == ":memory:":
+    if os.environ.get("ORDO_DB") == ":memory:":
         with _db_lock:
             yield
     else:
@@ -191,7 +191,7 @@ def _release_thread_connection(conn) -> None:
     garbage collected. The `:memory:` singleton is shared by every thread and
     must never be closed here.
     """
-    if conn is None or os.environ.get("INKTABLE_DB") == ":memory:":
+    if conn is None or os.environ.get("ORDO_DB") == ":memory:":
         return
     if conn is _db:
         return
@@ -410,7 +410,7 @@ def _init_primary_connection():
         # IO，放在端口上报之前会把健康启动拖过主进程的启动超时
         # （实测 1.17GB 库启动 15.2s，恰好撞上 15s 超时被连杀三次）。
         # quick_check/init_db 仍然同步 —— 坏库必须 fail-closed。
-        if os.environ.get("INKTABLE_DB") == ":memory:":
+        if os.environ.get("ORDO_DB") == ":memory:":
             _database_status["backup"] = {
                 "ok": None, "path": None, "error": "",
                 "checked_at": time.time(), "skipped": True,
@@ -451,7 +451,7 @@ def _start_daily_backup_thread() -> None:
         finally:
             conn.close()
 
-    threading.Thread(target=_worker, name="inktable-backup", daemon=True).start()
+    threading.Thread(target=_worker, name="ordo-backup", daemon=True).start()
 
 
 def db():
@@ -463,11 +463,11 @@ def db():
     稳定复现）。WAL 模式原生支持多连接并发读 + 单写者，改为线程本地
     连接从根上消除共享；写路径依旧全部经 _db_lock 串行，单写者不变。
 
-    ``INKTABLE_DB=:memory:`` 例外 —— 内存库的每条连接都是独立空库，
+    ``ORDO_DB=:memory:`` 例外 —— 内存库的每条连接都是独立空库，
     测试环境必须维持单例连接。
     """
     global _db
-    if os.environ.get("INKTABLE_DB") == ":memory:":
+    if os.environ.get("ORDO_DB") == ":memory:":
         if _db is None:
             with _db_init_lock:
                 if _db is None:
@@ -512,7 +512,7 @@ def _shutdown() -> None:
 # 用 get 而非 pop：pop 会把环境变量删掉，导致模块重载时读不到
 # （测试里 reload 后第二次就拿不到同一个令牌，全部请求 401）。
 # 真正的隔离靠"不把令牌写进日志与响应"，而不是靠删环境变量。
-SESSION_TOKEN = os.environ.get("INKTABLE_TOKEN") or secrets.token_urlsafe(32)
+SESSION_TOKEN = os.environ.get("ORDO_TOKEN") or os.environ.get("INKTABLE_TOKEN") or secrets.token_urlsafe(32)
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -535,7 +535,7 @@ def health() -> dict:
 
 @app.get("/whoami", dependencies=[Depends(require_token)])
 def whoami() -> dict:
-    return {"app": "inktable", "authenticated": True}
+    return {"app": "ordo", "authenticated": True}
 
 
 @app.post("/sources/discover", dependencies=[Depends(require_token)])
@@ -1278,7 +1278,7 @@ def post_ask_stream(req: AskRequest):
                 _release_thread_connection(conn)
 
         thread = threading.Thread(
-            target=worker, name="inktable-ask-stream", daemon=True,
+            target=worker, name="ordo-ask-stream", daemon=True,
         )
         thread.start()
         result = None
@@ -2046,7 +2046,7 @@ def file_content(
 
 @app.get("/files/{file_id}/raw", dependencies=[Depends(require_token)])
 def file_raw(file_id: int):
-    """原始文件字节 —— 供桌面端自定义协议（inkdoc://）流式转发给原文查看器。
+    """原始文件字节 —— 供桌面端自定义协议（ordodoc://）流式转发给原文查看器。
 
     授权模型：路径只来自库内登记（file_id → path），**不接受任何用户提供的
     路径**，没有目录遍历面；未登记或文件已不在磁盘上时 404。
@@ -2701,7 +2701,7 @@ def _read_stdin_secrets() -> None:
                                      str(slot_cfg.get("api_key") or ""),
                                      str(slot_cfg.get("model") or ""))
                 except _slots.SlotConfigError as exc:
-                    logging.getLogger("inktable.main").warning(
+                    logging.getLogger("ordo.main").warning(
                         "启动推送的 %s 槽位配置不合法，已忽略：%s", slot, exc)
     except Exception:
         pass  # 开发态无 stdin 输入，使用自生成令牌

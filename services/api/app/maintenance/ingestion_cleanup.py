@@ -76,7 +76,7 @@ def _best_source(path: str, sources: list[sqlite3.Row]) -> sqlite3.Row | None:
 def _directory_is_skipped(
     directory: str, root: str, prune_projects: bool,
 ) -> bool:
-    probe = Path(directory) / "__inktable_policy_probe__.txt"
+    probe = Path(directory) / "__ordo_policy_probe__.txt"
     return should_skip_path(probe, root, check_markers=prune_projects)
 
 
@@ -346,14 +346,14 @@ def _preserve_kept_vectors(conn: sqlite3.Connection) -> None:
             if chunk_id in kept
         ]
         conn.executemany(
-            "INSERT OR REPLACE INTO temp.inktable_kept_vectors(rowid, embedding) "
+            "INSERT OR REPLACE INTO temp.ordo_kept_vectors(rowid, embedding) "
             "VALUES (?, ?)",
             rows,
         )
         return
 
     conn.execute(
-        """INSERT INTO temp.inktable_kept_vectors(rowid, embedding)
+        """INSERT INTO temp.ordo_kept_vectors(rowid, embedding)
            SELECT v.rowid, v.embedding
            FROM chunks_vec v JOIN chunks ch ON ch.id = v.rowid
            WHERE EXISTS (
@@ -384,15 +384,15 @@ def rebuild_virtual_indexes_after_orphan_cleanup(
             "vectors": 0,
         }
 
-    conn.execute("DROP TABLE IF EXISTS temp.inktable_kept_vectors")
+    conn.execute("DROP TABLE IF EXISTS temp.ordo_kept_vectors")
     conn.execute(
-        "CREATE TEMP TABLE inktable_kept_vectors "
+        "CREATE TEMP TABLE ordo_kept_vectors "
         "(rowid INTEGER PRIMARY KEY, embedding BLOB NOT NULL)"
     )
     if _table_exists(conn, "chunks_vec"):
         _preserve_kept_vectors(conn)
     kept_vectors = conn.execute(
-        "SELECT count(*) FROM temp.inktable_kept_vectors"
+        "SELECT count(*) FROM temp.ordo_kept_vectors"
     ).fetchone()[0]
     conn.commit()
     if progress:
@@ -444,7 +444,7 @@ def rebuild_virtual_indexes_after_orphan_cleanup(
         )
 
         vector_rows = conn.execute(
-            "SELECT rowid, embedding FROM temp.inktable_kept_vectors ORDER BY rowid"
+            "SELECT rowid, embedding FROM temp.ordo_kept_vectors ORDER BY rowid"
         ).fetchall()
         index_counts = _populate_empty_virtual_indexes(
             conn, vector_rows, progress=progress,
@@ -454,7 +454,7 @@ def rebuild_virtual_indexes_after_orphan_cleanup(
         conn.rollback()
         raise
     finally:
-        conn.execute("DROP TABLE IF EXISTS temp.inktable_kept_vectors")
+        conn.execute("DROP TABLE IF EXISTS temp.ordo_kept_vectors")
         conn.commit()
 
     return {

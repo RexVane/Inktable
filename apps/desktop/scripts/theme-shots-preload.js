@@ -4,7 +4,7 @@ const { contextBridge } = require('electron');
 
 const fail = async () => ({ ok: false, status: 0, error: 'theme-shots: no sidecar' });
 
-contextBridge.exposeInMainWorld('inktable', {
+contextBridge.exposeInMainWorld('ordo', {
   platform: process.platform,
   getSidecarInfo: async () => null,
   getSidecarStatus: async () => ({ state: 'starting' }),

@@ -120,7 +120,7 @@ def main() -> int:
         print(f"真实库不存在：{real}")
         return 1
 
-    lock = APP_DIR / "inktable.lock"
+    lock = APP_DIR / "ordo.lock"
     print(f"真实库 : {real}")
     print(f"隔离库 : {working}")
     print(f"单实例锁存在：{lock.is_file()}（迁移前请确认桌面端已退出）\n")

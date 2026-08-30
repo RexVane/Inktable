@@ -17,7 +17,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8",
                               errors="replace", line_buffering=True)
 
 db = os.path.join(os.path.expanduser("~"), "Library", "Application Support",
-                  "Inktable", "library.db")
+                  "Ordo", "library.db")
 conn = sqlite3.connect("file:{}?mode=ro".format(db.replace("\\", "/")), uri=True)
 conn.row_factory = sqlite3.Row
 rows = conn.execute("SELECT path, state, is_dataless FROM files").fetchall()

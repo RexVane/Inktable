@@ -1,4 +1,4 @@
-"""Safely clean ingestion noise from an Inktable database.
+"""Safely clean ingestion noise from an Ordo database.
 
 Dry-run is the default. Applying changes requires both ``--apply`` and a
 verified ``--backup``. Source files are never modified.
@@ -72,9 +72,9 @@ def main() -> int:
         parser.error(f"backup is not restorable: {args.backup}")
 
     if db_path == DB_PATH.resolve():
-        os.environ.pop("INKTABLE_DB", None)
+        os.environ.pop("ORDO_DB", None)
     else:
-        os.environ["INKTABLE_DB"] = str(db_path)
+        os.environ["ORDO_DB"] = str(db_path)
     acquire_single_instance_lock()
     conn: sqlite3.Connection | None = None
     try:

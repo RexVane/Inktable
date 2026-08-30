@@ -14,7 +14,7 @@ const path = require('path');
 const desktopDir = path.resolve(__dirname, '..');
 const apiDir = path.resolve(desktopDir, '..', '..', 'services', 'api');
 const binary = path.join(apiDir, 'dist', process.platform === 'win32'
-  ? 'inktable-sidecar.exe' : 'inktable-sidecar');
+  ? 'ordo-sidecar.exe' : 'ordo-sidecar');
 
 const uv = process.platform === 'win32' ? 'uv.exe' : 'uv';
 const result = spawnSync(
