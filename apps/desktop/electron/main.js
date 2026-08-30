@@ -18,6 +18,9 @@ const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
+const { trashFileById } = require('./file-operations');
+const { prepareSlotConfig } = require('./model-config');
+const { copyDataDirectory, pathsOverlap, writeJsonAtomic } = require('./data-migration');
 
 // ---- inkdoc:// 自定义协议：原文查看器的文件字节通道 ----
 // 渲染层 connect-src 'none'，不能自己发请求；PDF.js / docx-preview 需要
@@ -120,10 +123,9 @@ const dataDirConfigPath = () => path.join(app.getPath('userData'), 'data-dir.jso
 const legacyDataDir = () =>
   path.join(app.getPath('home'), 'Library', 'Application Support', 'Inktable');
 const nativeDefaultDataDir = () => {
-  if (process.platform === 'darwin') return legacyDataDir();
-  // userData is `%APPDATA%/Inktable` on Windows and the XDG config location on
-  // Linux. Keep DB/config/key material under one platform-native root.
-  return app.getPath('userData');
+  // userData is the fixed control root. New libraries live in a child directory
+  // so moving data can never move data-dir.json or llm.enc themselves.
+  return path.join(app.getPath('userData'), 'data');
 };
 
 function loadCustomDataDir() {
@@ -141,8 +143,12 @@ const defaultDataDir = () => {
   // Existing Windows installs used the macOS-shaped ~/Library path. Preserve
   // them until the user runs the normal data-location migration; new installs
   // use the platform-native root. Never silently strand an existing library.
-  if (process.platform !== 'darwin'
-      && fs.existsSync(path.join(legacyDir, 'library.db'))
+  const controlRoot = app.getPath('userData');
+  if (fs.existsSync(path.join(controlRoot, 'library.db'))
+      && !fs.existsSync(path.join(nativeDir, 'library.db'))) {
+    return controlRoot;
+  }
+  if (fs.existsSync(path.join(legacyDir, 'library.db'))
       && !fs.existsSync(path.join(nativeDir, 'library.db'))) {
     return legacyDir;
   }
@@ -193,9 +199,9 @@ function slotShape(cfg) {
 }
 
 async function pushLLMToSidecar(cfg, slot) {
-  if (!sidecarInfo) return;
+  if (!sidecarInfo) throw new Error('sidecar 未就绪，模型配置未保存');
   try {
-    await fetch(`http://127.0.0.1:${sidecarInfo.port}/settings/models`, {
+    const response = await fetch(`http://127.0.0.1:${sidecarInfo.port}/settings/models`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json',
                  Authorization: `Bearer ${sidecarInfo.token}` },
@@ -204,7 +210,16 @@ async function pushLLMToSidecar(cfg, slot) {
             api_key: cfg.api_key || '', model: cfg.model || '' }
         : { slot, clear: true }),
     });
-  } catch (e) { console.error('[main] 模型配置推送失败:', e.message); }
+    if (!response.ok) {
+      let detail = '';
+      try { detail = String((await response.json()).detail || ''); } catch {}
+      throw new Error(detail || `sidecar 拒绝模型配置（HTTP ${response.status}）`);
+    }
+    return await response.json();
+  } catch (e) {
+    console.error('[main] 模型配置推送失败:', e.message);
+    throw e;
+  }
 }
 
 function resolveSidecarPath() {
@@ -238,7 +253,7 @@ function startSidecar() {
     }
 
     const env = { ...process.env };
-    if (customDataDir) env.INKTABLE_DATA_DIR = customDataDir;
+    env.INKTABLE_DATA_DIR = currentDataDir();
     const proc = spawn(launch.command, launch.args, {
       cwd: launch.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -424,10 +439,10 @@ function stopSidecar() {
   terminateSidecarProcess(proc);
 }
 
-function stopSidecarAndWait(timeoutMs = 6000) {
+function stopSidecarAndWait(timeoutMs = 7000) {
   abortAllApiStreams();
   // 数据迁移前必须确认进程真的退了 —— 数据库文件被占用时移动会损坏
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const proc = sidecar;
     if (!proc || proc.exitCode !== null || proc.signalCode !== null) {
       sidecar = null;
@@ -440,7 +455,11 @@ function stopSidecarAndWait(timeoutMs = 6000) {
     const finish = () => { if (!done) { done = true; resolve(); } };
     proc.once('exit', finish);
     terminateSidecarProcess(proc);
-    setTimeout(finish, timeoutMs).unref();
+    setTimeout(() => {
+      if (done) return;
+      done = true;
+      reject(new Error('sidecar 未在迁移时限内退出，已中止数据迁移'));
+    }, timeoutMs).unref();
   });
 }
 
@@ -548,9 +567,12 @@ const API_ROUTE_RULES = [
   ['GET', /^\/library\/items(?:\?limit=[0-9]+&offset=[0-9]+(?:&status=(?:pending|running|ready|failed|stale))?(?:&category_id=-?[0-9]+)?(?:&tag_id=[0-9]+)?)?$/],
   ['GET', /^\/library\/items\/[0-9]+$/],
   ['GET', /^\/library\/(?:stats|enrichment\/status|relations\/status|taxonomy|tree)$/],
+  ['GET', /^\/library\/enrichment\/runs\/[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/],
   ['GET', /^\/files\/[0-9]+\/raw$/],
   ['POST', /^\/library\/sync$/],
   ['POST', /^\/library\/enrich(?:\?limit=[0-9]+)?$/],
+  ['POST', /^\/library\/enrichment\/runs(?:\?retry_failed=true)?$/],
+  ['POST', /^\/library\/enrichment\/runs\/[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\/(?:cancel|step\?limit=[0-9]+)$/],
   ['POST', /^\/library\/relations\/rebuild(?:\?limit=[0-9]+&top_k=[0-9]+&min_score=-?[0-9]+(?:\.[0-9]+)?&chunks_per_item=[0-9]+)?$/],
   ['POST', /^\/(?:settings\/llm\/test|settings\/models(?:\/test|\/list)?|ask(?:\/stream)?|files\/(?:remove|classify)|books\/add|classify\/auto_ext|search|sources\/(?:discover|discover_deep|preview|enable|disable|remove|add|auto_preserve|preserve_all)|watch\/start|index\/(?:run|embed_backfill|retry_scanned)|settings\/(?:ocr|qa)|journal\/remove)$/],
 ];
@@ -559,6 +581,7 @@ const MAX_STREAM_PAYLOAD_BYTES = 256 * 1024;
 const MAX_STREAM_FRAME_BYTES = 1024 * 1024;
 const MAX_STREAM_TOTAL_BYTES = 16 * 1024 * 1024;
 const MAX_STREAMS_PER_SENDER = 4;
+const MAX_RAW_FALLBACK_BYTES = 16 * 1024 * 1024;
 
 function isSafeApiPath(p) {
   if (typeof p !== 'string' || !p || p.length > 4096 || p[0] !== '/' ||
@@ -577,6 +600,32 @@ function isAllowedApiRequest(method, p) {
 }
 
 function byteLength(value) { return Buffer.byteLength(value, 'utf8'); }
+
+async function readResponseBufferLimited(response, limit) {
+  const declared = Number(response.headers.get('content-length') || 0);
+  if (Number.isFinite(declared) && declared > limit) {
+    throw new Error(`file exceeds ${Math.round(limit / 1024 / 1024)} MB IPC fallback limit`);
+  }
+  if (!response.body || typeof response.body.getReader !== 'function') {
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.length > limit) throw new Error('file exceeds IPC fallback limit');
+    return buffer;
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  while (true) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    total += chunk.value.byteLength;
+    if (total > limit) {
+      await reader.cancel('IPC fallback limit exceeded');
+      throw new Error('file exceeds IPC fallback limit');
+    }
+    chunks.push(Buffer.from(chunk.value));
+  }
+  return Buffer.concat(chunks, total);
+}
 
 function abortAllApiStreams() {
   for (const entry of activeApiStreams.values()) entry.controller.abort();
@@ -600,7 +649,7 @@ ipcMain.handle('api:request', async (_e, req) => {
       if (!upstream.ok) {
         return { ok: false, status: upstream.status, error: 'HTTP ' + upstream.status };
       }
-      const buf = Buffer.from(await upstream.arrayBuffer());
+      const buf = await readResponseBufferLimited(upstream, MAX_RAW_FALLBACK_BYTES);
       return { ok: true, status: upstream.status,
                b64: buf.toString('base64'),
                contentType: upstream.headers.get('content-type') || 'application/octet-stream' };
@@ -800,18 +849,44 @@ ipcMain.handle('shell:open', async (_e, filePath) => {
   return shell.openPath(filePath);
 });
 
-ipcMain.handle('shell:trash', async (_e, filePath) => {
-  // 删除 = 移到废纸篓（可恢复），绝不直接 unlink。路径必须是 sidecar
-  // 数据库中的 exact source path；renderer 不能自行指定任意磁盘目标。
-  if (!await authorizeShellPath(filePath, 'trash')) {
-    return { ok: false, error: '路径未获授权' };
-  }
+async function privilegedSidecarRequest(requestPath, method, payload) {
+  if (!sidecarInfo) return { ok: false, error: 'sidecar 未就绪' };
   try {
-    await shell.trashItem(filePath);
-    return { ok: true };
+    const response = await fetch(`http://127.0.0.1:${sidecarInfo.port}${requestPath}`, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${sidecarInfo.token}`,
+      },
+      body: method === 'POST' ? JSON.stringify(payload || {}) : undefined,
+    });
+    let data = null;
+    try { data = await response.json(); } catch {}
+    return { ok: response.ok, status: response.status, data,
+             error: response.ok ? '' : `HTTP ${response.status}` };
   } catch (err) {
-    return { ok: false, error: err.message };
+    return { ok: false, error: String((err && err.message) || err) };
   }
+}
+
+ipcMain.handle('file:trash-by-id', async (_e, fileId) => {
+  return trashFileById(fileId, {
+    sidecarRequest: privilegedSidecarRequest,
+    trashItem: (filePath) => shell.trashItem(filePath),
+    confirm: async (target) => {
+      const kinds = [target.source ? '原文件' : '', target.preserved ? '保全副本' : '']
+        .filter(Boolean).join('和');
+      const answer = await dialog.showMessageBox(mainWindow, {
+        type: 'warning',
+        buttons: ['取消', '移入废纸篓'],
+        defaultId: 0,
+        cancelId: 0,
+        message: `把“${target.name}”移入废纸篓？`,
+        detail: `${kinds}将由系统移入废纸篓；全部成功后才会清理库内记录。`,
+      });
+      return answer.response === 1;
+    },
+  });
 });
 
 ipcMain.handle('theme:set', (_e, req) => {
@@ -843,35 +918,31 @@ ipcMain.handle('data:change', async () => {
 
   const oldDir = currentDataDir();
   const target = path.join(picked.filePaths[0], 'Inktable');
-  if (target === oldDir) return { ok: false, error: '与当前位置相同' };
-  if ((target + path.sep).startsWith(oldDir + path.sep)) {
-    return { ok: false, error: '不能选在当前数据目录内部' };
-  }
-  if (fs.existsSync(target) && fs.readdirSync(target).length > 0) {
-    return { ok: false, error: '目标已存在且非空：' + target };
+  if (pathsOverlap(oldDir, target)) return { ok: false, error: '新旧数据目录不能互相包含' };
+  if (fs.existsSync(target)) return { ok: false, error: '目标已存在：' + target };
+
+  // 先在旧库运行完整检查；失败时不停止服务、不复制任何数据。
+  const integrity = await privilegedSidecarRequest('/db/integrity_check', 'POST', {});
+  if (!integrity.ok || !integrity.data || integrity.data.ok !== true) {
+    return { ok: false, error: '当前数据库完整性检查未通过，已取消迁移' };
   }
 
-  // 停库 → 搬目录 → 记配置 → 用新目录重启。搬运期间界面显示"正在重启"。
+  // 检查 → 确认停库 → 暂存复制与逐文件 SHA-256 → 原子落目标 →
+  // 新库健康检查/rebase → 最后才原子写目录指针。旧目录始终保留作回滚。
   publishSidecarStatus({ state: 'restarting', attempt: 0 });
-  await stopSidecarAndWait();
   try {
-    if (fs.existsSync(oldDir)) {
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      try {
-        fs.renameSync(oldDir, target);
-      } catch {
-        // 跨卷移动：复制后删除
-        fs.cpSync(oldDir, target, { recursive: true });
-        fs.rmSync(oldDir, { recursive: true, force: true });
-      }
-      // 单实例锁是进程级的陈旧状态，不随迁移带走
-      try { fs.rmSync(path.join(target, 'inktable.lock'), { force: true }); } catch {}
-    } else {
-      fs.mkdirSync(target, { recursive: true });
-    }
-    customDataDir = target;
-    fs.writeFileSync(dataDirConfigPath(), JSON.stringify({ dir: target }));
+    await stopSidecarAndWait();
   } catch (err) {
+    try { await startHealthySidecar(); } catch (restartErr) { scheduleSidecarRestart(restartErr); }
+    return { ok: false, error: err.message };
+  }
+  const previousCustomDir = customDataDir;
+  let copied;
+  try {
+    copied = copyDataDirectory(oldDir, target, app.getPath('userData'));
+    customDataDir = target;
+  } catch (err) {
+    customDataDir = previousCustomDir;
     console.error('[main] 数据迁移失败:', err.message);
     try { await startHealthySidecar(); } catch (e2) { scheduleSidecarRestart(e2); }
     return { ok: false, error: '迁移失败：' + err.message };
@@ -881,21 +952,29 @@ ipcMain.handle('data:change', async () => {
     await startHealthySidecar();
     restartAttempts = 0;
     lastRestartError = '';
-    // 保全副本的绝对路径记录在库里，迁移后要把前缀改过来
-    try {
-      await fetch(`http://127.0.0.1:${sidecarInfo.port}/system/rebase_preserved`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${sidecarInfo.token}`,
-        },
-        body: JSON.stringify({ old_prefix: oldDir, new_prefix: target }),
-      });
-    } catch (e) { console.error('[main] 保全路径重写失败:', e.message); }
-    return { ok: true, dir: target };
+    const rebased = await privilegedSidecarRequest('/system/rebase_preserved', 'POST', {
+      old_prefix: oldDir,
+      new_prefix: target,
+    });
+    if (!rebased.ok) throw new Error('保全路径重写失败：' + rebased.error);
+    writeJsonAtomic(dataDirConfigPath(), { dir: target });
+    return { ok: true, dir: target, files: copied.files, bytes: copied.bytes,
+             old_dir_retained: oldDir };
   } catch (err) {
-    scheduleSidecarRestart(err);
-    return { ok: false, error: '数据已迁移，但服务重启失败：' + err.message, dir: target };
+    console.error('[main] 新数据目录验证失败，回滚：', err.message);
+    try { await stopSidecarAndWait(); } catch {}
+    customDataDir = previousCustomDir;
+    try {
+      await startHealthySidecar();
+      restartAttempts = 0;
+      lastRestartError = '';
+    } catch (rollbackErr) {
+      scheduleSidecarRestart(rollbackErr);
+      return { ok: false, error: '新目录失败且旧目录重启失败：' + rollbackErr.message,
+               rollback: false, candidate_dir: target };
+    }
+    return { ok: false, error: '新目录验证失败，已恢复旧目录：' + err.message,
+             rollback: true, candidate_dir: target };
   }
 });
 
@@ -930,30 +1009,30 @@ ipcMain.handle('llm:set', async (_e, incoming) => {
     ? incoming.slot : 'qa';
   const prev = loadLLMConfig() || { qa: null, library: null, embedding: null };
   if (incoming.clear === true) {
-    prev[slot] = null;
-    saveLLMConfig(prev);
+    const oldSlot = prev[slot];
     await pushLLMToSidecar(null, slot);
+    prev[slot] = null;
+    try {
+      saveLLMConfig(prev);
+    } catch (err) {
+      if (oldSlot) await pushLLMToSidecar(oldSlot, slot);
+      throw err;
+    }
     return slotShape(null);
   }
   const prevSlot = prev[slot] || {};
-  const cfg = {
-    provider: String(incoming.provider || prevSlot.provider
-      || (slot === 'qa' ? 'openai' : 'ollama')),
-    endpoint: String(incoming.endpoint || '').trim(),
-    // 留空 = 保留已存的密钥（改端点/模型不必重输密钥）
-    api_key: String(incoming.api_key || '').trim() || prevSlot.api_key || '',
-    model: String(incoming.model || '').trim(),
-  };
-  if (!cfg.endpoint && !cfg.model) {
-    // 只留了个密钥、什么都没填 —— 视为清除该槽位
-    prev[slot] = null;
-    saveLLMConfig(prev);
-    await pushLLMToSidecar(null, slot);
-    return slotShape(null);
-  }
-  prev[slot] = cfg;
-  saveLLMConfig(prev);
+  const prepared = prepareSlotConfig(incoming, prevSlot, slot);
+  const cfg = prepared.config;
+  // sidecar 是配置校验的最终裁决者。只有它接受以后才加密落盘；本地
+  // 持久化失败则把运行时配置回滚到旧槽位，避免内存/磁盘悄悄分叉。
   await pushLLMToSidecar(cfg, slot);
+  prev[slot] = cfg;
+  try {
+    saveLLMConfig(prev);
+  } catch (err) {
+    await pushLLMToSidecar(prevSlot && prevSlot.endpoint ? prevSlot : null, slot);
+    throw err;
+  }
   return slotShape(cfg);
 });
 

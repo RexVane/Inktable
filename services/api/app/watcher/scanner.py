@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.domain.identity import FileIdentity, identify
-from app.watcher.policy import canonical_source_path, is_drive_root
+from app.watcher.policy import canonical_source_path
 
 # 永不从「整盘/用户目录」来源向下遍历的基础设施目录。
 #

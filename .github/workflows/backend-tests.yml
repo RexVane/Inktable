@@ -49,6 +49,9 @@ jobs:
       - name: Install locked dependencies
         run: uv sync --frozen --group dev
 
+      - name: Run Ruff correctness checks
+        run: uv run ruff check .
+
       - name: Compile application modules
         run: uv run python -m compileall -q app
 
@@ -57,6 +60,44 @@ jobs:
           PYTHONHASHSEED: "0"
           INKTABLE_OLLAMA_URL: "http://127.0.0.1:9"
         run: uv run pytest -q
+
+  platform-paths:
+    name: ${{ matrix.os }} · path and CLI smoke
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+
+    defaults:
+      run:
+        working-directory: services/api
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: services/api/uv.lock
+
+      - name: Install locked dependencies
+        run: uv sync --frozen --group dev
+
+      - name: Run cross-platform path and CLI contracts
+        run: >-
+          uv run pytest -q
+          tests/test_sources.py::test_windows_discovery_returns_fixed_drive_roots
+          tests/test_cli.py
+          tests/test_database.py::test_single_instance_lock_can_be_reacquired_after_release
 
   desktop:
     name: Node 22 · desktop tests

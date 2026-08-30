@@ -482,7 +482,7 @@ def test_answer_length_setting_applies(db, scripted):
 
 
 def test_general_question_routes_past_kb(db, scripted):
-    """通用问题（寒暄/常识/写作）→ 模型带内声明通用路由，自然回答不拒答。"""
+    """明确寒暄在检索前本地分流，不把个人文件片段发给模型。"""
     scripted("【通用】你好！我可以帮你检索本地文件、总结资料，也能回答一般问题。")
     a = ask(db, "你好，你能做什么？")
     assert a.status == "answered"
@@ -491,6 +491,28 @@ def test_general_question_routes_past_kb(db, scripted):
     assert "你好" in a.answer
     assert "【通用】" not in a.answer, "路由标记不能泄漏到答案里"
     assert a.validation["mode"] == "general"
+    assert a.validation["route"] == "local_general"
+    assert a.validation["personal_files_sent"] is False
+    assert a.used_personal_files is False
+    assert a.trace["route"] == "local_general"
+    sent = json.dumps(_FakeLLM.seen[-1]["messages"], ensure_ascii=False)
+    assert "汝窑" not in sent and "两淮盐政" not in sent
+
+
+def test_self_contained_translation_skips_retrieval(db, scripted, monkeypatch):
+    scripted("The build completed successfully.")
+    monkeypatch.setattr(
+        answer_module,
+        "retrieve_context",
+        lambda *_args, **_kwargs: pytest.fail("general transform must not retrieve"),
+    )
+
+    result = ask(db, "请翻译成英文：构建已成功完成。")
+
+    assert result.status == "answered"
+    assert result.mode == "general"
+    assert result.answer == "The build completed successfully."
+    assert result.used_personal_files is False
 
 
 def test_explicit_knowledge_scope_rejects_general_route(db, scripted):
@@ -764,18 +786,19 @@ def _verifier_counter(monkeypatch):
     return calls
 
 
-def test_quick_mode_is_concise_without_citations(db, scripted, monkeypatch):
-    """快速档契约 = 简洁回答、无引用：引用标记被剥离、蕴含校验零调用。"""
+def test_quick_mode_is_concise_with_deterministic_citations(db, scripted, monkeypatch):
+    """快速档保留引用和本地支持检查，但不增加第二次模型调用。"""
     scripted("汝窑的烧成温度在一千二百度上下 [C1]。")
     calls = _verifier_counter(monkeypatch)
     a = ask(db, "汝窑的烧成温度是多少", qa_mode="quick")
 
     assert a.status == "answered"
-    assert "[C1]" not in a.answer
+    assert "[C1]" in a.answer
     assert "烧成温度" in a.answer
-    assert a.citations == []
+    assert a.citations and a.citations[0]["file_name"] == "瓷器.txt"
     assert a.validation["qa_mode"] == "quick"
-    assert a.validation["support_check"] == "skipped_quick"
+    assert a.validation["support_check"] == "deterministic_quick"
+    assert a.validation["unsupported_claims"] == 0
     assert calls["n"] == 0
     assert len(_FakeLLM.seen) == 1
 
@@ -801,13 +824,15 @@ def test_quick_mode_falls_back_without_retry(db, scripted):
     assert len(_FakeLLM.seen) == 1
 
 
-def test_quick_mode_passes_uncited_answer_through(db, scripted):
-    """快速档不做引用仪式：模型的无引用回答按原文透传（契约即"快"）。"""
+def test_quick_mode_rejects_unsupported_uncited_answer(db, scripted):
+    """快速档仍只有一轮，但无证据自由发挥只能降级为检索片段。"""
     scripted("一段自由发挥、与检索证据毫无重叠的泛泛回答。")
     a = ask(db, "汝窑的烧成温度是多少", qa_mode="quick")
 
-    assert a.status == "answered"
-    assert a.citations == []
+    assert a.status == "fallback"
+    assert a.answer is None
+    assert a.retrieved
+    assert a.validation["support_check"] == "deterministic_quick"
     assert len(_FakeLLM.seen) == 1
 
 

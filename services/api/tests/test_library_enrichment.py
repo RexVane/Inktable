@@ -183,6 +183,38 @@ def test_running_claim_is_only_recovered_after_lease_expires() -> None:
     conn.close()
 
 
+def test_claim_limit_twenty_is_the_real_service_batch_size() -> None:
+    conn = _seed()
+    for item_id in range(2, 26):
+        conn.execute(
+            """INSERT INTO contents(id,sha256,size,parse_state,active_index_version)
+               VALUES (?, ?, 100, 'indexed', 1)""",
+            (item_id, f"{item_id:064x}"),
+        )
+        conn.execute(
+            """INSERT INTO files
+               (id,volume_uuid,inode,content_id,path,name,source_id,ext,size,state,
+                detected_at,mtime)
+               VALUES (?, 'vol', ?, ?, ?, ?, 1, 'md', 100, 'registered', 1, 1)""",
+            (item_id, item_id, item_id, f"/private-vault/{item_id}.md",
+             f"{item_id}.md"),
+        )
+        conn.execute(
+            """INSERT INTO document_representations
+               (content_id,index_version,title,summary_text,full_text,text_hash,
+                token_count,structure_confidence)
+               VALUES (?, 1, ?, '', ?, ?, 10, 1)""",
+            (item_id, f"文档 {item_id}", f"正文 {item_id}", f"doc-{item_id}"),
+        )
+    sync_library_items(conn, now=10)
+
+    claims = claim_items(conn, limit=20, now=200)
+
+    assert len(claims) == 20
+    assert len({claim.item_id for claim in claims}) == 20
+    conn.close()
+
+
 def test_previous_prompt_version_is_reclaimed_after_boundary_change() -> None:
     conn = _seed()
     item_id = conn.execute("SELECT id FROM library_items WHERE content_id=1").fetchone()[0]
@@ -197,7 +229,7 @@ def test_previous_prompt_version_is_reclaimed_after_boundary_change() -> None:
 
     claims = claim_items(conn, limit=1, now=200)
 
-    assert PROMPT_VERSION == "library-enrichment-v2"
+    assert PROMPT_VERSION == "library-enrichment-v3"
     assert len(claims) == 1
     assert claims[0].item_id == item_id
     assert conn.execute(
@@ -312,3 +344,114 @@ def test_enrichment_new_names_bounded_and_folded_into_existing() -> None:
     assert {"已有标签", "合法标签"} <= tag_names          # 新标签已创建
     assert "x" * 40 not in tag_names                     # 超长被拒
     assert len(tag_names) == len(list(conn.execute("SELECT name FROM tags")))
+
+
+def test_failed_items_require_explicit_retry() -> None:
+    conn = _seed()
+    item_id = conn.execute(
+        "SELECT id FROM library_items WHERE content_id=1"
+    ).fetchone()[0]
+    conn.execute(
+        "UPDATE library_items SET enrichment_status='failed' WHERE id=?",
+        (item_id,),
+    )
+
+    assert claim_items(conn, limit=1, now=200) == []
+    retried = claim_items(conn, limit=1, now=201, include_failed=True)
+    assert [claim.item_id for claim in retried] == [item_id]
+    conn.close()
+
+
+def test_one_run_attempts_a_failing_item_only_once() -> None:
+    conn = _seed()
+    run = enrichment.create_enrichment_run(conn, now=100)
+    conn.commit()
+
+    first = run_enrichment_batch(
+        lambda: conn,
+        threading.Lock(),
+        limit=20,
+        generate_fn=lambda _prompt: "not-json",
+        model="fake-local-model",
+        run_id=run["id"],
+    )
+    second = run_enrichment_batch(
+        lambda: conn,
+        threading.Lock(),
+        limit=20,
+        generate_fn=lambda _prompt: _valid_result(),
+        model="fake-local-model",
+        run_id=run["id"],
+    )
+
+    assert first["claimed"] == 1
+    assert first["failed"] == 1
+    assert second["claimed"] == 0
+    assert second["run_status"] == "completed"
+    persisted = enrichment.enrichment_run(conn, run["id"])
+    assert persisted["claimed"] == 1
+    assert persisted["failed"] == 1
+    assert persisted["status"] == "completed"
+    conn.close()
+
+
+def test_cancelled_run_never_claims_another_batch() -> None:
+    conn = _seed()
+    run = enrichment.create_enrichment_run(conn, now=100)
+    cancelled = enrichment.cancel_enrichment_run(conn, run["id"], now=101)
+    conn.commit()
+
+    result = run_enrichment_batch(
+        lambda: conn,
+        threading.Lock(),
+        limit=20,
+        generate_fn=lambda _prompt: _valid_result(),
+        model="fake-local-model",
+        run_id=run["id"],
+    )
+
+    assert cancelled["status"] == "cancelled"
+    assert result["claimed"] == 0
+    assert result["run_status"] == "cancelled"
+    conn.close()
+
+
+def test_new_vocabulary_uses_nfkc_casefold_identity() -> None:
+    conn = _seed()
+    conn.execute("INSERT INTO categories(name) VALUES ('Computers')")
+    category_id = conn.execute(
+        "SELECT id FROM categories WHERE name='Computers'"
+    ).fetchone()[0]
+    conn.execute("INSERT INTO tags(name) VALUES ('AI')")
+    conn.commit()
+
+    generated = json.dumps(
+        {
+            "summary": "摘要",
+            "language": "zh",
+            "category_id": None,
+            "new_category": "COMPUTERS",
+            "tag_ids": [],
+            "new_tags": ["ＡＩ"],
+        },
+        ensure_ascii=False,
+    )
+    run_enrichment_batch(
+        lambda: conn,
+        threading.Lock(),
+        limit=1,
+        generate_fn=lambda _prompt: generated,
+        model="fake-local-model",
+    )
+
+    item = conn.execute(
+        "SELECT id, category_id FROM library_items WHERE content_id=1"
+    ).fetchone()
+    assert item["category_id"] == category_id
+    assert conn.execute("SELECT COUNT(*) FROM categories").fetchone()[0] == 3
+    assert conn.execute("SELECT COUNT(*) FROM tags WHERE name='AI'").fetchone()[0] == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM library_item_tags WHERE library_item_id=?",
+        (item["id"],),
+    ).fetchone()[0] == 1
+    conn.close()

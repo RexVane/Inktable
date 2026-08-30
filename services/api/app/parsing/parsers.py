@@ -8,8 +8,9 @@
 from __future__ import annotations
 
 import re
+import zipfile
 from html.parser import HTMLParser
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from app.parsing.base import (
     Block,
@@ -22,6 +23,15 @@ from app.parsing.base import (
 
 # 单文档解析上限：超大文档解析会吃满内存且价值递减
 MAX_CHARS = 5_000_000
+
+# DOCX is a ZIP container. A small compressed upload can otherwise make
+# python-docx allocate hundreds of MiB before the shared text limit is reached.
+DOCX_MAX_ARCHIVE_BYTES = 16 * 1024 * 1024
+DOCX_MAX_ENTRIES = 2_000
+DOCX_MAX_ENTRY_BYTES = 32 * 1024 * 1024
+DOCX_MAX_TOTAL_BYTES = 128 * 1024 * 1024
+DOCX_MAX_COMPRESSION_RATIO = 300
+_DOCX_RATIO_MIN_BYTES = 1024 * 1024
 
 
 def parse_pdf(path: Path) -> ParsedDoc:
@@ -93,9 +103,54 @@ def parse_pdf(path: Path) -> ParsedDoc:
     return ParsedDoc(blocks=blocks, title=title, page_count=page_count, warnings=warnings)
 
 
+def _validate_docx_archive(path: Path) -> None:
+    """Reject encrypted, ambiguous and explosively compressed DOCX archives."""
+    try:
+        archive_size = path.stat().st_size
+    except OSError as exc:
+        raise ParseError(f"无法读取 DOCX：{exc}") from exc
+    if archive_size > DOCX_MAX_ARCHIVE_BYTES:
+        raise ParseError("DOCX 压缩包超过 16 MiB 解析上限")
+
+    try:
+        with zipfile.ZipFile(path) as archive:
+            entries = archive.infolist()
+            if len(entries) > DOCX_MAX_ENTRIES:
+                raise ParseError(f"DOCX ZIP 条目过多（上限 {DOCX_MAX_ENTRIES}）")
+            total = 0
+            names: set[str] = set()
+            has_document = False
+            for entry in entries:
+                name = entry.filename.replace("\\", "/")
+                parts = PurePosixPath(name).parts
+                if (not name or name.startswith("/") or ".." in parts
+                        or name in names):
+                    raise ParseError("DOCX ZIP 包含非法或重复条目")
+                names.add(name)
+                if entry.flag_bits & 0x1:
+                    raise ParseError("DOCX ZIP 包含加密条目")
+                if entry.file_size > DOCX_MAX_ENTRY_BYTES:
+                    raise ParseError("DOCX ZIP 单个条目解压后过大")
+                total += entry.file_size
+                if total > DOCX_MAX_TOTAL_BYTES:
+                    raise ParseError("DOCX ZIP 解压总量过大")
+                if entry.file_size >= _DOCX_RATIO_MIN_BYTES:
+                    ratio = entry.file_size / max(1, entry.compress_size)
+                    if ratio > DOCX_MAX_COMPRESSION_RATIO:
+                        raise ParseError("DOCX ZIP 压缩比异常，已拒绝解析")
+                has_document = has_document or name == "word/document.xml"
+            if not has_document:
+                raise ParseError("DOCX 缺少 word/document.xml")
+    except ParseError:
+        raise
+    except (OSError, zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
+        raise ParseError(f"无法打开 DOCX ZIP：{exc}") from exc
+
+
 def parse_docx(path: Path) -> ParsedDoc:
     import docx  # python-docx
 
+    _validate_docx_archive(path)
     try:
         doc = docx.Document(str(path))
     except Exception as e:
@@ -103,6 +158,23 @@ def parse_docx(path: Path) -> ParsedDoc:
 
     blocks: list[Block] = []
     heading_path: list[str] = []
+    warnings: list[str] = []
+    total_chars = 0
+
+    def append_bounded(block: Block) -> bool:
+        nonlocal total_chars
+        remaining = MAX_CHARS - total_chars
+        if remaining <= 0:
+            if not warnings:
+                warnings.append(f"文档过长，只索引前 {MAX_CHARS} 个字符")
+            return False
+        if len(block.text) > remaining:
+            block.text = block.text[:remaining]
+            warnings.append(f"文档过长，只索引前 {MAX_CHARS} 个字符")
+        if block.text:
+            blocks.append(block)
+            total_chars += len(block.text)
+        return total_chars < MAX_CHARS
 
     for idx, para in enumerate(doc.paragraphs):
         text = para.text.strip()
@@ -114,7 +186,7 @@ def parse_docx(path: Path) -> ParsedDoc:
 
         if level:
             heading_path = heading_path[: level - 1] + [text]
-            blocks.append(
+            keep_going = append_bounded(
                 Block(
                     kind=BlockKind.HEADING,
                     text=text,
@@ -124,32 +196,50 @@ def parse_docx(path: Path) -> ParsedDoc:
             )
         else:
             kind = BlockKind.LIST_ITEM if "list" in style else BlockKind.PARAGRAPH
-            blocks.append(
+            keep_going = append_bounded(
                 Block(
                     kind=kind,
                     text=text,
                     locator=Locator(para_index=idx, heading_path=list(heading_path)),
                 )
             )
+        if not keep_going:
+            break
 
     # 表格单独成块，保留行结构（分片器会整表保留，见 §12.2c）
-    for t_idx, table in enumerate(doc.tables):
+    for table in doc.tables:
+        if total_chars >= MAX_CHARS:
+            break
         rows = []
         for row in table.rows:
-            cells = [c.text.strip() for c in row.cells]
+            remaining = MAX_CHARS - total_chars - sum(len(value) for value in rows)
+            if remaining <= 0:
+                break
+            cells = []
+            for cell in row.cells:
+                value = cell.text.strip()
+                if not value:
+                    cells.append("")
+                    continue
+                value = value[:remaining]
+                cells.append(value)
+                remaining -= len(value) + 3
+                if remaining <= 0:
+                    break
             if any(cells):
                 rows.append(" | ".join(cells))
         if rows:
-            blocks.append(
+            if not append_bounded(
                 Block(
                     kind=BlockKind.TABLE,
                     text="\n".join(rows),
                     locator=Locator(heading_path=list(heading_path)),
                 )
-            )
+            ):
+                break
 
     title = blocks[0].text if blocks and blocks[0].kind == BlockKind.HEADING else None
-    return ParsedDoc(blocks=blocks, title=title)
+    return ParsedDoc(blocks=blocks, title=title, warnings=warnings)
 
 
 _MD_HEADING = re.compile(r"^(#{1,6})\s+(.*)$")

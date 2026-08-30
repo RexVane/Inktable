@@ -647,7 +647,8 @@ textarea:focus-visible,
 }
 
 .splitter:hover::after,
-body.resizing .splitter::after {
+body.resizing .splitter::after,
+.splitter:focus-visible::after {
   background: var(--accent);
   width: 2px;
   left: 1.5px;
@@ -2017,6 +2018,12 @@ body.resizing * {
 }
 
 .set-nav-item {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font: inherit;
   padding: 6px 10px;
   margin-bottom: 2px;
   border-radius: var(--radius-ctl);
@@ -2919,3 +2926,24 @@ select:focus-visible {
 }
 
 select:disabled { opacity: .55; cursor: not-allowed; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}
+
+@media (forced-colors: active) {
+  button:focus-visible,
+  input:focus-visible,
+  textarea:focus-visible,
+  select:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 2px solid Highlight !important;
+    outline-offset: 2px;
+  }
+  .splitter::after { background: ButtonText; }
+}

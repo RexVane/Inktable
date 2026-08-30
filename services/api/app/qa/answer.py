@@ -92,6 +92,7 @@ class Answer:
     validation: dict = field(default_factory=dict)         # 校验过程留痕，可审计
     trace: dict = field(default_factory=dict)              # 非持久化检索 trace
     mode: str = "knowledge"  # knowledge=依据文件库 / general=通用回答（未引用资料）
+    used_personal_files: bool = False  # 是否曾把个人资料片段送入生成调用
 
 
 # ---------------------------------------------------------------- 检索与装配
@@ -161,6 +162,44 @@ def _requires_knowledge_scope(question: str) -> bool:
     return any(marker in compact for marker in _KNOWLEDGE_SCOPE_MARKERS)
 
 
+_PERSONAL_REFERENCE_MARKERS = (
+    "我的文件", "文件库", "知识库", "这份文件", "那份文件", "上传的文件",
+    "文档里", "资料里", "笔记里", "根据文档", "根据资料", "引用原文",
+)
+_GENERAL_GREETING = re.compile(
+    r"^(?:你好|您好|嗨|hello|hi|早上好|下午好|晚上好|谢谢|多谢|再见)"
+    r"(?:[，,！!。.?？\s].*)?$",
+    re.I,
+)
+_GENERAL_TRANSFORM = re.compile(
+    r"^(?:请|麻烦|帮我|可以帮我)?\s*"
+    r"(?:把)?(?:以下|下面|这段|这句话|这封信)?\s*"
+    r"(?:翻译(?:成|为)|润色|改写|校对|起草|写一封|写一段|写个)",
+    re.I,
+)
+
+
+def _local_general_intent(
+    question: str,
+    *,
+    book_id: int | None,
+    history: list[dict],
+) -> str | None:
+    """Conservatively recognize requests that need no personal-file context."""
+    compact = question.strip()
+    if book_id is not None or _requires_knowledge_scope(compact):
+        return None
+    if any(marker in compact for marker in _PERSONAL_REFERENCE_MARKERS):
+        return None
+    if len(compact) <= 80 and _GENERAL_GREETING.match(compact):
+        return "greeting"
+    # Transform requests with history may refer to a previous file-backed
+    # answer, so only bypass retrieval when the request is self-contained.
+    if not history and _GENERAL_TRANSFORM.match(compact):
+        return "self_contained_transform"
+    return None
+
+
 def build_messages(question: str, pieces: list[ContextPiece],
                    quick: bool = False) -> list[dict]:
     """资料在前、问题在后，问题后补一行约束复述（§12.4 ⑤ recency 槽位）。
@@ -170,8 +209,8 @@ def build_messages(question: str, pieces: list[ContextPiece],
     路由标记在带内声明，后置校验据此分流 —— 知识库回答仍走全部硬校验，
     通用回答在界面明确标注"未引用文件库"，来源永远可辨。
 
-    quick 档（快速简洁）：不要求引用标记，要求短答 —— 引用与逐条校验是
-    深度档的语义，快速档的契约是"快"。
+    quick 档（快速简洁）：仍要求引用，但只做本地确定性支持检查，不追加
+    第二次模型调用。快慢档改变成本与延迟，不改变知识库证据底线。
     """
     ctx_lines = []
     for p in pieces:
@@ -183,12 +222,13 @@ def build_messages(question: str, pieces: list[ContextPiece],
         system = (
             "你是个人知识库的快速问答助手。先判断问题是否需要依据【资料】作答：\n"
             "1) 资料中有相关信息 → 只依据【资料】回答，不超过 5 句话，直接给核心"
-            "要点；不要输出引用标记（如 [C1]）、不要标题、不要逐条罗列；"
+            "要点；每个事实句末尾必须附对应引用标记（如 [C1]），不要标题；"
             f"资料没有直接回答问题时只回答「{REFUSAL}」。\n"
             "2) 与资料无关的通用问题 → 第一行以" + GENERAL_MARK + "开头，然后简洁回答。\n"
             "拿不准时优先按第 1 类处理。始终使用与问题相同的语言回答。"
         )
-        user = f"【资料】\n{ctx}\n\n【问题】\n{question}\n\n（简洁作答，不要引用标记。）"
+        user = (f"【资料】\n{ctx}\n\n【问题】\n{question}\n\n"
+                "（简洁作答；每个事实句必须附可直接支持它的 [Cn]。）")
         return [{"role": "system", "content": system},
                 {"role": "user", "content": user}]
 
@@ -494,6 +534,29 @@ def auto_cite(text: str, pieces: list[ContextPiece]) -> tuple[str, int] | None:
     return "".join(out), attributed
 
 
+def _quick_claims_supported(
+    question: str, claims: list[tuple[str, str, list[str]]],
+) -> list[bool]:
+    """Cheap deterministic grounding gate for the one-call quick mode.
+
+    It deliberately does not claim semantic entailment. It only accepts claims
+    whose cited evidence has substantial literal overlap and contains every
+    numeric token. Anything less falls back to source snippets rather than
+    letting an unsupported natural-language answer through.
+    """
+    if not claims or not _question_scope_supported(question, claims):
+        return [False] * len(claims)
+    judgments: list[bool] = []
+    for _statement, plain, evidence_items in claims:
+        claim_grams = _bigrams(_CITE.sub("", plain))
+        evidence = "\n".join(evidence_items)
+        evidence_grams = _bigrams(evidence)
+        overlap = (len(claim_grams & evidence_grams) / max(1, len(claim_grams)))
+        numbers_ok = all(token in evidence for token in _NUM_TOKEN.findall(plain))
+        judgments.append(bool(evidence_items) and overlap >= 0.35 and numbers_ok)
+    return judgments
+
+
 # ---------------------------------------------------------------- 多轮浓缩与检索改写
 
 def _chat_adaptive(messages: list[dict], *, max_tokens: int, timeout: float,
@@ -569,6 +632,84 @@ def _rewrite_for_retrieval(question: str) -> str | None:
 
 # ---------------------------------------------------------------- 主入口
 
+def _answer_token_limit(conn: sqlite3.Connection) -> int | None:
+    from app.db.database import get_setting
+
+    raw_limit = get_setting(conn, "answer_max_tokens", "auto")
+    try:
+        return None if raw_limit == "auto" else int(raw_limit)
+    except ValueError:
+        return None
+
+
+def _generate_general_without_files(
+    question: str,
+    *,
+    intent: str,
+    max_tokens: int | None,
+    event_callback: Callable[[str, dict], None] | None,
+) -> Answer:
+    """Answer an obvious general request without retrieval or a ContextPack."""
+    validation = {
+        "attempts": 1,
+        "mode": "general",
+        "route": "local_general",
+        "intent": intent,
+        "personal_files_sent": False,
+    }
+    trace = {
+        "route": "local_general",
+        "stages": [{"name": "local_general", "intent": intent}],
+        "degraded": [],
+    }
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "直接完成用户的通用请求。不要声称读取了文件或知识库，不要添加 "
+                "[Cn] 引用标记；使用与用户相同的语言，回答清晰简洁。"
+            ),
+        },
+        {"role": "user", "content": question},
+    ]
+    try:
+        if event_callback is None:
+            raw = llm.chat(messages, max_tokens=max_tokens, timeout=180)
+        else:
+            parts: list[str] = []
+            for delta in llm.chat_stream(
+                messages, max_tokens=max_tokens, timeout=180,
+            ):
+                parts.append(delta)
+                event_callback("chat.draft", {"text": delta, "attempt": 1})
+            raw = "".join(parts)
+    except llm.LLMError as exc:
+        validation["error"] = str(exc)
+        validation["error_type"] = type(exc).__name__
+        return Answer(
+            status="fallback",
+            answer=None,
+            hedge=f"模型调用失败（{exc}）",
+            validation=validation,
+            trace=trace,
+            mode="general",
+        )
+    answer = _CITE.sub("", str(raw or "").replace(GENERAL_MARK, "", 1)).strip()
+    if not answer:
+        validation["empty_answer"] = True
+        return Answer(
+            status="fallback", answer=None, hedge="模型没有返回内容",
+            validation=validation, trace=trace, mode="general",
+        )
+    return Answer(
+        status="answered",
+        answer=answer,
+        validation=validation,
+        trace=trace,
+        mode="general",
+        used_personal_files=False,
+    )
+
 def ask(
     conn: sqlite3.Connection,
     question: str,
@@ -584,8 +725,21 @@ def ask(
                       hedge="尚未配置模型服务，可先使用搜索")
 
     validation: dict = {"attempts": 0, "qa_mode": qa_mode}
+    history = history or []
+    answer_tokens = _answer_token_limit(conn)
+    general_intent = _local_general_intent(
+        question, book_id=book_id, history=history,
+    )
+    if general_intent is not None:
+        return _generate_general_without_files(
+            question,
+            intent=general_intent,
+            max_tokens=answer_tokens,
+            event_callback=event_callback,
+        )
+
     # 多轮追问先浓缩成独立问题再检索；生成仍然用用户原话
-    search_query = _condense_question(question, history or [])
+    search_query = _condense_question(question, history)
     if search_query != question:
         validation["condensed_query"] = search_query
 
@@ -597,19 +751,12 @@ def ask(
     top_cosine = float(trace.get("top_vector_cosine") or 0.0)
     conf = assess(conn, search_query, top_cosine)
 
-    # 回答长度档位（设置 → 通用配置）："auto" = 不传上限，跟随所选模型
-    from app.db.database import get_setting
-    raw_limit = get_setting(conn, "answer_max_tokens", "auto")
-    try:
-        answer_tokens: int | None = None if raw_limit == "auto" else int(raw_limit)
-    except ValueError:
-        answer_tokens = None
-
     answer = _generate(
         question, pieces, conf, trace, validation,
         max_tokens=answer_tokens, event_callback=event_callback,
         qa_mode=qa_mode,
     )
+    answer.used_personal_files = bool(pieces or history)
 
     # 拒答 ≠ 库里没有：换检索关键词重试一次（有界，最多一轮）。
     # 重试用独立的 validation 副本 —— 重试失败被丢弃时，
@@ -636,6 +783,7 @@ def ask(
                     max_tokens=answer_tokens, event_callback=event_callback,
                     qa_mode=qa_mode,
                 )
+                retry.used_personal_files = bool(retry_pieces or history)
                 if retry.status == "answered":
                     return retry
         # 高置信检索已有相关上下文时，首次直接拒答可能只是模型过早弃权。
@@ -649,6 +797,7 @@ def ask(
                 max_tokens=answer_tokens, event_callback=event_callback,
                 qa_mode=qa_mode,
             )
+            retry.used_personal_files = bool(pieces or history)
             if retry.status == "answered":
                 return retry
     return answer
@@ -761,19 +910,24 @@ def _generate(
         unsupported_claims = 0
         verifier_error = ""
         if qa_mode == "quick":
-            # 快速档契约 = 简洁回答、无引用：引用与逐条校验是深度档的
-            # 语义。模型即使习惯性输出了 [Cn] 也直接剥掉（界面上没有
-            # 引用卡可点，留着只会误导）。拒答句原样透传。
-            plain = _CITE.sub("", cleaned).strip()
-            validation["support_check"] = "skipped_quick"
-            if plain == REFUSAL:
+            if cleaned == REFUSAL:
                 return Answer(status="refused", answer=REFUSAL,
                               hedge=conf.hedge, validation=validation,
                               trace=trace)
-            if not plain:
-                break   # 空回复 → 降级为片段列表
-            return Answer(status="answered", answer=plain, citations=[],
-                          hedge=conf.hedge, validation=validation, trace=trace)
+            claims = _claims_with_evidence(cleaned, pieces) if cited else []
+            judgments = _quick_claims_supported(question, claims)
+            unsupported_claims = len(judgments) - sum(judgments)
+            validation["support_check"] = "deterministic_quick"
+            validation["support_claims"] = len(judgments)
+            validation["unsupported_claims"] = unsupported_claims
+            if cited and not uncited_claims and judgments and unsupported_claims == 0:
+                by_tag = {p.tag: p for p in pieces}
+                citations = [_citation_dict(by_tag[t]) for t in sorted(
+                    cited, key=lambda x: int(x[1:])) if t in by_tag]
+                return Answer(status="answered", answer=cleaned,
+                              citations=citations, hedge=conf.hedge,
+                              validation=validation, trace=trace)
+            break  # 单轮契约：确定性检查失败直接降级，不再调用模型
         if (cited or raw_cited) and not uncited_claims:
             claims = _claims_with_evidence(cleaned, pieces)
             judgments, answerable, verifier_error = _verify_claim_support(

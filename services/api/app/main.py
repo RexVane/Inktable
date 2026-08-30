@@ -51,8 +51,14 @@ from app.index.pipeline import (
 )
 from app.retrieval.compress import EvidenceSource, best_span
 from app.retrieval.pipeline import run as run_retrieval
-from app.watcher.policy import canonical_source_path, is_drive_root, resolve_source_policy
-from app.watcher.scanner import path_is_within, preview_source, scan_source
+from app.watcher.policy import is_drive_root, resolve_source_policy
+from app.watcher.scanner import (
+    ScanStats,
+    path_is_within,
+    preview_source,
+    register_file,
+    scan_source,
+)
 from app.watcher.service import WatchService
 
 def _warm_vector_matrix() -> None:
@@ -797,7 +803,7 @@ class FilesRemoveRequest(BaseModel):
 
 class FilePathAuthorizationRequest(BaseModel):
     path: str = Field(min_length=1, max_length=_MAX_PATH_CHARS)
-    action: Literal["reveal", "open", "trash"]
+    action: Literal["reveal", "open"]
 
 
 @app.post("/files/authorize_path", dependencies=[Depends(require_token)])
@@ -806,9 +812,9 @@ def authorize_file_path(req: FilePathAuthorizationRequest) -> dict:
 
     The renderer is an untrusted boundary: arbitrary local-file/LLM content is
     rendered there. A missed escape must not turn into “trash any disk path”.
-    Only exact paths already known to the library are eligible. Trash is
-    restricted to the real source path; reveal/open may also target a verified
-    preservation copy.
+    Only exact paths already known to the library are eligible. Destructive
+    operations never accept a renderer-provided path; trash resolves targets
+    from a stable file ID in the privileged main-process flow below.
     """
     normalized = os.path.normcase(os.path.abspath(os.path.expanduser(req.path)))
     conn = db()
@@ -816,7 +822,10 @@ def authorize_file_path(req: FilePathAuthorizationRequest) -> dict:
     # the common path and uses idx_files_path. Normalize again before deciding
     # to close `..`/separator/case tricks.
     rows = conn.execute(
-        "SELECT path, preserved_path FROM files WHERE path = ? OR preserved_path = ?",
+        """SELECT f.path, f.preserved_path
+           FROM files f LEFT JOIN sources s ON s.id = f.source_id
+           WHERE (f.path = ? OR f.preserved_path = ?)
+             AND """ + VISIBLE_FILES_COND,
         (req.path, req.path),
     ).fetchall()
     authorized = False
@@ -829,10 +838,41 @@ def authorize_file_path(req: FilePathAuthorizationRequest) -> dict:
             os.path.normcase(os.path.abspath(os.path.expanduser(row["preserved_path"])))
             if row["preserved_path"] else None
         )
-        if normalized == source or (req.action != "trash" and normalized == preserved):
+        if normalized == source or normalized == preserved:
             authorized = True
             break
     return {"authorized": authorized}
+
+
+@app.get("/files/{file_id}/trash-targets", dependencies=[Depends(require_token)])
+def file_trash_targets(file_id: int) -> dict:
+    """Resolve trash targets from a stable ID for the trusted Electron main process.
+
+    This route is deliberately absent from the renderer proxy allowlist. Paths
+    come only from the database and are returned immediately before the native
+    confirmation, closing the remove-then-authorize race.
+    """
+    conn = db()
+    row = conn.execute(
+        """SELECT f.id, f.name, f.path, f.preserved_path
+           FROM files f LEFT JOIN sources s ON s.id = f.source_id
+           WHERE f.id = ? AND """ + VISIBLE_FILES_COND,
+        (file_id,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="文件不存在")
+    targets: list[dict] = []
+    seen: set[str] = set()
+    for kind, candidate in (("source", row["path"]),
+                            ("preserved", row["preserved_path"])):
+        if not candidate:
+            continue
+        normalized = os.path.normcase(os.path.abspath(os.path.expanduser(candidate)))
+        if normalized in seen or not Path(candidate).is_file():
+            continue
+        seen.add(normalized)
+        targets.append({"kind": kind, "path": str(candidate)})
+    return {"file_id": row["id"], "name": row["name"], "targets": targets}
 
 
 @app.post("/files/remove", dependencies=[Depends(require_token)])
@@ -1034,22 +1074,39 @@ def list_slot_models(req: ModelListRequest) -> dict:
     saved: dict | None = None
     if req.slot == "qa":
         from app.qa import llm
-        endpoint, api_key, _model = llm.credentials_for_proxy()
-        saved = {"provider": "openai", "endpoint": endpoint, "api_key": api_key}
+        endpoint, api_key, _model, saved_provider = llm.credentials_for_proxy()
+        saved = {"provider": saved_provider, "endpoint": endpoint, "api_key": api_key}
     elif req.slot in model_slots.SLOTS:
         saved = model_slots.get(req.slot)
     else:
         raise HTTPException(status_code=422, detail=f"未知槽位：{req.slot}")
 
+    from app.config.endpoints import (
+        EndpointPolicyError,
+        credential_scope,
+        normalize_model_endpoint,
+    )
     provider = (req.provider or (saved or {}).get("provider") or "ollama").strip()
     endpoint = (req.endpoint or (saved or {}).get("endpoint") or "").strip().rstrip("/")
-    api_key = req.api_key or (saved or {}).get("api_key") or ""
     if not endpoint and provider == "ollama":
         # 本地 Ollama 没填地址就用默认本机地址（自动识别的前提）
         from app.config.models import _DEFAULT_OLLAMA_URL
         endpoint = _DEFAULT_OLLAMA_URL
     if not endpoint:
         raise HTTPException(status_code=422, detail="接口地址不能为空")
+    try:
+        endpoint = normalize_model_endpoint(endpoint)
+    except EndpointPolicyError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    api_key = req.api_key
+    if not api_key and saved and saved.get("api_key"):
+        try:
+            same_scope = credential_scope(provider, endpoint) == credential_scope(
+                str(saved.get("provider") or ""), str(saved.get("endpoint") or ""))
+        except EndpointPolicyError:
+            same_scope = False
+        if same_scope:
+            api_key = str(saved["api_key"])
     if provider == "openai" and not api_key:
         raise HTTPException(
             status_code=422, detail="拉取模型列表需要 API 密钥（先填写或保存密钥）")
@@ -1095,7 +1152,8 @@ def post_ask(req: AskRequest) -> dict:
                 "status": "answered", "answer": metadata.answer,
                 "citations": [], "retrieved": [], "hedge": "",
                 "validation": {"route": metadata.query_kind},
-                "mode": "metadata", "trace_id": None,
+                "mode": "metadata", "answer_source": "metadata",
+                "used_personal_files": False, "trace_id": None,
                 "timings": [], "degraded": [],
                 "trace": {"route": metadata.query_kind, "stages": [], "degraded": []},
             }
@@ -1111,6 +1169,8 @@ def post_ask(req: AskRequest) -> dict:
         "status": a.status, "answer": a.answer, "citations": a.citations,
         "retrieved": a.retrieved, "hedge": a.hedge, "validation": a.validation,
         "mode": a.mode,
+        "answer_source": "general" if a.mode == "general" else "library",
+        "used_personal_files": bool(getattr(a, "used_personal_files", False)),
         "trace_id": trace.get("trace_id"), "timings": trace.get("stages", []),
         "degraded": trace.get("degraded", []), "trace": trace,
     }
@@ -1161,7 +1221,8 @@ def post_ask_stream(req: AskRequest):
                             "status": "answered", "answer": metadata.answer,
                             "citations": [], "retrieved": [], "hedge": "",
                             "validation": {"route": metadata.query_kind},
-                            "mode": "metadata", "trace_id": None,
+                            "mode": "metadata", "answer_source": "metadata",
+                            "used_personal_files": False, "trace_id": None,
                             "timings": [], "degraded": [],
                             "trace": {"route": metadata.query_kind, "stages": [], "degraded": []},
                         }
@@ -1179,6 +1240,12 @@ def post_ask_stream(req: AskRequest):
                             "citations": answer.citations,
                             "retrieved": answer.retrieved, "hedge": answer.hedge,
                             "validation": answer.validation, "mode": answer.mode,
+                            "answer_source": (
+                                "general" if answer.mode == "general" else "library"
+                            ),
+                            "used_personal_files": bool(
+                                getattr(answer, "used_personal_files", False)
+                            ),
                             "trace_id": trace.get("trace_id"),
                             "timings": trace.get("stages", []),
                             "degraded": trace.get("degraded", []), "trace": trace,
@@ -1280,9 +1347,13 @@ class BookMember(BaseModel):
 def get_books() -> dict:
     conn = db()
     rows = conn.execute(
-        """SELECT b.id, b.name,
-                  (SELECT count(*) FROM book_members m WHERE m.book_id = b.id) AS n
-           FROM books b ORDER BY b.name"""
+        f"""SELECT b.id, b.name,
+                   (SELECT count(*)
+                    FROM book_members m
+                    JOIN files f ON f.id = m.file_id
+                    LEFT JOIN sources s ON s.id = f.source_id
+                    WHERE m.book_id = b.id AND {VISIBLE_FILES_COND}) AS n
+            FROM books b ORDER BY b.name"""
     ).fetchall()
     return {"books": [dict(r) for r in rows]}
 
@@ -1310,18 +1381,51 @@ def post_book(req: BookCreate) -> dict:
 def book_add(req: BookMember) -> dict:
     with _db_lock:
         conn = db()
-        n = 0
-        for fid in req.file_ids:
-            try:
-                conn.execute(
-                    "INSERT OR IGNORE INTO book_members (book_id, file_id, added_at) "
-                    "VALUES (?,?,?)", (req.book_id, fid, time.time()),
+        if conn.execute(
+            "SELECT 1 FROM books WHERE id=?", (req.book_id,)
+        ).fetchone() is None:
+            raise HTTPException(status_code=404, detail="文件书不存在")
+        requested = list(dict.fromkeys(req.file_ids))
+        marks = ",".join("?" * len(requested))
+        visible_rows = conn.execute(
+            f"""SELECT f.id FROM files f
+                LEFT JOIN sources s ON s.id = f.source_id
+                WHERE f.id IN ({marks}) AND {VISIBLE_FILES_COND}""",
+            requested,
+        ).fetchall()
+        visible_ids = {int(row["id"]) for row in visible_rows}
+        existing_ids = {
+            int(row["file_id"])
+            for row in conn.execute(
+                f"""SELECT file_id FROM book_members
+                    WHERE book_id=? AND file_id IN ({marks})""",
+                [req.book_id, *requested],
+            ).fetchall()
+            if int(row["file_id"]) in visible_ids
+        }
+        to_add = [fid for fid in requested if fid in visible_ids - existing_ids]
+        added = 0
+        now = time.time()
+        try:
+            for fid in to_add:
+                cursor = conn.execute(
+                    """INSERT OR IGNORE INTO book_members
+                       (book_id, file_id, added_at) VALUES (?, ?, ?)""",
+                    (req.book_id, fid, now),
                 )
-                n += 1
-            except Exception:
-                pass
-        conn.commit()
-    return {"added": n}
+                added += max(0, cursor.rowcount)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    not_found = [fid for fid in requested if fid not in visible_ids]
+    return {
+        "added": added,
+        "already_present": len(existing_ids),
+        "not_found": len(not_found),
+        "already_present_ids": sorted(existing_ids),
+        "not_found_ids": not_found,
+    }
 
 
 @app.post("/books/remove_member", dependencies=[Depends(require_token)])
@@ -1679,12 +1783,18 @@ def files_tree(
             if sys.platform == "win32" and is_drive_root(s["path"]):
                 prefix = os.path.normcase(os.path.normpath(s["path"]))
                 count = conn.execute(
-                    "SELECT count(*) c FROM files WHERE lower(path) LIKE lower(?) || '%'",
+                    """SELECT count(*) c FROM files f
+                       LEFT JOIN sources s ON s.id = f.source_id
+                       WHERE lower(f.path) LIKE lower(?) || '%' AND """
+                    + VISIBLE_FILES_COND,
                     (prefix,),
                 ).fetchone()["c"]
             else:
                 count = conn.execute(
-                    "SELECT count(*) c FROM files WHERE source_id = ?", (s["id"],)
+                    """SELECT count(*) c FROM files f
+                       LEFT JOIN sources s ON s.id = f.source_id
+                       WHERE f.source_id = ? AND """ + VISIBLE_FILES_COND,
+                    (s["id"],),
                 ).fetchone()["c"]
             roots.append({"id": s["id"], "name": s["name"],
                           "path": s["path"], "count": count})
@@ -1739,7 +1849,7 @@ def file_detail(file_id: int) -> dict:
     """Return bounded detail for the selected file and its active index only."""
     conn = db()
     row = conn.execute(
-        """SELECT f.id, f.volume_uuid, f.inode, f.content_id, f.path, f.name,
+        f"""SELECT f.id, f.volume_uuid, f.inode, f.content_id, f.path, f.name,
                   f.origin_path, f.preserved_path, f.source_id, f.ext, f.mime,
                   f.size, f.state, f.error_code, f.retry_count, f.category_id,
                   f.confidence, f.confirmed_by_user, f.is_dataless, f.mtime,
@@ -1756,7 +1866,7 @@ def file_detail(file_id: int) -> dict:
            LEFT JOIN sources s ON s.id = f.source_id
            LEFT JOIN categories cat ON cat.id = f.category_id
            LEFT JOIN contents c ON c.id = f.content_id
-           WHERE f.id = ?""",
+           WHERE f.id = ? AND {VISIBLE_FILES_COND}""",
         (file_id,),
     ).fetchone()
     if row is None:
@@ -1884,9 +1994,11 @@ def file_content(
     """
     conn = db()
     row = conn.execute(
-        """SELECT f.id, f.content_id, c.active_index_version AS ver
-           FROM files f LEFT JOIN contents c ON c.id = f.content_id
-           WHERE f.id = ?""",
+        f"""SELECT f.id, f.content_id, c.active_index_version AS ver
+            FROM files f
+            LEFT JOIN sources s ON s.id = f.source_id
+            LEFT JOIN contents c ON c.id = f.content_id
+            WHERE f.id = ? AND {VISIBLE_FILES_COND}""",
         (file_id,),
     ).fetchone()
     if row is None:
@@ -1926,11 +2038,18 @@ def file_raw(file_id: int):
     """
     conn = db()
     row = conn.execute(
-        "SELECT path FROM files WHERE id = ?", (file_id,)
+        f"""SELECT f.path, f.preserved_path
+            FROM files f LEFT JOIN sources s ON s.id = f.source_id
+            WHERE f.id = ? AND {VISIBLE_FILES_COND}""",
+        (file_id,),
     ).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="文件不存在")
-    path = Path(str(row["path"]))
+    source_path = Path(str(row["path"]))
+    preserved = Path(str(row["preserved_path"])) if row["preserved_path"] else None
+    path = source_path if source_path.is_file() else preserved
+    if path is None:
+        raise HTTPException(status_code=404, detail="文件已不在磁盘上")
     if not path.is_file():
         raise HTTPException(status_code=404, detail="文件已不在磁盘上")
     media_type, _ = mimetypes.guess_type(str(path))

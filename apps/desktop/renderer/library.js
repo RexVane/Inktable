@@ -21,6 +21,7 @@
     enriching: false,     // AI 整理循环进行中
     enrichDone: 0,        // 本轮已整理篇数
     enrichStop: false,    // 再点一次按钮 = 停止
+    enrichRunId: null,    // 后端持久化运行 id（防失败项在同轮自旋）
     treeOpen: (function () {
       try { return JSON.parse(localStorage.getItem('libraryTreeOpen') || '{}') || {}; }
       catch (e) { return {}; }
@@ -446,6 +447,67 @@
     return card;
   }
 
+  async function stopEnrichmentPass() {
+    state.enrichStop = true;
+    var runId = state.enrichRunId;
+    if (!runId) return;
+    try {
+      await api('/library/enrichment/runs/' + runId + '/cancel', 'POST');
+      showToast('将在当前批次完成后停止');
+    } catch (err) {
+      showToast('停止请求失败：' + err.message);
+    }
+  }
+
+  async function runEnrichmentPass(retryFailed) {
+    if (state.enriching) {
+      await stopEnrichmentPass();
+      return;
+    }
+    state.enriching = true;
+    state.enrichStop = false;
+    state.enrichDone = 0;
+    state.enrichRunId = null;
+    var failed = 0;
+    try {
+      var createPath = '/library/enrichment/runs' +
+        (retryFailed ? '?retry_failed=true' : '');
+      var run = await api(createPath, 'POST');
+      state.enrichRunId = run.id;
+      while (!state.enrichStop) {
+        var result = await api(
+          '/library/enrichment/runs/' + state.enrichRunId + '/step?limit=20',
+          'POST');
+        if (result.available === false) {
+          await stopEnrichmentPass();
+          showToast(result.error || '整理模型不可用（设置 → 模型 里配置知识馆整理）');
+          break;
+        }
+        state.enrichDone += number(result.ready);
+        failed += number(result.failed);
+        if (!number(result.claimed) || result.run_status === 'completed' ||
+            result.run_status === 'cancelled') break;
+        await refreshLibrary(true);
+      }
+      if (state.enrichStop) {
+        showToast('已停止：完成 ' + state.enrichDone + ' 篇' +
+          (failed ? '，失败 ' + failed + ' 篇' : ''));
+      } else if (state.enrichDone || failed) {
+        showToast('整理完成 ' + state.enrichDone + ' 篇' +
+          (failed ? '，失败 ' + failed + ' 篇（需点击“重试失败项”）' : ''));
+      } else {
+        showToast(retryFailed ? '没有需要重试的失败项' : '没有需要整理的条目');
+      }
+    } catch (err) {
+      showToast('整理失败：' + err.message);
+    } finally {
+      state.enriching = false;
+      state.enrichStop = false;
+      state.enrichRunId = null;
+      await refreshLibrary(true);
+    }
+  }
+
   function actionToolbar(shell) {
     var bar = node('div', 'library-toolbar');
     var search = node('input', 'library-search');
@@ -468,45 +530,25 @@
     });
     bar.appendChild(sync);
 
-    // AI 整理：循环跑批（每批 10 篇）直到没有待整理条目；进行中再点一次停止。
-    // 进度放在 state 上 —— refreshLibrary 会重建工具栏，闭包里的元素会失效。
+    // 每次点击创建一个持久化运行；同一条目在该运行中最多尝试一次。
+    // 进行中再点一次会让后端停止认领下一批（当前模型请求安全完成）。
     var enrich = button(
       state.enriching
-        ? '整理中… 已完 ' + state.enrichDone + ' 篇（点击停止）'
+        ? (state.enrichStop ? '正在停止…' :
+          '整理中… 已完 ' + state.enrichDone + ' 篇（点击停止）')
         : 'AI 整理全部',
       'library-action primary', async function () {
-        if (state.enriching) { state.enrichStop = true; return; }
-        state.enriching = true;
-        state.enrichStop = false;
-        state.enrichDone = 0;
-        var failed = 0;
-        try {
-          while (!state.enrichStop) {
-            var result = await api('/library/enrich?limit=20', 'POST');
-            if (result.available === false) {
-              showToast(result.error || '整理模型不可用（设置 → 模型 里配置知识馆整理）');
-              break;
-            }
-            state.enrichDone += number(result.ready);
-            failed += number(result.failed);
-            if (!number(result.claimed)) break;   // 认领为零 = 全部整理完
-            await refreshLibrary(true);
-          }
-          if (state.enrichDone || failed) {
-            showToast('整理完成 ' + state.enrichDone + ' 篇' +
-              (failed ? '，失败 ' + failed + ' 篇（可再点一次重试）' : ''));
-          } else {
-            showToast('没有需要整理的条目');
-          }
-        } catch (err) {
-          showToast('整理失败：' + err.message);
-        } finally {
-          state.enriching = false;
-          state.enrichStop = false;
-          await refreshLibrary(true);
-        }
+        await runEnrichmentPass(false);
       });
     bar.appendChild(enrich);
+
+    if (!state.enriching && number((state.stats || {}).by_status &&
+        state.stats.by_status.failed)) {
+      var retryFailed = button('重试失败项', 'library-action', async function () {
+        await runEnrichmentPass(true);
+      });
+      bar.appendChild(retryFailed);
+    }
 
     var rebuild = button('重建相关资料', 'library-action', async function () {
       await runAction(rebuild, '计算中…', async function () {

@@ -20,13 +20,22 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from urllib.parse import urlparse
+
+from app.config.endpoints import (
+    EndpointPolicyError,
+    normalize_model_endpoint,
+    open_model_request,
+)
 
 log = logging.getLogger("inktable.llm")
 
 # 部分中转站（Cloudflare 系）会拦截 Python-urllib 默认 UA（403）：
 # 密钥是对的也被当成机器人。所有外发模型请求都带自报家门的 UA。
 USER_AGENT = "Inktable/0.3"
+MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+MAX_SSE_LINE_BYTES = 1024 * 1024
+MAX_SSE_TOTAL_BYTES = 16 * 1024 * 1024
+MAX_ASSISTANT_CHARS = 2_000_000
 
 
 class LLMError(RuntimeError):
@@ -72,15 +81,10 @@ def _validate_endpoint(endpoint: str) -> str:
     user's key there. Local HTTP endpoints remain supported for Ollama-style
     providers; HTTPS is required only by product policy, not by this parser.
     """
-    value = (endpoint or "").strip().rstrip("/")
-    if not value:
-        return ""
-    parsed = urlparse(value)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise LLMError("模型接口地址必须是有效的 http:// 或 https:// URL")
-    if parsed.username is not None or parsed.password is not None:
-        raise LLMError("模型接口地址不能包含用户名或密码")
-    return value
+    try:
+        return normalize_model_endpoint(endpoint, allow_empty=True)
+    except EndpointPolicyError as exc:
+        raise LLMError(str(exc)) from exc
 
 
 def configure(endpoint: str, api_key: str, model: str,
@@ -88,11 +92,18 @@ def configure(endpoint: str, api_key: str, model: str,
     """运行时配置。传空串 = 清除（回到纯本地模式）。"""
     value = _validate_endpoint(endpoint)
     if provider not in ("openai", "ollama"):
-        provider = "openai"
+        raise LLMError("未知模型服务类型")
+    key = (api_key or "").strip()
+    model_name = (model or "").strip()
+    if value or key or model_name:
+        if not value or not model_name:
+            raise LLMError("模型接口地址和模型名必须同时填写")
+        if provider == "openai" and not key:
+            raise LLMError("OpenAI 兼容接口必须填写 API 密钥")
     with _lock:
         _cfg.endpoint = value
-        _cfg.api_key = (api_key or "").strip()
-        _cfg.model = (model or "").strip()
+        _cfg.api_key = key
+        _cfg.model = model_name
         _cfg.provider = provider
     log.info("LLM %s（%s）", "已配置" if is_configured() else "已清除",
              _cfg.provider)  # 不打印任何值
@@ -110,13 +121,13 @@ def _auth_header(api_key: str) -> dict:
     return {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
 
-def _config_snapshot() -> tuple[str, str, str]:
+def _config_snapshot() -> tuple[str, str, str, str]:
     """Atomically snapshot credentials so one request cannot mix configs."""
     with _lock:
-        return _cfg.endpoint, _cfg.api_key, _cfg.model
+        return _cfg.endpoint, _cfg.api_key, _cfg.model, _cfg.provider
 
 
-def credentials_for_proxy() -> tuple[str, str, str]:
+def credentials_for_proxy() -> tuple[str, str, str, str]:
     """服务端代为调用外部接口时取用（如拉取模型列表）。
 
     返回值只允许在服务端内部继续使用，**绝不进任何响应体**。
@@ -124,23 +135,17 @@ def credentials_for_proxy() -> tuple[str, str, str]:
     return _config_snapshot()
 
 
-def _provider_snapshot() -> str:
-    with _lock:
-        return _cfg.provider
-
-
 def is_configured() -> bool:
-    endpoint, api_key, model = _config_snapshot()
-    return bool(endpoint and model and (_provider_snapshot() == "ollama"
-                                        or api_key))
+    endpoint, api_key, model, provider = _config_snapshot()
+    return bool(endpoint and model and (provider == "ollama" or api_key))
 
 
 def status() -> dict:
     """给设置界面看的状态。**绝不返回密钥本身**。"""
-    endpoint, api_key, model = _config_snapshot()
+    endpoint, api_key, model, provider = _config_snapshot()
     return {
         "configured": is_configured(),
-        "provider": _provider_snapshot(),
+        "provider": provider,
         "endpoint": endpoint,
         "model": model,
         "has_key": bool(api_key),
@@ -228,7 +233,7 @@ def _urlopen_before_deadline(req, deadline: float):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError("absolute request deadline expired")
-            response = urllib.request.urlopen(req, timeout=remaining)
+            response = open_model_request(req, timeout=remaining)
             if timed_out.is_set():
                 response.close()
                 return
@@ -325,7 +330,7 @@ def chat_stream(messages: list[dict], *, temperature: float = 0.1,
     request deadline. Check monotonic time between SSE lines as well so a
     provider dripping one byte at a time cannot hold an ask forever.
     """
-    endpoint, api_key, model = _config_snapshot()
+    endpoint, api_key, model, provider = _config_snapshot()
     if not is_configured():
         raise LLMNotConfigured("未配置模型服务（设置 → AI 问答）")
     payload: dict = {
@@ -335,7 +340,7 @@ def chat_stream(messages: list[dict], *, temperature: float = 0.1,
     if max_tokens is not None:
         payload["max_tokens"] = max_tokens
     req = urllib.request.Request(
-        _chat_url(endpoint, _provider_snapshot()),
+        _chat_url(endpoint, provider),
         data=json.dumps(payload).encode("utf-8"), method="POST",
         headers={"Content-Type": "application/json", "User-Agent": USER_AGENT,
                  **_auth_header(api_key)},
@@ -345,7 +350,17 @@ def chat_stream(messages: list[dict], *, temperature: float = 0.1,
         with _urlopen_before_deadline(req, deadline) as resp:
             timer, deadline_fired = _arm_deadline_close(resp, deadline)
             try:
-                for raw_line in resp:
+                received = 0
+                assistant_chars = 0
+                while True:
+                    raw_line = resp.readline(MAX_SSE_LINE_BYTES + 1)
+                    if not raw_line:
+                        break
+                    if len(raw_line) > MAX_SSE_LINE_BYTES:
+                        raise LLMError("模型流式响应单帧过大")
+                    received += len(raw_line)
+                    if received > MAX_SSE_TOTAL_BYTES:
+                        raise LLMError("模型流式响应超过总量上限")
                     if deadline_fired.is_set() or time.monotonic() > deadline:
                         raise LLMConnectionError("timeout", "模型服务响应超时")
                     line = raw_line.decode("utf-8", errors="replace").strip()
@@ -362,6 +377,9 @@ def chat_stream(messages: list[dict], *, temperature: float = 0.1,
                     except (json.JSONDecodeError, KeyError, IndexError, TypeError):
                         continue
                     if isinstance(content, str) and content:
+                        assistant_chars += len(content)
+                        if assistant_chars > MAX_ASSISTANT_CHARS:
+                            raise LLMError("模型回答超过长度上限")
                         yield content
             except OSError as exc:
                 if deadline_fired.is_set() or time.monotonic() >= deadline:
@@ -398,11 +416,11 @@ def chat(messages: list[dict], *, temperature: float = 0.1,
     非流式是刻意的（§12.4）：后置校验会改写甚至废弃答案，流式推出去
     就收不回。方案明确允许"首个版本先做非流式"，禁止的是"流式+不校验"。
     """
-    endpoint, api_key, model = _config_snapshot()
+    endpoint, api_key, model, provider = _config_snapshot()
     if not is_configured():
         raise LLMNotConfigured("未配置模型服务（设置 → AI 问答）")
 
-    url = _chat_url(endpoint, _provider_snapshot())
+    url = _chat_url(endpoint, provider)
     payload: dict = {
         "model": model,
         "messages": messages,
@@ -419,6 +437,7 @@ def chat(messages: list[dict], *, temperature: float = 0.1,
         )
         deadline = time.monotonic() + timeout
         chunks: list[bytes] = []
+        received = 0
         with _urlopen_before_deadline(req, deadline) as resp:
             timer, deadline_fired = _arm_deadline_close(resp, deadline)
             try:
@@ -429,6 +448,9 @@ def chat(messages: list[dict], *, temperature: float = 0.1,
                     if not chunk:
                         break
                     chunks.append(chunk)
+                    received += len(chunk)
+                    if received > MAX_RESPONSE_BYTES:
+                        raise LLMError("模型服务响应过大")
             except OSError as exc:
                 if deadline_fired.is_set() or time.monotonic() >= deadline:
                     raise LLMConnectionError("timeout", "模型服务响应超时") from exc
@@ -465,4 +487,6 @@ def chat(messages: list[dict], *, temperature: float = 0.1,
         return ""
     if not isinstance(content, str):
         raise LLMError("模型服务响应格式异常")
+    if len(content) > MAX_ASSISTANT_CHARS:
+        raise LLMError("模型回答超过长度上限")
     return content

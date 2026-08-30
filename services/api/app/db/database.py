@@ -23,10 +23,10 @@ from urllib.parse import quote
 
 from app.db.schema import (
     DEFAULT_SETTINGS,
-    LIBRARY_BOOTSTRAP_SQL,
     SCHEMA,
     SCHEMA_VERSION,
 )
+from app.library.core import LIBRARY_BOOTSTRAP_SQL
 
 # 单实例锁的平台原语：Unix 用 flock，Windows 用 msvcrt 字节区锁
 if sys.platform == "win32":
@@ -39,7 +39,17 @@ def _resolve_app_dir() -> Path:
     override = os.environ.get("INKTABLE_DATA_DIR", "").strip()
     if override:
         return Path(override).expanduser()
-    return Path.home() / "Library" / "Application Support" / "Inktable"
+    home = Path.home()
+    legacy = home / "Library" / "Application Support" / "Inktable"
+    if (legacy / "library.db").is_file():
+        return legacy
+    if sys.platform == "darwin":
+        return legacy / "data"
+    if sys.platform == "win32":
+        base = Path(os.environ.get("APPDATA") or home / "AppData" / "Roaming")
+        return base / "Inktable" / "data"
+    base = Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share")
+    return base / "Inktable"
 
 
 APP_DIR = _resolve_app_dir()

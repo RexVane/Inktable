@@ -9,7 +9,6 @@ without making the desktop search and QA paths drift apart again.
 from __future__ import annotations
 
 import hashlib
-import sqlite3
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor

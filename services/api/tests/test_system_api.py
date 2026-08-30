@@ -67,6 +67,8 @@ def test_metadata_ask_uses_sql_without_rag(api_client, monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert body["mode"] == "metadata"
+    assert body["answer_source"] == "metadata"
+    assert body["used_personal_files"] is False
     assert "1 个" in body["answer"]
     assert body["citations"] == []
 
@@ -460,6 +462,37 @@ def test_model_slot_list_uses_saved_credentials(api_client, clean_model_slots, m
         assert model_slots.get("library")["api_key"] == "sk-from-save"
     finally:
         srv.shutdown()
+
+
+def test_model_slot_list_never_reuses_key_for_another_origin(
+    api_client, clean_model_slots, monkeypatch,
+):
+    client, _main_mod = api_client
+    from app.config import llm_client
+
+    saved = client.post("/settings/models", headers=H, json={
+        "slot": "library",
+        "provider": "openai",
+        "endpoint": "https://api.example.com/v1",
+        "api_key": "origin-bound-secret",
+        "model": "m-1",
+    })
+    assert saved.status_code == 200
+    monkeypatch.setattr(
+        llm_client,
+        "list_models",
+        lambda **_kwargs: pytest.fail("cross-origin request must not receive saved key"),
+    )
+
+    response = client.post("/settings/models/list", headers=H, json={
+        "slot": "library",
+        "provider": "openai",
+        "endpoint": "https://other.example/v1",
+    })
+
+    assert response.status_code == 422
+    assert "API 密钥" in response.json()["detail"]
+    assert "origin-bound-secret" not in response.text
 
 
 def test_model_slot_list_requires_endpoint(api_client, clean_model_slots):
