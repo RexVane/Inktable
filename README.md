@@ -5,6 +5,12 @@
 <h1 align="center">Ordo</h1>
 
 <p align="center">
+  <a href="https://github.com/RexVane/Ordo/actions/workflows/backend-tests.yml"><img src="https://github.com/RexVane/Ordo/actions/workflows/backend-tests.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT"></a>
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg" alt="macOS and Windows">
+</p>
+
+<p align="center">
   <strong>Local-first personal knowledge base for macOS and Windows.</strong><br>
   Turns files already on your disks into a searchable, citable, askable knowledge space.<br>
   <strong>Never moves, copies, or renames originals</strong> — organization happens in the index.
@@ -16,113 +22,100 @@
   <strong>默认不移动、不复制、不改名任何文件</strong> —— 组织全部发生在索引层。
 </p>
 
-<p align="center">
-  <a href="#status">0.3.0</a> ·
-  <a href="docs/RELEASE-0.3.0.md">Release notes</a> ·
-  <a href="docs/eval/README.md">Eval</a> ·
-  <a href="docs/WINDOWS-PORT.md">Windows</a>
-</p>
-
-## What it is
-
-Ordo is a three-pane knowledge workbench on top of your real disks.
-
-- **Left** — local drives as top-level sources, then a file tree of real paths (or the knowledge library)
-- **Center** — file list grouped by extension, or the original viewer
-- **Right** — knowledge Q&A with clickable citations into the source
-
-Windows and macOS both treat **local disks** as sources (`C:\`, `/`, `/Volumes/…`). Enable a disk, and the tree follows the real directory. You can still add a folder by hand. Chat apps, browsers, and Downloads are not separate sources.
-
 ## Features
 
-| | |
-|---|---|
-| In-place library | Files stay on disk. Identity is volume + inode, not path. |
-| Hybrid search | jieba + trigram + substring + local `bge-m3` vectors, fused with RRF |
-| Cited answers | Fast or deep mode; quotes jump into PDF/DOCX originals |
-| Knowledge library | Sidecar-side AI enrichment (summaries, tags, topics); failed items retry only when you ask |
-| Local or cloud models | Ollama on this machine, or a cloud/proxy API (Chat Completions / Responses / Anthropic Messages) |
-| Privacy default | Renderer CSP has no network. File bytes go through `ordodoc://` after the main process authorizes a library path. |
+- **In place** — files stay on disk. Identity is volume + inode, not path.
+- **Hybrid search** — jieba + trigram + substring + local `bge-m3` vectors, fused with RRF.
+- **Cited Q&A** — fast or deep mode; quotes open the PDF/DOCX original.
+- **Knowledge library** — sidecar-side summaries, tags, topics. Failed items retry only when you ask.
+- **Local or cloud models** — Ollama on this machine, or a cloud/proxy API (Chat Completions / Responses / Anthropic Messages).
+- **Privacy default** — renderer CSP has no network. File bytes go through `ordodoc://` after the main process authorizes a library path.
 
-## Status
+Windows and macOS both treat **local disks** as sources (`C:\`, `/`, `/Volumes/…`). Chat apps, browsers, and Downloads are not separate sources.
 
-**0.3.0** — workbench rewrite; Windows port is in daily use (discover → scan → index → vectors → Q&A → live watch). See `docs/RELEASE-0.3.0.md` and `docs/WINDOWS-PORT.md`.
+## Repository
 
-Frozen retrieval on the private v8 gold set (`docs/eval/`): Recall@5 **94.3%**, MRR@10 **88.1%**, nDCG@10 **91.0%**. Code signing for macOS/Windows is still open.
+```
+apps/desktop/     Electron workbench (no bundler)
+services/api/     FastAPI sidecar (SQLite / FTS5 / sqlite-vec)
+docs/             design, eval, release notes
+```
 
-## Develop
+Current release is **0.3.0**. Windows is in daily use. macOS/Windows code signing is not done yet — see [Limits](#limits).
+
+## Getting started
+
+There is no signed installer on GitHub Releases yet. Run from source:
 
 ```bash
-# API
-cd services/api
-uv sync
-uv run pytest
-
-# Desktop (runs the API from source; no sidecar build needed)
+git clone https://github.com/RexVane/Ordo.git
+cd Ordo/services/api && uv sync
 cd ../../apps/desktop && npm install && npm start
 ```
 
 ```powershell
-cd services\api ; uv sync
+git clone https://github.com/RexVane/Ordo.git
+cd Ordo\services\api ; uv sync
 cd ..\..\apps\desktop ; npm install ; npm start
-
-# Release build (Windows x64 NSIS) — freeze the sidecar first
-cd ..\..\services\api ; uv run --group dev pyinstaller sidecar.spec --clean --noconfirm
-cd ..\..\apps\desktop ; npm run dist -- --win --x64
 ```
 
-Point a scratch database with `ORDO_DB=/tmp/dev.db` so you do not touch the real library.
+Needs Python 3.12, [uv](https://docs.astral.sh/uv/), and Node.js 20+. Point a scratch DB with `ORDO_DB` so you do not touch a real library. Optional: local [Ollama](https://ollama.com) with `bge-m3` for semantic search (keyword search still works without it).
+
+Packaged Windows build (after freezing the sidecar):
+
+```powershell
+cd services\api ; uv run --group dev pyinstaller sidecar.spec --clean --noconfirm
+cd ..\..\apps\desktop ; npm run dist -- --win --x64
+```
 
 ## Architecture
 
 ```
 Electron main  ──stdin: {token}──▶  Python sidecar (FastAPI)
      │          ◀──stdout: {port}        │
-     │                                   ├─ library/    sources, identity, watch, preservation
-  renderer                               ├─ ingestion/  parse, hierarchy, incremental index
+     │                                   ├─ library/    sources, identity, watch
+  renderer                               ├─ ingestion/  parse, hierarchy, index
   (workbench) ──HTTP + Bearer───────────▶├─ retrieval/  hybrid recall, RRF, Q&A
      │                                   └─ db/         SQLite + FTS5 + sqlite-vec
      └─ ordodoc:// original bytes (main process proxies sidecar /files/{id}/raw)
 ```
 
-Data directory:
+Data directory: `~/Library/Application Support/Ordo/data` (macOS), `%APPDATA%\Ordo\data` (Windows), `~/.local/share/Ordo` (Linux).
 
-- macOS: `~/Library/Application Support/Ordo/data`
-- Windows: `%APPDATA%\Ordo\data`
-- Linux: `~/.local/share/Ordo`
-
-Migrate it in Settings → General. Do not put the library inside an iCloud/synced documents folder.
-
-**files vs contents:** N files : 1 content. Duplicates share one parse and one index. If any copy still exists, the index stays.
+**files vs contents:** N files share 1 content. Duplicates are parsed and indexed once.
 
 ## Models
 
-Three independent slots (Settings → Models):
+Settings → Models, three slots:
 
-1. **Q&A** — local Ollama, or cloud/proxy with protocol + key + model. Can import from cc-switch.
-2. **Library enrichment** — local Ollama or a cloud OpenAI-compatible API (cloud means document text leaves this machine).
-3. **Embeddings** — local Ollama only; output dimension must match the 1024-d vector table.
+1. **Q&A** — Ollama, or cloud/proxy (protocol + key + model). Can import from cc-switch.
+2. **Library enrichment** — Ollama or a cloud OpenAI-compatible API (cloud means document text leaves this machine).
+3. **Embeddings** — Ollama only; output dimension must be 1024.
 
-Keys are stored with Electron `safeStorage`. The sidecar keeps them in memory — not in SQLite, not in logs, not echoed back.
+Keys use Electron `safeStorage`. The sidecar keeps them in memory — not SQLite, not logs, not echoed back.
 
-## Docs
+## Documentation
 
-- [`docs/PLAN.md`](docs/PLAN.md) — product plan
-- [`docs/HANDOFF.md`](docs/HANDOFF.md) — hard constraints before you change behavior
-- [`docs/RELEASE-0.3.0.md`](docs/RELEASE-0.3.0.md) — this version
-- [`docs/WINDOWS-PORT.md`](docs/WINDOWS-PORT.md) — Windows port notes
-- [`docs/RETRIEVAL-PERF.md`](docs/RETRIEVAL-PERF.md) — search latency
-- [`docs/eval/README.md`](docs/eval/README.md) — 77-question gold contract and frozen v8 numbers
-- [`docs/M0-RESULTS.md`](docs/M0-RESULTS.md) — early measurement notes (Chinese tokenization, FTS5, watchers)
+- [Contributing](CONTRIBUTING.md)
+- [Security](SECURITY.md)
+- [Code of conduct](CODE_OF_CONDUCT.md)
+- [Release 0.3.0](docs/RELEASE-0.3.0.md)
+- [Windows port](docs/WINDOWS-PORT.md)
+- [Plan](docs/PLAN.md) · [Hard constraints](docs/HANDOFF.md)
+- [Eval](docs/eval/README.md) — frozen v8: Recall@5 94.3%, MRR@10 88.1%, nDCG@10 91.0%
 
 ## Limits
 
 - Not code-signed; first macOS launch needs right-click → Open
-- Original layout viewer is PDF / DOCX; other types use extracted text
+- Original-layout viewer is PDF / DOCX; other types use extracted text
 - Embedding slot is local Ollama only
 - Ingest whitelist: `.txt` `.md` `.pdf` `.docx` `.csv` `.html` `.htm`
 - Full-text index caps a document at 10 MB
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Issues and PRs are welcome. Security reports go through [SECURITY.md](SECURITY.md), not public issues.
+
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE) © 2026 RexVane

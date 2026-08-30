@@ -1,0 +1,19 @@
+name: Feature request
+description: A concrete change you want / 想要的具体改动
+title: "[feat] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / 要解决什么
+      description: What is painful or missing today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal / 建议
+      description: A small, specific change. Ordo does not move user files by default.
+    validations:
+      required: true

@@ -1,0 +1,38 @@
+name: Bug report
+description: Something is broken / 出了问题
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security issues → [private advisory](https://github.com/RexVane/Ordo/security/advisories/new), not this form.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened / 发生了什么
+      description: What you did, what you expected, what you got.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options:
+        - Windows
+        - macOS
+        - Linux
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      placeholder: "0.3.0 or a git SHA"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / 日志
+      description: Sidecar stderr, renderer console, or a screenshot. Strip API keys.
+      render: shell
