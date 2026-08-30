@@ -28,7 +28,10 @@ const { pathToFileURL } = require('url');
 // 密钥只在主进程，渲染层拿不到 sidecar 端口与令牌。
 protocol.registerSchemesAsPrivileged([
   { scheme: 'inkdoc',
-    privileges: { standard: true, stream: true, supportFetchAPI: true } },
+    // corsEnabled：file:// 页面对自定义协议的 fetch 会被 Chromium 当成跨源。
+    // 不打开这项，原文查看器会报 CORS，PDF/DOCX/MD 全部空白。
+    privileges: { standard: true, stream: true, supportFetchAPI: true,
+                  corsEnabled: true } },
 ]);
 
 const VENDOR_ROOT = path.resolve(__dirname, '..', 'renderer', 'vendor');
@@ -239,6 +242,8 @@ function startSidecar() {
 
     const env = { ...process.env };
     if (customDataDir) env.INKTABLE_DATA_DIR = customDataDir;
+    // Ollama 地址**不**在这里写死：sidecar 自己探测（app/config/models.py
+    // discover_ollama_url）。设了 INKTABLE_OLLAMA_URL 反而会短路那次探测。
     const proc = spawn(launch.command, launch.args, {
       cwd: launch.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -493,6 +498,9 @@ function createWindow() {
             titleBarOverlay: { ...OVERLAY_FALLBACK, height: 48 },
           }
         : {}),
+    // 窗口 show: false + 'ready-to-show' 才显示，首帧已由渲染层画好，
+    // 这个底色不会以闪白的形式露出来。别改成跟 nativeTheme 走 ——
+    // 系统深浅与应用内主题可以不一致，那样反而会挑错边。
     backgroundColor: '#faf9f7',
     show: false,
     webPreferences: {
@@ -985,10 +993,12 @@ function summonSearch() {
 function setupGlobalEntry() {
   let accelerator = '';
   try {
+    const mac = process.platform === 'darwin';
     if (globalShortcut.register('Alt+Space', summonSearch)) {
-      accelerator = '⌥Space';
+      accelerator = mac ? '⌥Space' : 'Alt+Space';
     } else if (globalShortcut.register('CommandOrControl+Shift+K', summonSearch)) {
-      accelerator = '⌘⇧K';   // ⌥Space 被别的应用占了就退而求其次
+      // ⌥Space 被别的应用占了就退而求其次
+      accelerator = mac ? '⌘⇧K' : 'Ctrl+Shift+K';
     }
   } catch (err) {
     console.error('[main] 全局快捷键注册失败:', err.message);
@@ -996,10 +1006,20 @@ function setupGlobalEntry() {
 
   try {
     // 菜单栏图标需 ~16pt 模板图；系统命名图标是 Touch Bar 尺寸，必须缩放，
-    // 否则会显示成一个特别大的放大镜。用 1x/2x 两档 PNG 作为模板图。
-    const icon = nativeImage.createFromNamedImage('NSTouchBarSearchTemplate')
-      .resize({ width: 16, height: 16 });
-    icon.setTemplateImage(true);
+    // 否则会显示成一个特别大的放大镜。
+    //
+    // `createFromNamedImage` 只在 macOS 有效：Windows/Linux 上它返回一张
+    // **0×0 的空图**且 resize 不抛错，于是 `new Tray(空图)` 悄悄成功 ——
+    // 托盘项存在但图标看不见，catch 也不会触发。非 macOS 改用随应用分发的品牌图。
+    const icon = process.platform === 'darwin'
+      ? nativeImage.createFromNamedImage('NSTouchBarSearchTemplate')
+        .resize({ width: 16, height: 16 })
+      : nativeImage.createFromPath(
+        path.join(__dirname, '..', 'build', 'brand-mark.png'))
+        .resize({ width: 16, height: 16 });
+    if (icon.isEmpty()) throw new Error('托盘图标为空，拒绝创建看不见的托盘项');
+    // 模板图是 macOS 概念（按菜单栏深浅自动反色）；其他平台设了没用
+    if (process.platform === 'darwin') icon.setTemplateImage(true);
     tray = new Tray(icon);
     tray.setToolTip('Inktable — 个人知识库');
     tray.setContextMenu(Menu.buildFromTemplate([

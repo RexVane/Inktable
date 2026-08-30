@@ -46,6 +46,14 @@ test('renderer content security policy forbids eval and network exfiltration', (
   assert.doesNotMatch(policy[1], /connect-src[^;]*(https?|ws|wss):/);
 });
 
+test('inkdoc scheme allows fetch from the file:// renderer', () => {
+  // Chromium treats custom-scheme fetch from file:// as CORS. Without
+  // corsEnabled the original viewer is a blank page with a console error.
+  assert.match(main, /scheme: 'inkdoc'/);
+  assert.match(main, /corsEnabled: true/);
+  assert.match(main, /supportFetchAPI: true/);
+});
+
 test('every inline script is CSP-hash declared, with no stale hashes', () => {
   const policy = renderer.match(/http-equiv="Content-Security-Policy" content="([^"]+)"/);
   assert.ok(policy, 'renderer must declare a Content Security Policy');
