@@ -40,7 +40,13 @@ from app.db.database import (
     release_single_instance_lock,
 )
 from app.db.visibility import VISIBLE_FILES_COND
-from app.discovery.sources import discover_all, fixed_drive_roots
+from app.discovery.sources import (
+    discover_all,
+    disk_root_label,
+    fixed_drive_roots,
+    macos_volume_roots,
+)
+from app.watcher.policy import is_drive_root, resolve_source_policy, uses_disk_root_sources
 from app.health import collect_health
 from app.index.confidence import assess as assess_confidence
 from app.index.pipeline import (
@@ -51,7 +57,6 @@ from app.index.pipeline import (
 )
 from app.retrieval.compress import EvidenceSource, best_span
 from app.retrieval.pipeline import run as run_retrieval
-from app.watcher.policy import is_drive_root, resolve_source_policy
 from app.watcher.scanner import (
     ScanStats,
     path_is_within,
@@ -208,19 +213,26 @@ def _path_within(path: str, root: str) -> bool:
 
 
 def _drive_root_for(path: str) -> Path | None:
-    if sys.platform != "win32":
-        return None
-    drive = Path(path).drive
-    return Path(drive + os.sep) if drive else None
+    if sys.platform == "win32":
+        drive = Path(path).drive
+        return Path(drive + os.sep) if drive else None
+    if sys.platform == "darwin":
+        parts = Path(os.path.abspath(os.path.normpath(path))).parts
+        if len(parts) >= 3 and parts[1] == "Volumes":
+            return Path("/") / "Volumes" / parts[2]
+        if parts and parts[0] == "/":
+            return Path("/")
+    return None
 
 
 def _legacy_drive_roots(conn) -> list[Path]:
-    """Find fixed drives represented by legacy non-manual child sources."""
-    if sys.platform != "win32":
+    """Find disks represented by legacy non-manual child sources."""
+    if not uses_disk_root_sources():
         return []
+    live = fixed_drive_roots() if sys.platform == "win32" else macos_volume_roots()
     fixed = {
         os.path.normcase(os.path.normpath(str(root))): root
-        for root in fixed_drive_roots()
+        for root in live
     }
     rows = conn.execute(
         "SELECT path, discovered_by FROM sources WHERE discovered_by != 'manual'"
@@ -229,10 +241,10 @@ def _legacy_drive_roots(conn) -> list[Path]:
     for row in rows:
         if is_drive_root(row["path"]):
             continue
-        drive = Path(row["path"]).drive
-        if not drive:
+        drive = _drive_root_for(row["path"])
+        if drive is None:
             continue
-        candidate = os.path.normcase(os.path.normpath(drive + os.sep))
+        candidate = os.path.normcase(os.path.normpath(str(drive)))
         if candidate in fixed:
             roots[candidate] = fixed[candidate]
     return list(roots.values())
@@ -248,7 +260,7 @@ def _visible_source_rows(conn):
     drive_roots = [row for row in rows if is_drive_root(row["path"])]
     visible = []
     for row in rows:
-        if sys.platform != "win32" or is_drive_root(row["path"]):
+        if not uses_disk_root_sources() or is_drive_root(row["path"]):
             visible.append(row)
             continue
         if row["discovered_by"] == "manual" and not any(
@@ -267,8 +279,8 @@ def _normalize_drive_sources(conn) -> None:
 
 
 def _ensure_drive_sources(conn, roots=None) -> dict[str, int]:
-    """Create selected fixed-disk roots and reassign old child file records."""
-    if sys.platform != "win32":
+    """Create selected disk roots and reassign old child file records."""
+    if not uses_disk_root_sources():
         return {}
     roots = list(roots or [])
     if not roots:
@@ -279,7 +291,7 @@ def _ensure_drive_sources(conn, roots=None) -> dict[str, int]:
     result: dict[str, int] = {}
     for root in roots:
         path = str(root)
-        name = f"{root.drive.rstrip(':')} 盘"
+        name = disk_root_label(root)
         child_enabled = any(
             _path_within(child["path"], path)
             and child["path"] != path
@@ -539,7 +551,7 @@ def discover() -> dict:
 @app.post("/sources/discover_deep", dependencies=[Depends(require_token)])
 def discover_deep() -> dict:
     """Compatibility endpoint: Windows returns fixed disks, other platforms deep-scan."""
-    if sys.platform == "win32":
+    if uses_disk_root_sources():
         return {"sources": [s.to_dict() for s in discover_all()]}
     from app.discovery.deepscan import deep_scan
 
@@ -592,7 +604,7 @@ def enable_source(req: EnableRequest) -> dict:
         drive_root = policy.root if is_drive_root(policy.root) else None
         if drive_root is not None:
             req = req.model_copy(update={
-                "name": req.name or f"{drive_root.drive.rstrip(':')} 盘",
+                "name": req.name or disk_root_label(drive_root),
                 "kind": "system",
                 "discovered_by": "fixed_drive",
             })
@@ -612,7 +624,7 @@ def enable_source(req: EnableRequest) -> dict:
     watcher = watch_service()
     watcher.sync_watched_paths()
     watcher.watch(row["path"])
-    if sys.platform == "win32" and is_drive_root(row["path"]):
+    if is_drive_root(row["path"]):
         job_id = watcher.queue_scan(
             row["id"], row["path"], prune_projects=policy.prune_projects,
         )
@@ -668,6 +680,8 @@ def list_sources() -> dict:
                 (prefix,),
             ).fetchone()["c"]
         else:
+            # macOS ``/`` is a prefix of every path; count by source_id so
+            # ``/Volumes/Other`` files are not attributed to the boot disk.
             file_count = conn.execute(
                 "SELECT count(*) c FROM files WHERE source_id = ?", (r["id"],)
             ).fetchone()["c"]

@@ -15,6 +15,7 @@ import itertools
 import mimetypes
 import os
 import stat
+import sys
 import time
 from contextlib import nullcontext
 from dataclasses import dataclass, field
@@ -68,6 +69,14 @@ INSTALL_DIR_NAMES = {
     "microsoft visual studio", "vmware workstation",
 }
 INSTALL_DIR_PREFIXES = ("pycharm ", "intellij idea ")
+
+# Walking macOS ``/`` would otherwise descend into other volumes via
+# ``/Volumes`` and into OS trees that Windows drive roots never contain.
+MAC_BOOT_SKIP_DIRS = {
+    "volumes", "system", "usr", "bin", "sbin", "private", "cores",
+    "dev", "net", "opt", "home", "applications", "library", "network",
+    "preboot", "update",
+}
 INSTALL_MARKERS = (
     ("python.exe",),
     ("code.exe",),
@@ -435,10 +444,16 @@ def iter_files(root: Path, max_depth: int = MAX_DEPTH,
 
         kept: list[str] = []
         skipped = 0
+        boot_skip = (
+            sys.platform == "darwin"
+            and str(root) == os.sep
+            and current == root
+        )
         for dirname in dirnames:
             candidate = current / dirname
             if (
                 should_skip_dir(dirname)
+                or (boot_skip and dirname.casefold() in MAC_BOOT_SKIP_DIRS)
                 or _normal_path(candidate) in pruned
                 or _is_reparse_dir(candidate)
             ):

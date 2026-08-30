@@ -537,6 +537,12 @@ def test_install_trees_pruned_even_when_project_pruning_is_off(db, source, tmp_p
     assert "手册.txt" not in found, "安装树应当被剪掉，即使代码项目剪枝是关的"
 
 
+def test_macos_boot_skip_covers_other_volumes():
+    """Walking ``/`` must not recurse into ``/Volumes`` (other disks)."""
+    assert "volumes" in scanner.MAC_BOOT_SKIP_DIRS
+    assert "system" in scanner.MAC_BOOT_SKIP_DIRS
+
+
 def test_scan_never_modifies_files(db, source, tmp_path):
     """扫描绝不改动原文件 —— PLAN §1 第一条不可协商约束。"""
     paths = []

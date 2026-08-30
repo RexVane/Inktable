@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-+bogcxA9rN61l4U27NYWKv0PEc6ckm34si88nWr7EMQ=' 'sha256-CqYdFtA6Z/Kx52iNafviHJZpKwlo/wq2Ygstl2Wqim8='; style-src 'self' 'unsafe-inline'; connect-src inkdoc:; worker-src 'self' inkdoc:; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-+bogcxA9rN61l4U27NYWKv0PEc6ckm34si88nWr7EMQ=' 'sha256-6VP9imWeJ3KKwg0jtWFbnNpVIG8IOY8BIjal2pFJRhQ='; style-src 'self' 'unsafe-inline'; connect-src inkdoc:; worker-src 'self' inkdoc:; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'" />
 <title>Inktable</title>
 <style>
   /* 结构性 reset —— 全部视觉规则集中在 workbench.css，避免两处定义漂移 */
@@ -2291,7 +2291,9 @@ document.getElementById('btnDeepScan').onclick = async function () {
 };
 
 async function previewAndConfirmSource(source, hintEl) {
-  if (source.is_drive_root || /^[A-Za-z]:[\\/]?$/.test(String(source.path || ''))) return true;
+  var path = String(source.path || '');
+  if (source.is_drive_root || /^[A-Za-z]:[\\/]?$/.test(path) ||
+      path === '/' || /^\/Volumes\/[^/]+\/?$/.test(path)) return true;
   if (hintEl) hintEl.textContent = '正在预扫描…';
   let p;
   try {
@@ -3731,7 +3733,7 @@ document.getElementById('btnRescan').onclick = async function () {
     renderSetup();
     if (!fresh.length) {
       document.getElementById('setupSub').textContent =
-        '没有发现新的固定盘。固定盘启用后，盘内目录会按真实路径展开。';
+        '没有发现新的磁盘。启用磁盘后，盘内目录会按真实路径展开。';
     }
   } catch (e) {
     hint.textContent = '查找失败：' + e.message;

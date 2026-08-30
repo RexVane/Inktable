@@ -54,6 +54,49 @@ def test_windows_discovery_returns_fixed_drive_roots(monkeypatch):
     assert all(item.doc_count == 0 for item in found)
 
 
+def test_macos_discovery_returns_volume_roots_not_apps(monkeypatch):
+    from app.discovery import sources
+
+    called = {"wechat": 0}
+
+    def boom():
+        called["wechat"] += 1
+        raise AssertionError("macOS must not list IM/browser folders as sources")
+
+    monkeypatch.setattr(sources.sys, "platform", "darwin")
+    monkeypatch.setattr(sources, "macos_volume_roots", lambda: [
+        sources.Path("/"), sources.Path("/Volumes/Data"),
+    ])
+    monkeypatch.setattr(sources.Path, "is_dir", lambda _self: True)
+    monkeypatch.setattr(sources, "discover_wechat", boom)
+    monkeypatch.setattr(sources, "discover_browsers", boom)
+    monkeypatch.setattr(sources, "discover_system", boom)
+    monkeypatch.setattr(sources, "_macos_boot_volume_name", lambda: "Macintosh HD")
+    found = sources.discover_all()
+    assert [item.path for item in found] == [str(sources.Path("/")), str(sources.Path("/Volumes/Data"))]
+    assert [item.name for item in found] == ["Macintosh HD", "Data"]
+    assert all(item.is_drive_root for item in found)
+    assert all(item.discovered_by == "fixed_drive" for item in found)
+    assert called["wechat"] == 0
+
+
+def test_drive_root_paths_match_windows_and_macos(monkeypatch):
+    from app.watcher import policy
+
+    monkeypatch.setattr(policy.sys, "platform", "win32")
+    assert policy.is_drive_root(r"C:\\")
+    assert policy.is_drive_root("D:\\")
+    assert not policy.is_drive_root(r"C:\\Users")
+
+    monkeypatch.setattr(policy.sys, "platform", "darwin")
+    assert policy.is_drive_root("/")
+    assert policy.is_drive_root("/Volumes/Data")
+    assert policy.is_drive_root("/Volumes/Data/")
+    assert not policy.is_drive_root("/Users/me")
+    assert not policy.is_drive_root("/Volumes/Data/subdir")
+    assert not policy.is_drive_root("/Volumes")
+
+
 def test_windows_wechat_custom_root_reports_direct_documents(tmp_path, monkeypatch):
     from app.discovery import sources
 

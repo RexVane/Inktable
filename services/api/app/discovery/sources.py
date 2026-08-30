@@ -63,19 +63,91 @@ def fixed_drive_roots() -> list[Path]:
     return roots
 
 
+def macos_volume_roots() -> list[Path]:
+    """Local Mac volumes: boot disk ``/`` plus extra mounts under ``/Volumes``.
+
+    Skip the ``/Volumes/Macintosh HD`` symlink back to boot, and skip
+    non-mount directories. Network/disk-image mounts that are not
+    ``is_mount()`` stay out — same idea as Windows ``DRIVE_FIXED``.
+    """
+    if sys.platform != "darwin":
+        return []
+    roots: list[Path] = []
+    boot = Path("/")
+    if boot.is_dir():
+        roots.append(boot)
+    volumes = Path("/Volumes")
+    if not volumes.is_dir():
+        return roots
+    boot_resolved: Path | None
+    try:
+        boot_resolved = boot.resolve()
+    except OSError:
+        boot_resolved = None
+    try:
+        children = list(volumes.iterdir())
+    except OSError:
+        return roots
+    for child in children:
+        try:
+            if not child.is_dir() or child.is_symlink():
+                continue
+            if boot_resolved is not None and child.resolve() == boot_resolved:
+                continue
+            if not child.is_mount():
+                continue
+            roots.append(child)
+        except OSError:
+            continue
+    return roots
+
+
+def disk_root_label(root: Path | str) -> str:
+    """Display name for a disk-root source (``C 盘`` / ``Macintosh HD`` / volume)."""
+    path = Path(root)
+    raw = str(root)
+    drive = PureWindowsPath(raw).drive.rstrip(":")
+    if drive and (sys.platform == "win32" or (len(raw) >= 2 and raw[1] == ":")):
+        return f"{drive} 盘"
+    parts = path.parts
+    if raw in {"/", "", os.sep} or parts in {("/",), (os.sep,)}:
+        return _macos_boot_volume_name()
+    return path.name or raw
+
+
+def _macos_boot_volume_name() -> str:
+    volumes = Path("/Volumes")
+    if volumes.is_dir():
+        try:
+            boot = Path("/").resolve()
+            for child in volumes.iterdir():
+                try:
+                    if child.is_symlink() and child.resolve() == boot:
+                        name = child.name.strip()
+                        if name:
+                            return name
+                except OSError:
+                    continue
+        except OSError:
+            pass
+    return "Macintosh HD"
+
+
 def discover_fixed_drives() -> list[Source]:
-    """Discover fixed disks as the only Windows top-level sources.
+    """Discover local disks as the only auto top-level sources.
 
     Do not recursively probe here: the real file count is produced by the
     background source scan after the user enables a disk.
     """
+    if sys.platform == "win32":
+        roots = fixed_drive_roots()
+    elif sys.platform == "darwin":
+        roots = macos_volume_roots()
+    else:
+        roots = []
     return [
         Source(
-            # `Path.drive` follows the host OS.  Tests and migration tools can
-            # legitimately feed a Windows root while running on POSIX, where
-            # `Path("B:/").drive` is empty.  Parse the drive syntax explicitly
-            # so discovery has one cross-platform contract.
-            name=f"{PureWindowsPath(str(root)).drive.rstrip(':')} 盘",
+            name=disk_root_label(root),
             path=str(root),
             kind="system",
             discovered_by="fixed_drive",
@@ -83,7 +155,7 @@ def discover_fixed_drives() -> list[Source]:
             permission_ok=_check_permission(root),
             is_drive_root=True,
         )
-        for root in fixed_drive_roots()
+        for root in roots
         if root.is_dir()
     ]
 
@@ -689,9 +761,9 @@ def discover_system() -> list[Source]:
 # ---------------------------------------------------------------- 汇总
 
 def discover_all() -> list[Source]:
-    # Windows 的统一来源模型：固定盘是唯一顶层来源，盘内目录由
+    # Windows / macOS：本地磁盘是唯一顶层来源，盘内目录由
     # /files/tree 按真实文件路径逐层展开，不再把应用缓存目录列成来源。
-    if sys.platform == "win32":
+    if sys.platform in {"win32", "darwin"}:
         return discover_fixed_drives()
 
     sources: list[Source] = []
