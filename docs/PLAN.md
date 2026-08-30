@@ -50,6 +50,9 @@ reset 或丢弃未提交改动。官方入库图标作为发布基准，本地�
 - 知识馆刷新增加单调版本号与筛选快照，只允许最新请求落地；忙碌状态也按请求版本清理。
 - `workflow_dispatch` 增加 Ubuntu/Windows 的真实 sidecar、AppImage/deb/NSIS
   构建与冻结进程 `/health` 冒烟；普通 push 保留较快的全量单元测试矩阵。
+- Actions 升级并固定到已核实的 Node 24 版本：`checkout@v7.0.1`、
+  `setup-python@v7.0.0`、`setup-node@v7.0.0`、`setup-uv@v10.0.1`，不再依赖
+  runner 对 Node 20 action 的强制兼容层。
 - 中英文贡献指南修正 `ORDO_DB` 的 shell 用法，后端模块说明同步到三平台目录约定。
 
 ### 0.0.3 当前验证与发布门槛
@@ -67,11 +70,18 @@ macOS 本机冻结 sidecar 与 DMG 冒烟已通过：包内 arm64 sidecar 为
 包内 sidecar 实际启动后 `/health`、中文检索、FTS5、sqlite-vec、OCR 与固定检索
 配置全部通过，`Resources/brand` 中的运行时图标也已核对。
 
-`main` 更新仍需满足：集成分支推送后 GitHub Ubuntu/Windows 全矩阵及手动
-package-smoke 全绿；推送前再次 fetch，若
-`origin/main` 又前进则重新普通 merge 并复验。任一打包或 CI 失败都不得把未经验证的
-融合结果推到 `main`。标签语义评测、macOS 公证/签名、Windows 签名继续作为正式公开
-发布门槛，不伪装为本轮代码同步已经完成。
+GitHub 手动跨平台验证最终在
+[`33309042482`](https://github.com/RexVane/Ordo/actions/runs/33309042482)
+全绿：9 个 job 覆盖 Ubuntu/Windows 完整后端、两端桌面、macOS/Windows/Ubuntu
+路径与 CLI，以及 Linux AppImage/deb、Windows NSIS 和两端冻结 sidecar `/health`
+冒烟。前两轮红灯也保留为可追溯证据：`33308624787` 让 Windows 暴露 4 个
+“目标 Linux 路径被宿主 WindowsPath 解释”的测试问题，修于 `8daa401`；
+`33308979719` 暴露 `setup-uv` 没有浮动 `v10` 标签，改为精确 release 并修于
+`3d2f489`。这两轮中实际完成的 Linux/Windows package-smoke 均通过。
+
+更新 `main` 前仍需再次 fetch；若 `origin/main` 又前进则重新普通 merge 并复验，
+不得 force push 或改写历史。标签语义评测、macOS 公证/签名、Windows 签名继续作为
+正式公开发布门槛，不伪装为本轮代码同步已经完成。
 
 ## 0.1 当前验收快照（2026-08-16，检索延迟一节更新至 2026-08-18）
 
