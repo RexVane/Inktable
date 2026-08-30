@@ -43,8 +43,7 @@ from app.db.visibility import VISIBLE_FILES_COND
 from app.discovery.sources import (
     discover_all,
     disk_root_label,
-    fixed_drive_roots,
-    macos_volume_roots,
+    volume_roots,
 )
 from app.watcher.policy import is_drive_root, resolve_source_policy, uses_disk_root_sources
 from app.health import collect_health
@@ -212,7 +211,7 @@ def _path_within(path: str, root: str) -> bool:
         return False
 
 
-def _drive_root_for(path: str) -> Path | None:
+def _drive_root_for(path: str, roots: list[Path] | None = None) -> Path | None:
     if sys.platform == "win32":
         drive = Path(path).drive
         return Path(drive + os.sep) if drive else None
@@ -222,6 +221,12 @@ def _drive_root_for(path: str) -> Path | None:
             return Path("/") / "Volumes" / parts[2]
         if parts and parts[0] == "/":
             return Path("/")
+    if sys.platform == "linux":
+        normalized = os.path.abspath(os.path.normpath(path))
+        candidates = list(roots if roots is not None else volume_roots())
+        matches = [root for root in candidates if _path_within(normalized, str(root))]
+        if matches:
+            return max(matches, key=lambda root: len(Path(root).parts))
     return None
 
 
@@ -229,7 +234,7 @@ def _legacy_drive_roots(conn) -> list[Path]:
     """Find disks represented by legacy non-manual child sources."""
     if not uses_disk_root_sources():
         return []
-    live = fixed_drive_roots() if sys.platform == "win32" else macos_volume_roots()
+    live = volume_roots()
     fixed = {
         os.path.normcase(os.path.normpath(str(root))): root
         for root in live
@@ -241,7 +246,7 @@ def _legacy_drive_roots(conn) -> list[Path]:
     for row in rows:
         if is_drive_root(row["path"]):
             continue
-        drive = _drive_root_for(row["path"])
+        drive = _drive_root_for(row["path"], live)
         if drive is None:
             continue
         candidate = os.path.normcase(os.path.normpath(str(drive)))

@@ -1,7 +1,14 @@
 node_modules/
 dist/
-build/
+# 根级/各服务的构建产物。apps/desktop/build/ 是 electron-builder 的
+# buildResources（应用图标），必须入库，不能被这条规则吞掉。
+/build/
 output/
+apps/desktop/dist/
+services/api/dist/
+services/api/build/
+!apps/desktop/build/
+!apps/desktop/build/**
 .venv/
 __pycache__/
 *.pyc
@@ -13,9 +20,3 @@ __pycache__/
 
 # 运行时验收产物：内含活的 SQLite 库、.lock、WAL 与截图，每次跑都不同
 runtime-smoke-final-*/
-
-# Ordo 发布图标是源码资产；其余构建目录继续忽略。
-!apps/desktop/build/
-!apps/desktop/build/icon-1024.png
-!apps/desktop/build/icon.icns
-!apps/desktop/build/icon.ico

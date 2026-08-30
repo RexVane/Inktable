@@ -29,6 +29,10 @@ jobs:
     name: Python 3.12 · pytest · ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    env:
+      # Windows runners otherwise use a legacy ANSI code page; the test corpus
+      # intentionally contains Chinese filenames and content.
+      PYTHONUTF8: "1"
 
     strategy:
       fail-fast: false
@@ -81,10 +85,12 @@ jobs:
     name: ${{ matrix.os }} · path and CLI smoke
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    env:
+      PYTHONUTF8: "1"
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        os: [macos-latest, windows-latest, ubuntu-latest]
 
     defaults:
       run:
@@ -155,3 +161,61 @@ jobs:
         if: failure()
         continue-on-error: true
         run: node scripts/csp-hash.js
+
+  package-smoke:
+    # Release packaging is expensive, so normal pushes keep the fast test
+    # matrix.  A manual integration/release run builds real Linux and Windows
+    # installers and boots the frozen sidecar before main is updated.
+    if: github.event_name == 'workflow_dispatch'
+    name: Package smoke · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux
+            sidecar: ordo-sidecar
+          - os: windows-latest
+            target: win
+            sidecar: ordo-sidecar.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: services/api/uv.lock
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install desktop dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Build frozen sidecar and installer
+        working-directory: apps/desktop
+        env:
+          UV_LINK_MODE: copy
+          PYTHONUTF8: "1"
+        run: npm run dist -- --${{ matrix.target }} --x64 --publish never
+
+      - name: Smoke frozen sidecar
+        working-directory: services/api
+        env:
+          PYTHONUTF8: "1"
+        run: uv run python scripts/smoke_packaged_sidecar.py dist/${{ matrix.sidecar }}

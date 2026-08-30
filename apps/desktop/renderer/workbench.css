@@ -945,7 +945,11 @@ body.resizing * {
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  backdrop-filter: blur(12px);
+}
+
+.rows.is-pending {
+  opacity: 0.55;
+  pointer-events: none;
 }
 
 .row {
@@ -1862,7 +1866,6 @@ body.resizing * {
 /* ---------- 11. 弹窗与设置 (Sheets & Settings) ---------- */
 /* 遮罩用主题自己的 veil：深色压暗、浅色用冷调薄雾。硬编码的黑幕在
    浅色主题下会把整页压成灰。 */
-.sheet,
 .setup {
   position: fixed;
   inset: 0;
@@ -1871,12 +1874,31 @@ body.resizing * {
   align-items: center;
   justify-content: center;
   background: var(--veil);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--veil);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity var(--dur) var(--ease), visibility 0s linear var(--dur);
 }
 
 .sheet.show {
-  display: flex;
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: opacity var(--dur) var(--ease), visibility 0s;
 }
 
 /* 浮层内部**重绑表面语义**，而不是逐条改四十处规则。

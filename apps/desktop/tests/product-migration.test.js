@@ -5,6 +5,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const {
+  defaultDataDirectory,
   hasLibraryState,
   legacyUserDataDirectory,
 } = require('../electron/product-migration');
@@ -37,7 +38,7 @@ test('an existing Ordo library is never replaced by the legacy profile', (t) => 
   assert.equal(legacyUserDataDirectory(root), null);
 });
 
-test('only a valid custom-data pointer counts as current library state', (t) => {
+test('an explicit current data pointer is kept even while its disk is offline', (t) => {
   const { root, current, legacy } = fixture(t);
   const custom = path.join(root, 'custom-data');
   fs.mkdirSync(custom);
@@ -45,7 +46,7 @@ test('only a valid custom-data pointer counts as current library state', (t) => 
   fs.writeFileSync(path.join(legacy, 'library.db'), 'legacy-library');
 
   assert.equal(hasLibraryState(current), false);
-  assert.equal(legacyUserDataDirectory(root), legacy);
+  assert.equal(legacyUserDataDirectory(root), null);
 
   fs.writeFileSync(path.join(custom, 'library.db'), 'current-custom-library');
   assert.equal(hasLibraryState(current), true);
@@ -60,4 +61,31 @@ test('a disconnected legacy custom-data pointer still outranks a new key file', 
   }));
 
   assert.equal(legacyUserDataDirectory(root), legacy);
+});
+
+test('Linux desktop and standalone sidecar share XDG_DATA_HOME', (t) => {
+  const { root } = fixture(t);
+  const userData = path.join(root, '.config', 'Ordo');
+  const xdg = path.join(root, 'xdg-data');
+
+  assert.equal(defaultDataDirectory({
+    platform: 'linux', home: root, userData,
+    environment: { XDG_DATA_HOME: xdg },
+  }), path.join(xdg, 'Ordo'));
+});
+
+test('Linux adopts an existing early Electron or legacy XDG library', (t) => {
+  const { root } = fixture(t);
+  const userData = path.join(root, '.config', 'Ordo');
+  const xdg = path.join(root, '.local', 'share');
+  const early = path.join(userData, 'data');
+  const legacy = path.join(xdg, 'Inktable');
+  fs.mkdirSync(early, { recursive: true });
+  fs.mkdirSync(legacy, { recursive: true });
+  fs.writeFileSync(path.join(early, 'library.db'), 'early-linux-library');
+  fs.writeFileSync(path.join(legacy, 'library.db'), 'legacy-linux-library');
+
+  assert.equal(defaultDataDirectory({
+    platform: 'linux', home: root, userData, environment: {},
+  }), early);
 });

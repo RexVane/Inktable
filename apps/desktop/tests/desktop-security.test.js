@@ -62,16 +62,19 @@ test('non-macOS tray remains visible when optional brand assets are absent', () 
 
 test('Ordo release and tray icons are tracked and wired into packaging', () => {
   const builder = fs.readFileSync(builderPath, 'utf8');
-  const png = path.join(desktopRoot, 'renderer', 'assets', 'brand-mark.png');
+  const png = path.join(desktopRoot, 'build', 'brand-mark.png');
   const icns = path.join(desktopRoot, 'build', 'icon.icns');
   const ico = path.join(desktopRoot, 'build', 'icon.ico');
   for (const asset of [png, icns, ico]) {
     assert.ok(fs.existsSync(asset), `missing release icon: ${asset}`);
     assert.ok(fs.statSync(asset).size > 1024, `release icon is unexpectedly empty: ${asset}`);
   }
-  assert.match(main, /renderer', 'assets', 'brand-mark\.png'/);
-  assert.match(builder, /win:\s*\n\s*icon: build\/icon\.ico/);
-  assert.match(builder, /mac:\s*\n\s*icon: build\/icon\.icns/);
+  assert.match(main, /function brandAssetPath\(name\)/);
+  assert.match(main, /brandAssetPath\('brand-mark\.png'\)/);
+  assert.match(builder, /to: brand\/brand-mark\.png/);
+  assert.match(builder, /to: brand\/icon\.png/);
+  assert.match(builder, /win:\s*\n\s*icon: icon\.ico/);
+  assert.match(builder, /mac:\s*\n\s*icon: icon\.icns/);
 });
 
 test('core workbench controls expose keyboard and assistive semantics', () => {

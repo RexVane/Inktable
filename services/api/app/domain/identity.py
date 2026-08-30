@@ -94,6 +94,21 @@ def _mount_point(path: Path) -> str | None:
     return sfs.f_mntonname.decode()
 
 
+def _linux_fs_uuid(path: Path) -> str:
+    """Filesystem UUID via util-linux findmnt; empty if unavailable."""
+    try:
+        r = subprocess.run(
+            ["findmnt", "-n", "-o", "UUID", "-T", str(path)],
+            capture_output=True, text=True, timeout=2,
+        )
+        value = (r.stdout or "").strip().split("\n")[0].strip()
+        if value and value.upper() != "UUID":
+            return value
+    except Exception:
+        pass
+    return ""
+
+
 def volume_uuid(path: Path, st_dev: int | None = None) -> str:
     """解析路径所在卷的稳定标识。
 
@@ -109,6 +124,11 @@ def volume_uuid(path: Path, st_dev: int | None = None) -> str:
         # Windows 的 st_dev 即卷序列号（存于卷元数据，重启/换盘符不变），
         # 与 mac 的 VolumeUUID 语义一致，直接用作稳定标识。
         uuid = f"winvol:{st_dev}"
+        _volume_cache[st_dev] = uuid
+        return uuid
+
+    if sys.platform == "linux":
+        uuid = _linux_fs_uuid(path) or f"linuxvol:{st_dev}"
         _volume_cache[st_dev] = uuid
         return uuid
 

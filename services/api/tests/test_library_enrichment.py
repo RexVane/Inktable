@@ -65,7 +65,7 @@ def _valid_result() -> str:
             "summary": "这是一份操作系统笔记，重点整理进程、内存、文件系统与死锁条件。",
             "language": "zh",
             "category_id": 1,
-            "tag_ids": [2, 1],
+            "tags": ["死锁", "操作系统"],
         },
         ensure_ascii=False,
     )
@@ -82,8 +82,8 @@ def test_enrichment_writes_summary_controlled_category_and_tags_without_path_lea
                 "summary": "这是一份操作系统笔记，重点整理进程、内存、文件系统与死锁条件。",
                 "language": "zh",
                 "category_id": 1,
-                # 999 is deliberately outside the controlled vocabulary.
-                "tag_ids": [2, 999, 1, 2],
+                # 「死锁」重复出现，且大小写/空白不同 —— 必须去重成一个
+                "tags": ["死锁", "操作系统", " 死锁 "],
             },
             ensure_ascii=False,
         )
@@ -120,7 +120,7 @@ def test_enrichment_writes_summary_controlled_category_and_tags_without_path_lea
             (item["id"],),
         ).fetchall()
     ]
-    assert tag_ids == [1, 2]
+    assert tag_ids == [1, 2]   # 去重后仍是「操作系统 / 死锁」两个
     conn.close()
 
 
@@ -229,7 +229,7 @@ def test_previous_prompt_version_is_reclaimed_after_boundary_change() -> None:
 
     claims = claim_items(conn, limit=1, now=200)
 
-    assert PROMPT_VERSION == "library-enrichment-v3"
+    assert PROMPT_VERSION == "library-enrichment-v4"
     assert len(claims) == 1
     assert claims[0].item_id == item_id
     assert conn.execute(
@@ -283,8 +283,7 @@ def test_enrichment_creates_new_category_and_tags_from_empty_vocabulary() -> Non
             "language": "zh",
             "category_id": None,
             "new_category": "操作系统",
-            "tag_ids": [],
-            "new_tags": ["课程笔记", "死锁"],
+            "tags": ["课程笔记", "死锁"],
         }, ensure_ascii=False)
 
     result = run_enrichment_batch(
@@ -323,8 +322,7 @@ def test_enrichment_new_names_bounded_and_folded_into_existing() -> None:
             "language": "zh",
             "category_id": None,
             "new_category": "已存在分类",            # 同名 → 折算回现有分类
-            "tag_ids": [],
-            "new_tags": ["已有标签", "x" * 40, "合法标签", "合法标签"],  # 超长+重复
+            "tags": ["已有标签", "x" * 40, "合法标签", "合法标签"],  # 超长+重复
         }, ensure_ascii=False)
 
     cat_count_before = conn.execute(
@@ -355,8 +353,7 @@ def test_generic_and_duplicate_tags_are_not_minted() -> None:
             "summary": "操作系统笔记。",
             "language": "zh",
             "category_id": 1,
-            "tag_ids": [1],
-            "new_tags": ["笔记", "资料", "操作系统", " 死锁 "],
+            "tags": ["笔记", "资料", "操作系统", " 死锁 "],
         }, ensure_ascii=False)
 
     tag_count_before = conn.execute("SELECT COUNT(*) c FROM tags").fetchone()["c"]
@@ -464,8 +461,7 @@ def test_new_vocabulary_uses_nfkc_casefold_identity() -> None:
             "language": "zh",
             "category_id": None,
             "new_category": "COMPUTERS",
-            "tag_ids": [],
-            "new_tags": ["ＡＩ"],
+            "tags": ["ＡＩ"],
         },
         ensure_ascii=False,
     )

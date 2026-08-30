@@ -1,6 +1,6 @@
 appId: com.ordo.app
 productName: Ordo
-copyright: Ordo
+copyright: Copyright © 2026 RexVane
 
 directories:
   output: ../../dist
@@ -19,9 +19,16 @@ extraResources:
     filter:
       - ordo-sidecar
       - ordo-sidecar.exe
+  # buildResources are consumed by electron-builder but are not automatically
+  # copied into app.asar.  The main process needs these two files at runtime
+  # for the Linux/Windows window and tray icons.
+  - from: build/brand-mark.png
+    to: brand/brand-mark.png
+  - from: build/icon.png
+    to: brand/icon.png
 
 win:
-  icon: build/icon.ico
+  icon: icon.ico
   target:
     - target: nsis
       arch: [x64]
@@ -37,7 +44,7 @@ nsis:
   runAfterFinish: false
 
 mac:
-  icon: build/icon.icns
+  icon: icon.icns
   category: public.app-category.productivity
   target:
     - target: dmg
@@ -46,6 +53,20 @@ mac:
   identity: null
   hardenedRuntime: false
   gatekeeperAssess: false
+
+linux:
+  icon: icon.png
+  category: Office
+  maintainer: RexVane
+  synopsis: Local-first personal knowledge base
+  desktop:
+    StartupWMClass: ordo
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+  artifactName: ${productName}-${version}-${arch}.${ext}
 
 dmg:
   title: Ordo

@@ -21,7 +21,10 @@ const { pathToFileURL } = require('url');
 const { trashFileById } = require('./file-operations');
 const { prepareSlotConfig } = require('./model-config');
 const { copyDataDirectory, pathsOverlap, writeJsonAtomic } = require('./data-migration');
-const { legacyUserDataDirectory } = require('./product-migration');
+const {
+  defaultDataDirectory,
+  legacyUserDataDirectory,
+} = require('./product-migration');
 
 // ---- ordodoc:// 自定义协议：原文查看器的文件字节通道 ----
 // 渲染层 connect-src 'none'，不能自己发请求；PDF.js / docx-preview 需要
@@ -116,6 +119,12 @@ let lastSidecarStatus = { state: 'starting', revision: sidecarStatusRevision };
 
 const SESSION_TOKEN = crypto.randomBytes(32).toString('base64url');
 
+function brandAssetPath(name) {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'brand', name)
+    : path.join(__dirname, '..', 'build', name);
+}
+
 app.setName('Ordo');
 (function adoptLegacyUserData() {
   // productName 从 Inktable 换成 Ordo 后，Electron 默认 userData 会变成空目录。
@@ -133,14 +142,6 @@ if (!hasSingleInstanceLock) {
 // ---- 数据目录：平台原生位置，可迁移 ----
 const dataDirConfigPath = () => path.join(app.getPath('userData'), 'data-dir.json');
 
-const legacyDataDir = () =>
-  path.join(app.getPath('home'), 'Library', 'Application Support', 'Inktable');
-const nativeDefaultDataDir = () => {
-  // userData is the fixed control root. New libraries live in a child directory
-  // so moving data can never move data-dir.json or llm.enc themselves.
-  return path.join(app.getPath('userData'), 'data');
-};
-
 function loadCustomDataDir() {
   try {
     const raw = JSON.parse(fs.readFileSync(dataDirConfigPath(), 'utf8'));
@@ -150,23 +151,12 @@ function loadCustomDataDir() {
 }
 
 let customDataDir = loadCustomDataDir();
-const defaultDataDir = () => {
-  const nativeDir = nativeDefaultDataDir();
-  const legacyDir = legacyDataDir();
-  // Existing Windows installs used the macOS-shaped ~/Library path. Preserve
-  // them until the user runs the normal data-location migration; new installs
-  // use the platform-native root. Never silently strand an existing library.
-  const controlRoot = app.getPath('userData');
-  if (fs.existsSync(path.join(controlRoot, 'library.db'))
-      && !fs.existsSync(path.join(nativeDir, 'library.db'))) {
-    return controlRoot;
-  }
-  if (fs.existsSync(path.join(legacyDir, 'library.db'))
-      && !fs.existsSync(path.join(nativeDir, 'library.db'))) {
-    return legacyDir;
-  }
-  return nativeDir;
-};
+const defaultDataDir = () => defaultDataDirectory({
+  platform: process.platform,
+  home: app.getPath('home'),
+  userData: app.getPath('userData'),
+  environment: process.env,
+});
 const currentDataDir = () => customDataDir || defaultDataDir();
 
 // ---- 模型配置：safeStorage 加密落盘（§6.3），密钥绝不进渲染进程 ----
@@ -533,6 +523,9 @@ function createWindow() {
     // 系统深浅与应用内主题可以不一致，那样反而会挑错边。
     backgroundColor: '#faf9f7',
     show: false,
+    // Linux/Windows 需要显式窗口图标；发布态从 extraResources 读取，开发态
+    // 直接用 buildResources。不要指向 app.asar 之外却未随包复制的 build/。
+    icon: brandAssetPath('icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -1109,8 +1102,7 @@ async function setupGlobalEntry() {
     if (process.platform === 'darwin') {
       icon = nativeImage.createFromNamedImage('NSTouchBarSearchTemplate');
     } else {
-      icon = nativeImage.createFromPath(
-        path.join(__dirname, '..', 'renderer', 'assets', 'brand-mark.png'));
+      icon = nativeImage.createFromPath(brandAssetPath('brand-mark.png'));
       if (icon.isEmpty()) icon = await app.getFileIcon(process.execPath, { size: 'small' });
     }
     icon = icon.resize({ width: 16, height: 16 });
@@ -1140,7 +1132,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   if (process.platform === 'darwin' && !app.isPackaged) {
     try {
       app.dock.setIcon(nativeImage.createFromPath(
-        path.join(__dirname, '..', 'build', 'icon-1024.png')));
+        brandAssetPath('icon.png')));
     } catch { /* 图标缺失不影响启动 */ }
   }
   publishSidecarStatus({ state: 'starting' });

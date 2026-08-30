@@ -36,6 +36,8 @@
     enrichment: null,
     detail: null,
     busy: false,
+    refreshVersion: 0,
+    busyVersion: 0,
     enteredOnce: false,
   };
 
@@ -160,7 +162,7 @@
     var top = document.getElementById('topbarScope');
     var resultsTitle = document.getElementById('resultsTitle');
     var counter = document.getElementById('count');
-    if (top) top.textContent = 'AI 图书馆';
+    if (top) top.textContent = '知识馆';
     if (resultsTitle) resultsTitle.textContent = title || '知识馆';
     if (counter) {
       counter.style.display = '';
@@ -169,7 +171,7 @@
   }
 
   async function enterLibrary() {
-    if (state.active || state.busy) return;
+    if (state.active) return;
     setMode(true);
     state.detail = null;
     if (typeof window.showListPage === 'function') window.showListPage();
@@ -177,18 +179,27 @@
     var el = ensureSurface();
     if (!el) return;
     el.hidden = false;
-    setChrome('知识馆', '正在读取…');
-    renderLoading('正在整理你的知识馆入口…');
+    var hasCache = !!(state.stats || state.items.length);
+    if (hasCache) {
+      setChrome('知识馆', state.total + ' 个知识条目');
+      if (!el.querySelector('.library-shell')) renderOverview();
+    } else {
+      setChrome('知识馆', '正在读取…');
+      renderLoading('正在整理你的知识馆入口…');
+    }
 
     try {
       // Deterministic metadata sync only. No LLM call is triggered here.
       if (!state.enteredOnce) {
         await api('/library/sync', 'POST');
         state.enteredOnce = true;
+        await refreshLibrary(true);
+      } else if (!hasCache) {
+        await refreshLibrary(true);
       }
-      await refreshLibrary(true);
     } catch (err) {
-      renderError('知识馆加载失败：' + err.message);
+      if (hasCache) showToast('知识馆刷新失败：' + err.message);
+      else renderError('知识馆加载失败：' + err.message);
     }
   }
 
@@ -196,16 +207,16 @@
     if (!state.active) return;
     setMode(false);
     state.detail = null;
-    state.categoryId = null;
-    state.tagId = null;
-    var nav = document.getElementById('libraryNav');
-    if (nav) nav.remove();
+    // 左栏树留在 DOM 里，CSS 会藏起来；下次进来不必再拼一遍。
     var el = surface();
     if (el) el.hidden = true;
     if (typeof window.showListPage === 'function') window.showListPage();
     if (typeof window.updateWorkbenchChrome === 'function') window.updateWorkbenchChrome();
-    var q = document.getElementById('q');
-    if (typeof window.load === 'function') window.load(q ? q.value.trim() : '');
+    if (typeof window.restoreFileList === 'function') window.restoreFileList();
+    else {
+      var q = document.getElementById('q');
+      if (typeof window.load === 'function') window.load(q ? q.value.trim() : '');
+    }
   }
 
   /* 左栏知识馆树：分类按 parent_id 嵌套、可展开收起，
@@ -237,15 +248,41 @@
     });
   }
 
+  function paintLibraryNavOn() {
+    var tree = document.getElementById('libraryNav');
+    if (!tree) return;
+    tree.querySelectorAll('.ln-item').forEach(function (row) {
+      var on = false;
+      if (row.dataset.nav === 'all') on = !state.categoryId && !state.tagId;
+      else if (row.dataset.cat === '-1') on = state.categoryId === -1;
+      else if (row.dataset.cat) on = String(state.categoryId) === row.dataset.cat;
+      else if (row.dataset.tag) on = state.tagId === +row.dataset.tag && !state.categoryId;
+      else if (row.dataset.leaf) on = state.detailItemId === +row.dataset.leaf;
+      row.classList.toggle('on', on);
+    });
+    var allCount = tree.querySelector('[data-nav="all"] .ln-count');
+    if (allCount) allCount.textContent = String(state.total);
+  }
+
+  function selectLibraryFilter(nextCategoryId, nextTagId) {
+    state.categoryId = nextCategoryId;
+    state.tagId = nextTagId;
+    state.detail = null;
+    state.detailItemId = null;
+    paintLibraryNavOn();
+    refreshLibrary(true, { light: true });
+  }
+
   function makeLeaf(item, depth) {
     var isActive = state.detailItemId === item.id;
     var row = node('button', 'ln-item ln-leaf' + (isActive ? ' on' : ''),
                    item.title || '未命名条目');
+    row.dataset.leaf = String(item.id);
     row.style.paddingLeft = (9 + depth * 13) + 'px';
     row.title = item.title || '';
     row.addEventListener('click', function () {
       state.detailItemId = item.id;
-      renderLibraryNav();
+      paintLibraryNavOn();
       openDetail(item.id);
     });
     return row;
@@ -254,17 +291,32 @@
   function makeCategoryRow(cat, depth) {
     var open = !!state.treeOpen[cat.id];
     var row = node('button', 'ln-item ln-dir' + (state.categoryId === cat.id ? ' on' : ''));
+    row.dataset.cat = String(cat.id);
     row.style.paddingLeft = (9 + depth * 13) + 'px';
     var label = node('span', 'ln-label', cat.name || '未命名分类');
     row.appendChild(chevronEl(open));
     row.appendChild(label);
     row.appendChild(node('span', 'ln-count', String(cat.count || 0)));
-    row.addEventListener('click', function () {
-      state.treeOpen[cat.id] = !open;
-      persistTreeOpen();
-      state.categoryId = state.categoryId === cat.id ? null : cat.id;
-      state.tagId = null;
-      refreshLibrary(true);
+    row.addEventListener('click', function (event) {
+      if (event.target.closest('.ln-chev')) {
+        state.treeOpen[cat.id] = !open;
+        persistTreeOpen();
+        renderLibraryNav();
+        return;
+      }
+      var next = state.categoryId === cat.id ? null : cat.id;
+      if (next !== null && !state.treeOpen[cat.id]) {
+        state.treeOpen[cat.id] = true;
+        persistTreeOpen();
+        state.categoryId = next;
+        state.tagId = null;
+        state.detail = null;
+        state.detailItemId = null;
+        renderLibraryNav();
+        refreshLibrary(true, { light: true });
+        return;
+      }
+      selectLibraryFilter(next, null);
     });
     return row;
   }
@@ -292,11 +344,10 @@
 
     var all = node('button', 'ln-item' + (!state.categoryId && !state.tagId ? ' on' : ''),
                    '全部条目');
+    all.dataset.nav = 'all';
     all.appendChild(node('span', 'ln-count', String(state.total)));
     all.addEventListener('click', function () {
-      state.categoryId = null;
-      state.tagId = null;
-      refreshLibrary(true);
+      selectLibraryFilter(null, null);
     });
     tree.appendChild(all);
 
@@ -318,15 +369,28 @@
       if (uncatItems.length || state.taxonomy.uncategorized > 0) {
         var uncatOpen = !!state.treeOpen.uncategorized;
         var uncat = node('button', 'ln-item ln-dir' + (state.categoryId === -1 ? ' on' : ''));
+        uncat.dataset.cat = '-1';
         uncat.appendChild(chevronEl(uncatOpen));
         uncat.appendChild(node('span', 'ln-label', '未分类'));
         uncat.appendChild(node('span', 'ln-count', String(state.taxonomy.uncategorized)));
-        uncat.addEventListener('click', function () {
-          state.treeOpen.uncategorized = !uncatOpen;
-          persistTreeOpen();
-          state.categoryId = state.categoryId === -1 ? null : -1;
-          state.tagId = null;
-          refreshLibrary(true);
+        uncat.addEventListener('click', function (event) {
+          if (event.target.closest('.ln-chev')) {
+            state.treeOpen.uncategorized = !uncatOpen;
+            persistTreeOpen();
+            renderLibraryNav();
+            return;
+          }
+          var next = state.categoryId === -1 ? null : -1;
+          if (next === -1 && !state.treeOpen.uncategorized) {
+            state.treeOpen.uncategorized = true;
+            persistTreeOpen();
+            state.categoryId = -1;
+            state.tagId = null;
+            renderLibraryNav();
+            refreshLibrary(true, { light: true });
+            return;
+          }
+          selectLibraryFilter(next, null);
         });
         tree.appendChild(uncat);
         if (uncatOpen) {
@@ -343,11 +407,10 @@
       tags.slice(0, 30).forEach(function (tag) {
         var isActive = state.tagId === tag.id && !state.categoryId;
         var row = node('button', 'ln-item' + (isActive ? ' on' : ''), tag.name || '未命名标签');
+        row.dataset.tag = String(tag.id);
         row.appendChild(node('span', 'ln-count', String(tag.count || 0)));
         row.addEventListener('click', function () {
-          state.tagId = isActive ? null : tag.id;
-          state.categoryId = null;
-          refreshLibrary(true);
+          selectLibraryFilter(null, isActive ? null : tag.id);
         });
         tree.appendChild(row);
       });
@@ -385,9 +448,7 @@
     chip.id = 'libraryFilterChip';
     chip.title = '清除左栏筛选';
     chip.addEventListener('click', function () {
-      state.categoryId = null;
-      state.tagId = null;
-      refreshLibrary(true);
+      selectLibraryFilter(null, null);
     });
     var bar = document.querySelector('.library-toolbar');
     if (bar) bar.insertBefore(chip, bar.firstChild);
@@ -413,14 +474,37 @@
     setChrome('知识馆', '加载失败');
   }
 
-  async function refreshLibrary(resetItems) {
+  async function refreshLibrary(resetItems, opts) {
     if (!state.active) return;
+    opts = opts || {};
+    var light = !!opts.light;
+    var requestVersion = ++state.refreshVersion;
+    var categoryId = state.categoryId;
+    var tagId = state.tagId;
+    var offset = resetItems ? 0 : state.items.length;
+    var itemsUrl = '/library/items?limit=' + PAGE + '&offset=' + offset;
+    if (categoryId) itemsUrl += '&category_id=' + categoryId;
+    if (tagId) itemsUrl += '&tag_id=' + tagId;
+    if (light) {
+      try {
+        var lightPage = await api(itemsUrl);
+        if (!state.active || requestVersion !== state.refreshVersion) return;
+        state.items = resetItems ? (lightPage.items || []) : state.items.concat(lightPage.items || []);
+        state.total = number(lightPage.total);
+        state.offset = state.items.length;
+        state.detail = null;
+        paintLibraryNavOn();
+        renderOverview();
+      } catch (err) {
+        if (requestVersion === state.refreshVersion) {
+          showToast('筛选失败：' + err.message);
+        }
+      }
+      return;
+    }
     state.busy = true;
+    state.busyVersion = requestVersion;
     try {
-      var offset = resetItems ? 0 : state.items.length;
-      var itemsUrl = '/library/items?limit=' + PAGE + '&offset=' + offset;
-      if (state.categoryId) itemsUrl += '&category_id=' + state.categoryId;
-      if (state.tagId) itemsUrl += '&tag_id=' + state.tagId;
       var results = await Promise.all([
         api('/library/stats'),
         api('/library/relations/status'),
@@ -429,6 +513,7 @@
         api('/library/taxonomy'),
         api('/library/tree'),
       ]);
+      if (!state.active || requestVersion !== state.refreshVersion) return;
       state.stats = results[0];
       state.relations = results[1];
       state.enrichment = results[2];
@@ -443,7 +528,7 @@
       state.detail = null;
       renderOverview();
     } finally {
-      state.busy = false;
+      if (state.busyVersion === requestVersion) state.busy = false;
     }
   }
 

@@ -4,11 +4,62 @@
 
 **日期**：2026-08-29
 
-**平台**：macOS 优先；Windows x64 有历史移植与打包记录，当前分支须重新通过跨平台回归
+**平台**：macOS arm64、Windows x64、Linux x64；发布候选必须通过对应的跨平台回归与打包冒烟
 
 **状态**：本文件是产品、架构、实现和验收的唯一计划依据。v7/v8 的设计与验收日志保留用于追溯；v9 新增的当前基线和 M9 发布门槛覆盖旧的“已发布/全绿”结论。
 
 > Ordo 是一个本地优先的个人知识库。文件管理负责让知识来源可靠、可追踪、可治理；分层索引、混合检索、Rerank、上下文压缩和带引用问答负责让知识可查、可问、可复用。
+
+## 0.0 远端 Ordo 大版本融合审查（2026-08-30）
+
+本轮融合输入为本地兼容性修复 `194f272` 与 `origin/main@b12f5a9`。远端包含
+Ordo 官方品牌资源、Linux 来源发现与 AppImage/deb 打包、知识馆标签 v4、双语
+README/社区文档等 9 个提交。采用普通 merge 保留双方历史；禁止 force push、
+reset 或丢弃未提交改动。官方入库图标作为发布基准，本地生成的候选图标不覆盖它。
+
+### 0.0.1 合并前发现的问题与判断
+
+| 优先级 | 问题 | 风险与判断 |
+|---|---|---|
+| P0 | 远端 CI 在 Ubuntu 有 1 个路径策略失败，Windows 有 21 个中文语料编码失败 | `main` 实际为红灯，不能直接快进后发布 |
+| P0 | Linux 桌面默认落在 Electron 的 `~/.config/Ordo/data`，sidecar/文档使用 XDG data home | 同一安装可能打开两个资料库，必须统一并兼容早期目录 |
+| P0 | Linux 启用 `/` 后可能跨入 `/data`、bind mount 或伪文件系统；深扫同样会越过挂载边界 | 会扩大扫描范围、重复索引并破坏用户授权边界 |
+| P1 | 旧记录所属磁盘根通过 `/mnt`、`/media` 等固定形状推断 | `/data`、`/srv/archive` 等真实本地挂载会被错误归到 `/` |
+| P1 | 发布态主进程从未打入 app.asar 的 `build/` 读取窗口/托盘图标 | Linux/Windows 安装包可能丢图标或回退为 Electron 默认图标 |
+| P1 | 产品更名迁移会让旧本地库压过当前离线外置盘指针 | 外置盘临时离线时可能悄悄打开错误资料库 |
+| P1 | 知识馆轻刷新异步返回没有版本门控 | 快速切分类时旧响应可覆盖新选择，显示错误项目 |
+| P1 | CI 没有真实冻结 sidecar 与 Linux/Windows 安装包冒烟 | 单元测试全绿仍可能产出无法启动的安装包 |
+| P2 | 标签 v4 已把模型输出名称折算回词表，但持久层仍以分类 ID 为主 | 当前方向合理；是否改分类语义需真实 LLM 固定集评测，不在同步合并中猜测 |
+
+### 0.0.2 本轮处理
+
+- Windows 路径规则改用 `ntpath`，不再依赖测试宿主的 `os.path`；CI 显式启用
+  UTF-8，保留中文文件名和正文作为跨平台测试语料。
+- Electron 与 Python 在 Linux 统一使用 XDG data home；按优先级识别早期
+  Electron、旧 Inktable 与 macOS 形状目录，且当前 `data-dir.json` 始终视为
+  用户显式选择，即使目标磁盘暂时离线。
+- Linux 来源仍只列本地固定磁盘；`/` 的普通扫描与深扫动态剪枝所有嵌套挂载，
+  并跳过 `/proc`、`/sys`、`/dev`、`/run` 等系统树。旧来源归属按实时
+  `volume_roots()` 最长前缀解析，支持 `/data` 和 `/srv/archive`。
+- 官方品牌图标作为 electron-builder buildResources；运行时需要的 PNG 通过
+  `extraResources/brand` 显式打包，开发态和发布态各用确定路径。
+- 知识馆刷新增加单调版本号与筛选快照，只允许最新请求落地；忙碌状态也按请求版本清理。
+- `workflow_dispatch` 增加 Ubuntu/Windows 的真实 sidecar、AppImage/deb/NSIS
+  构建与冻结进程 `/health` 冒烟；普通 push 保留较快的全量单元测试矩阵。
+- 中英文贡献指南修正 `ORDO_DB` 的 shell 用法，后端模块说明同步到三平台目录约定。
+
+### 0.0.3 当前验证与发布门槛
+
+本地融合工作树已通过 `uv lock --check`、`uv sync --check`、Ruff、`compileall`、
+后端 **479 passed / 2 skipped**、桌面 **69/69**、Node 语法、CSP 双向哈希、
+两个 YAML 解析及 `git diff --check`。OCR 依赖仍有 5 条 SWIG 弃用 warning，
+不影响测试结论。
+
+`main` 更新仍需依次满足：macOS 本机冻结 sidecar 与 DMG 冒烟；集成分支推送后
+GitHub Ubuntu/Windows 全矩阵及手动 package-smoke 全绿；推送前再次 fetch，若
+`origin/main` 又前进则重新普通 merge 并复验。任一打包或 CI 失败都不得把未经验证的
+融合结果推到 `main`。标签语义评测、macOS 公证/签名、Windows 签名继续作为正式公开
+发布门槛，不伪装为本轮代码同步已经完成。
 
 ## 0.1 当前验收快照（2026-08-16，检索延迟一节更新至 2026-08-18）
 

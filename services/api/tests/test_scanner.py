@@ -543,6 +543,79 @@ def test_macos_boot_skip_covers_other_volumes():
     assert "system" in scanner.MAC_BOOT_SKIP_DIRS
 
 
+def test_linux_boot_skip_covers_other_volumes():
+    """Walking Linux ``/`` must not recurse into ``/mnt`` / ``/proc``."""
+    assert "mnt" in scanner.LINUX_BOOT_SKIP_DIRS
+    assert "media" in scanner.LINUX_BOOT_SKIP_DIRS
+    assert "proc" in scanner.LINUX_BOOT_SKIP_DIRS
+    assert "home" not in scanner.LINUX_BOOT_SKIP_DIRS
+
+
+def test_linux_boot_scan_prunes_dynamic_mounts(monkeypatch):
+    """A separate /data filesystem must require its own enabled source."""
+    dirnames = ["home", "data"]
+    monkeypatch.setattr(scanner.sys, "platform", "linux")
+    monkeypatch.setattr(
+        scanner.os,
+        "walk",
+        lambda *_args, **_kwargs: iter([("/", dirnames, [])]),
+    )
+    monkeypatch.setattr(scanner, "_is_mount_dir", lambda path: path.name == "data")
+    monkeypatch.setattr(scanner, "_is_reparse_dir", lambda _path: False)
+
+    list(scanner.iter_files(scanner.Path("/")))
+
+    assert dirnames == ["home"]
+
+
+def test_deep_scan_prunes_boot_system_dirs_and_nested_mounts(monkeypatch):
+    from app.discovery import deepscan
+
+    class Entry:
+        def __init__(self, parent, name):
+            self.name = name
+            self.path = str(parent / name)
+
+        def is_dir(self, *, follow_symlinks=False):
+            return True
+
+        def stat(self, *, follow_symlinks=False):
+            return type("Stat", (), {"st_file_attributes": 0})()
+
+    class Scan:
+        def __init__(self, entries):
+            self.entries = entries
+
+        def __enter__(self):
+            return iter(self.entries)
+
+        def __exit__(self, *_args):
+            return False
+
+    visited = []
+
+    def fake_scandir(current):
+        visited.append(str(current))
+        if str(current) == "/":
+            return Scan([
+                Entry(deepscan.Path("/"), "proc"),
+                Entry(deepscan.Path("/"), "data"),
+                Entry(deepscan.Path("/"), "home"),
+            ])
+        return Scan([])
+
+    monkeypatch.setattr(deepscan.sys, "platform", "linux")
+    monkeypatch.setattr(deepscan.os, "scandir", fake_scandir)
+    monkeypatch.setattr(
+        deepscan,
+        "_is_nested_mount",
+        lambda _root, candidate: candidate == deepscan.Path("/data"),
+    )
+
+    assert deepscan._scan_drive(deepscan.Path("/"), {}, float("inf"))
+    assert visited == ["/", "/home"]
+
+
 def test_scan_never_modifies_files(db, source, tmp_path):
     """扫描绝不改动原文件 —— PLAN §1 第一条不可协商约束。"""
     paths = []

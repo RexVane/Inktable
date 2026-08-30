@@ -40,6 +40,29 @@ test('every renderer inline script remains valid JavaScript', () => {
   }
 });
 
+test('file nav paints selection before refetching the list', () => {
+  assert.match(renderer, /function paintFileNavOn\(/);
+  assert.match(renderer, /function applyFileNavFilter\(/);
+  assert.match(renderer, /function restoreFileList\(/);
+  assert.match(renderer, /function afterPaint\(/);
+  assert.match(renderer, /markRowsPending\(true\)/);
+  assert.match(renderer, /applyFileNavFilter\(function \(\) \{/);
+  assert.doesNotMatch(
+    sourceBetween('el.querySelectorAll(\'.nav-item\').forEach', 'el.querySelectorAll(\'.tree-file\')'),
+    /renderNav\(\);\s*updateWorkbenchChrome\(\);/,
+  );
+});
+
+test('settings tabs reuse chrome and drop stale pane writes', () => {
+  assert.match(renderer, /let settingsRenderVersion = 0/);
+  assert.match(renderer, /body\.querySelector\('\.set-layout'\)/);
+  assert.match(renderer, /if \(ver !== settingsRenderVersion\) return/);
+  const css = fs.readFileSync(path.resolve(__dirname, '..', 'renderer', 'workbench.css'), 'utf8');
+  assert.match(css, /\.rows\.is-pending\b/);
+  assert.match(css, /\.sheet\.show \{/);
+  assert.doesNotMatch(css, /\.row-group \{[^}]*backdrop-filter/);
+});
+
 test('file navigation delegates filters and pagination to the API', () => {
   assert.match(renderer, /params\.set\('source', activeSource\)/);
   assert.match(renderer, /params\.set\('ext', activeExt\)/);
@@ -326,6 +349,7 @@ test('load sends the active scope and appends the next page', async () => {
     document: { getElementById: () => count },
     renderRows: () => { renders += 1; },
     setListTitle: () => {},
+    markRowsPending: () => {},
   };
 
   const result = await vm.runInNewContext(`
@@ -481,7 +505,9 @@ test('overlays are one flat panel surface with a real radius', () => {
   assert.match(css, /\.set-nav \{[^}]*background: transparent/);
 
   // 遮罩走主题 veil：硬编码黑幕在浅色主题下会把整页压成灰。
-  assert.match(css, /\.sheet,\s*\n\.setup \{[\s\S]{0,220}background: var\(--veil\)/);
+  // 设置层与首次发现层分开写：设置层用 opacity 过渡，发现层仍是 display 切换。
+  assert.match(css, /\.sheet \{[\s\S]{0,280}background: var\(--veil\)/);
+  assert.match(css, /\.setup \{[\s\S]{0,220}background: var\(--veil\)/);
   assert.doesNotMatch(css, /background: rgba\(0, 0, 0, 0\.35\)/);
 
   // 浮层内部重绑表面语义，后代四十处规则不必逐条改。

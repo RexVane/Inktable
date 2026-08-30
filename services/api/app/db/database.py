@@ -1,9 +1,11 @@
 """数据库连接与初始化 —— PLAN §9.2。
 
-数据目录默认在 `~/Library/Application Support/Ordo/`，
-可经 `ORDO_DATA_DIR` 环境变量整体迁移（由桌面端主进程在
-"设置 → 通用配置 → 数据位置" 完成搬迁后传入）。库文件位置不放
-资料库根目录 —— 后者可能落在 iCloud / 外置卷 / 网络卷上，
+默认数据目录遵循平台约定：macOS 使用
+``~/Library/Application Support/Ordo/data``，Windows 使用
+``%APPDATA%/Ordo/data``，Linux 使用 ``$XDG_DATA_HOME/Ordo``（未设置时
+为 ``~/.local/share/Ordo``）。可经 ``ORDO_DATA_DIR`` 环境变量整体迁移
+（由桌面端主进程在“设置 → 通用配置 → 数据位置”完成搬迁后传入）。
+库文件位置不放资料库根目录 —— 后者可能落在 iCloud / 外置卷 / 网络卷上，
 多设备并发写会直接损坏（§9.2）。
 """
 

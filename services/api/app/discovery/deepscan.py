@@ -18,7 +18,11 @@ import time
 from pathlib import Path
 
 from app.discovery.sources import DOC_EXTS, HOME, Source
-from app.watcher.scanner import should_skip_dir
+from app.watcher.scanner import (
+    LINUX_BOOT_SKIP_DIRS,
+    MAC_BOOT_SKIP_DIRS,
+    should_skip_dir,
+)
 
 # 系统与程序目录：不可能是用户资料库，无条件跳过（按目录名小写匹配，
 # 任意层级生效 —— AppData 藏在用户目录下面，也要挡）
@@ -39,6 +43,11 @@ _REPARSE = 0x400      # FILE_ATTRIBUTE_REPARSE_POINT
 
 def _fixed_drives() -> list[Path]:
     """固定磁盘的根。可移动盘/网络盘不扫 —— 拔了就失效，别推荐。"""
+    from app.discovery.sources import volume_roots
+
+    roots = volume_roots()
+    if roots:
+        return roots
     if sys.platform != "win32":
         return [HOME]
     import ctypes
@@ -59,11 +68,21 @@ def _skip_name(name: str) -> bool:
     return should_skip_dir(name) or name.lower() in _SYSTEM_SKIP
 
 
+def _is_nested_mount(root: Path, candidate: Path) -> bool:
+    if sys.platform == "win32" or candidate == root:
+        return False
+    try:
+        return candidate.is_mount()
+    except OSError:
+        return False
+
+
 def _scan_drive(root: Path, counts: dict[str, int], deadline: float) -> bool:
     """迭代枚举一个盘，统计每个目录**直接包含**的文档数。
 
     返回 False 表示时间预算耗尽（结果仍然可用，只是不完整）。
     """
+    root = Path(root)
     stack = [str(root)]
     visited = 0
     while stack:
@@ -71,6 +90,13 @@ def _scan_drive(root: Path, counts: dict[str, int], deadline: float) -> bool:
         if visited % 512 == 0 and time.time() > deadline:
             return False
         current = stack.pop()
+        current_path = Path(current)
+        boot_skip_names = (
+            MAC_BOOT_SKIP_DIRS if sys.platform == "darwin"
+            else LINUX_BOOT_SKIP_DIRS if sys.platform == "linux"
+            else set()
+        )
+        boot_root = str(root) == "/" and current_path == root
         try:
             with os.scandir(current) as it:
                 docs = 0
@@ -78,7 +104,12 @@ def _scan_drive(root: Path, counts: dict[str, int], deadline: float) -> bool:
                     name = entry.name
                     try:
                         if entry.is_dir(follow_symlinks=False):
-                            if _skip_name(name):
+                            candidate = Path(entry.path)
+                            if (
+                                _skip_name(name)
+                                or (boot_root and name.casefold() in boot_skip_names)
+                                or _is_nested_mount(root, candidate)
+                            ):
                                 continue
                             # 重解析点（junction/符号链接/挂载点）不下钻：
                             # 会造成环路或把同一棵树扫两遍

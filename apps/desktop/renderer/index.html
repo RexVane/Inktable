@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-+bogcxA9rN61l4U27NYWKv0PEc6ckm34si88nWr7EMQ=' 'sha256-1ZZczYBfO+tXru2A5HSg4dt1h0RIw5GmWuSEx7nyMZk='; style-src 'self' 'unsafe-inline'; connect-src ordodoc:; worker-src 'self' ordodoc:; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-+bogcxA9rN61l4U27NYWKv0PEc6ckm34si88nWr7EMQ=' 'sha256-KSk2SyZxlIBTe9xgEvmnJGb0Gw/Yeci9gDveGa6vx2I='; style-src 'self' 'unsafe-inline'; connect-src ordodoc:; worker-src 'self' ordodoc:; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'" />
 <title>Ordo</title>
 <style>
   /* 结构性 reset —— 全部视觉规则集中在 workbench.css，避免两处定义漂移 */
@@ -1460,11 +1460,64 @@ function treeLevelHtml(dirPath, depth) {
   return h;
 }
 
-function renderNav() {
-  const el = document.getElementById('nav');
-  const unfiltered = activeSource === null && activeCategory === null &&
+function afterPaint(fn) {
+  requestAnimationFrame(function () { requestAnimationFrame(fn); });
+}
+
+function fileNavUnfiltered() {
+  return activeSource === null && activeCategory === null &&
     activeBook === null && activeExt === null && activeDir === null &&
     activeRecent === null && !activeDuplicate;
+}
+
+function paintFileNavOn() {
+  var el = document.getElementById('nav');
+  if (!el) return;
+  var unfiltered = fileNavUnfiltered();
+  el.querySelectorAll('.nav-item').forEach(function (it) {
+    var on = false;
+    if (it.dataset.report !== undefined) on = false;
+    else if (it.classList.contains('tree-dir')) {
+      on = activeDir === decodeURIComponent(it.dataset.dir || '');
+    } else if (it.classList.contains('tree-file')) {
+      on = false;
+    } else if (it.dataset.recent !== undefined) {
+      on = activeRecent === +it.dataset.recent;
+    } else if (it.dataset.dup !== undefined) {
+      on = !!activeDuplicate;
+    } else if (it.dataset.book !== undefined) {
+      on = activeBook === +it.dataset.book;
+    } else if (it.dataset.cat !== undefined) {
+      on = String(activeCategory) === String(it.dataset.cat);
+    } else if (it.dataset.ext !== undefined) {
+      on = activeExt === it.dataset.ext;
+    } else {
+      on = unfiltered && (it.dataset.src === '' || it.dataset.src == null);
+    }
+    it.classList.toggle('on', on);
+  });
+}
+
+function applyFileNavFilter(mutator) {
+  mutator();
+  paintFileNavOn();
+  updateWorkbenchChrome();
+  document.getElementById('q').value = '';
+  showListPage();
+  afterPaint(function () { load(''); });
+}
+
+function restoreFileList() {
+  showListPage();
+  updateWorkbenchChrome();
+  if (files.length) return;
+  var q = document.getElementById('q');
+  load(q ? q.value.trim() : '');
+}
+
+function renderNav() {
+  const el = document.getElementById('nav');
+  const unfiltered = fileNavUnfiltered();
 
   // 左栏刻意保持极简，不设任何组标题：全部文件/时间线/重复内容 + 文件树。
   // 分类/类型/文件书先撤下（数据与右键归类保留，需要时可加回）。
@@ -1488,27 +1541,24 @@ function renderNav() {
     if (it.classList.contains('tree-dir') || it.classList.contains('tree-file')) return;
     it.onclick = function () {
       if (it.dataset.report !== undefined) { showWeeklyReport(false); return; }
-      activeSource = null; activeCategory = null; activeBook = null;
-      activeExt = null; activeDir = null; activeRecent = null; activeDuplicate = false;
-      if (it.dataset.book !== undefined) {
-        activeBook = +it.dataset.book;
-      } else if (it.dataset.cat !== undefined) {
-        var v = it.dataset.cat;
-        activeCategory = (v === 'none') ? 'none' : +v;
-      } else if (it.dataset.dup !== undefined) {
-        activeDuplicate = true;
-      } else if (it.dataset.recent !== undefined) {
-        activeRecent = +it.dataset.recent;
-      } else if (it.dataset.ext !== undefined) {
-        activeExt = it.dataset.ext;
-      } else {
-        activeSource = it.dataset.src || null;
-      }
-      renderNav();
-      updateWorkbenchChrome();
-      document.getElementById('q').value = '';
-      showListPage();
-      load('');
+      applyFileNavFilter(function () {
+        activeSource = null; activeCategory = null; activeBook = null;
+        activeExt = null; activeDir = null; activeRecent = null; activeDuplicate = false;
+        if (it.dataset.book !== undefined) {
+          activeBook = +it.dataset.book;
+        } else if (it.dataset.cat !== undefined) {
+          var v = it.dataset.cat;
+          activeCategory = (v === 'none') ? 'none' : +v;
+        } else if (it.dataset.dup !== undefined) {
+          activeDuplicate = true;
+        } else if (it.dataset.recent !== undefined) {
+          activeRecent = +it.dataset.recent;
+        } else if (it.dataset.ext !== undefined) {
+          activeExt = it.dataset.ext;
+        } else {
+          activeSource = it.dataset.src || null;
+        }
+      });
     };
   });
   el.querySelectorAll('.tree-dir').forEach(function (it) {
@@ -1521,15 +1571,14 @@ function renderNav() {
         renderNav();
         return;
       }
-      activeSource = null; activeCategory = null; activeBook = null;
-      activeExt = null; activeRecent = null; activeDuplicate = false;
-      activeDir = dirPath;
-      if (!treeOpen[dirPath]) { treeOpen[dirPath] = true; persistTreeOpen(); }
-      renderNav();
-      updateWorkbenchChrome();
-      document.getElementById('q').value = '';
-      showListPage();
-      load('');
+      var needOpen = !treeOpen[dirPath];
+      if (needOpen) { treeOpen[dirPath] = true; persistTreeOpen(); }
+      applyFileNavFilter(function () {
+        activeSource = null; activeCategory = null; activeBook = null;
+        activeExt = null; activeRecent = null; activeDuplicate = false;
+        activeDir = dirPath;
+      });
+      if (needOpen) renderNav();
     };
   });
   el.querySelectorAll('.tree-file').forEach(function (it) {
@@ -1756,14 +1805,19 @@ document.addEventListener('contextmenu', function (e) {
   if (!e.target.closest('.row')) closeCtx();
 });
 
+function markRowsPending(on) {
+  var el = document.getElementById('rows');
+  if (!el || !el.classList) return;
+  el.classList.toggle('is-pending', !!on);
+}
+
 async function load(q, append = false) {
   const query = String(q || '').trim();
   setListTitle(query ? '文件搜索' : '文件管理');
   if (!append) {
     searchVersion += 1;  // 列表导航使尚未返回的全文搜索失效
     currentQuery = query;
-    files = [];
-    filesTotal = 0;
+    markRowsPending(true);
   } else if (query !== currentQuery) {
     return load(query, false);
   }
@@ -1784,13 +1838,17 @@ async function load(q, append = false) {
   // 浏览模式按扩展名分组（服务端排序，跨页不断组）；
   // 时间线视图按日期分组（天然 mtime 序），搜索和重复视图保持按时间
   if (!query && !activeDuplicate && activeRecent === null) params.set('group', 'ext');
-  const d = await api('/files?' + params);
-  if (version !== loadVersion) return;
-  const page = Array.isArray(d.files) ? d.files : [];
-  files = append ? files.concat(page) : page;
-  filesTotal = Math.max(0, safeNumber(d.total));
-  document.getElementById('count').textContent = filesTotal + ' 个文件';
-  renderRows();
+  try {
+    const d = await api('/files?' + params);
+    if (version !== loadVersion) return;
+    const page = Array.isArray(d.files) ? d.files : [];
+    files = append ? files.concat(page) : page;
+    filesTotal = Math.max(0, safeNumber(d.total));
+    document.getElementById('count').textContent = filesTotal + ' 个文件';
+    renderRows();
+  } finally {
+    if (version === loadVersion) markRowsPending(false);
+  }
 }
 
 /* 全文搜索：搜内容而非文件名。文件名匹配与内容匹配合并展示 */
@@ -2766,27 +2824,45 @@ document.getElementById('sheet').addEventListener('keydown', function (event) {
   }
 });
 
+let settingsRenderVersion = 0;
+
 async function renderSettings() {
   closeThemedSelects(true);
   const body = document.getElementById('sheetBody');
+  const ver = ++settingsRenderVersion;
   // 添加目录 / 重新发现 只对"文件来源"页有意义
   document.getElementById('btnAdd').style.display = settingsTab === 'sources' ? '' : 'none';
   document.getElementById('btnRescan').style.display = settingsTab === 'sources' ? '' : 'none';
   document.getElementById('sheetHint').textContent = '';
-  body.innerHTML = '<div class="set-layout">' +
-    '<nav class="set-nav">' + SETTINGS_TABS.map(function (t) {
-      return '<button type="button" class="set-nav-item' +
-        (settingsTab === t[0] ? ' on' : '') + '" data-tab="' +
-        esc(t[0]) + '">' + esc(t[1]) + '</button>';
-    }).join('') + '</nav>' +
-    '<div class="set-pane" id="setPane"></div></div>';
-  body.querySelectorAll('.set-nav-item').forEach(function (it) {
-    it.onclick = function () { settingsTab = it.dataset.tab; renderSettings(); };
-  });
+  var layout = body.querySelector('.set-layout');
+  if (!layout) {
+    body.innerHTML = '<div class="set-layout">' +
+      '<nav class="set-nav">' + SETTINGS_TABS.map(function (t) {
+        return '<button type="button" class="set-nav-item' +
+          (settingsTab === t[0] ? ' on' : '') + '" data-tab="' +
+          esc(t[0]) + '">' + esc(t[1]) + '</button>';
+      }).join('') + '</nav>' +
+      '<div class="set-pane" id="setPane"></div></div>';
+    body.querySelectorAll('.set-nav-item').forEach(function (it) {
+      it.onclick = function () {
+        if (settingsTab === it.dataset.tab) return;
+        settingsTab = it.dataset.tab;
+        body.querySelectorAll('.set-nav-item').forEach(function (x) {
+          x.classList.toggle('on', x.dataset.tab === settingsTab);
+        });
+        renderSettings();
+      };
+    });
+  } else {
+    body.querySelectorAll('.set-nav-item').forEach(function (x) {
+      x.classList.toggle('on', x.dataset.tab === settingsTab);
+    });
+  }
   const pane = document.getElementById('setPane');
   if (settingsTab === 'general') await renderGeneralPane(pane);
   else if (settingsTab === 'sources') await renderSourcesPane(pane);
   else await renderModelPane(pane);
+  if (ver !== settingsRenderVersion) return;
 }
 
 function segHtml(id, options, current) {
@@ -2980,7 +3056,9 @@ function themeCardsHtml(pref, follow) {
 }
 
 async function renderGeneralPane(pane) {
+  var ver = settingsRenderVersion;
   document.getElementById('sheetSub').textContent = '界面与整理行为';
+  pane.innerHTML = '<div class="empty" style="padding:30px">加载中…</div>';
   var zoom = localStorage.getItem('uiZoom') || '1';
   var theme = themePref();
   var follow = themeFollowsSystem();
@@ -2989,6 +3067,7 @@ async function renderGeneralPane(pane) {
   try { ocr = await api('/settings/ocr'); } catch (e) {}
   var qa = { answer_max_tokens: 'auto' };
   try { qa = await api('/settings/qa'); } catch (e) {}
+  if (ver !== settingsRenderVersion) return;
   pane.innerHTML =
     '<div class="set-section"><div class="set-title">显示</div>' +
       '<div class="set-row"><div class="set-info"><div class="set-label">界面缩放</div>' +
@@ -3117,15 +3196,18 @@ async function bindDataDirRow() {
 }
 
 async function renderSourcesPane(pane) {
+  var ver = settingsRenderVersion;
   clearTimeout(sourcePaneTimer);
   pane.innerHTML = '<div class="empty" style="padding:30px">加载中…</div>';
   let list;
   try {
     list = (await api('/sources')).sources;
   } catch (e) {
+    if (ver !== settingsRenderVersion) return;
     pane.innerHTML = '<div class="empty" style="padding:30px">加载失败：' + esc(e.message) + '</div>';
     return;
   }
+  if (ver !== settingsRenderVersion) return;
 
   const on = list.filter(function (s) { return s.enabled; }).length;
   document.getElementById('sheetSub').textContent =
@@ -3185,7 +3267,9 @@ async function renderSourcesPane(pane) {
 var modelPaneGen = 0;
 async function renderModelPane(pane) {
   var gen = ++modelPaneGen;
+  var ver = settingsRenderVersion;
   document.getElementById('sheetSub').textContent = '模型配置：问答 / 知识馆整理 / 向量';
+  pane.innerHTML = '<div class="empty" style="padding:30px">加载中…</div>';
   var savedAll = await window.ordo.llmGet();
   var slots = (savedAll && savedAll.slots) || {};
   // 空表单的 Ollama 预填地址由**后端探测**给出（见 app/config/models.py）：
@@ -3198,7 +3282,7 @@ async function renderModelPane(pane) {
       ? (probed.slots.embedding || probed.slots.library) : null;
     if (anySlot && anySlot.default_ollama) defaultOllama = anySlot.default_ollama;
   } catch (e) {}
-  if (gen !== modelPaneGen) return;
+  if (gen !== modelPaneGen || ver !== settingsRenderVersion) return;
   var qa = slots.qa || { provider: 'openai', endpoint: '', model: '', has_key: false };
   var lib = slots.library || { provider: 'ollama', endpoint: '', model: '', has_key: false };
   var emb = slots.embedding || { provider: 'ollama', endpoint: '', model: '', has_key: false };
@@ -3292,7 +3376,7 @@ async function renderModelPane(pane) {
       '嵌入模型输出维度需与向量表 1024 维一致（检测连接会显示维度）；换模型后向量将全量重建',
       emb, { keyed: false, epPlaceholder: 'Ollama 地址，如 ' + defaultOllama });
 
-  if (gen !== modelPaneGen) return;
+  if (gen !== modelPaneGen || ver !== settingsRenderVersion) return;
   ['src_qa', 'proto_qa', 'src_library'].forEach(function (id) {
     mountThemedSelect(document.getElementById(id));
   });
