@@ -1,4 +1,4 @@
-name: Bug report
+name: Bug report / 缺陷
 description: Something is broken / 出了问题
 title: "[bug] "
 labels: ["bug"]
@@ -7,32 +7,34 @@ body:
     attributes:
       value: |
         Security issues → [private advisory](https://github.com/RexVane/Ordo/security/advisories/new), not this form.
+
+        安全问题请走 [私密 Advisory](https://github.com/RexVane/Ordo/security/advisories/new)，不要用这个表单。
   - type: textarea
     id: what
     attributes:
       label: What happened / 发生了什么
-      description: What you did, what you expected, what you got.
+      description: What you did, what you expected, what you got. / 你做了什么、期望什么、实际得到什么。
     validations:
       required: true
   - type: dropdown
     id: os
     attributes:
-      label: OS
+      label: OS / 系统
       options:
         - Windows
         - macOS
         - Linux
-        - Not sure
+        - Not sure / 不确定
     validations:
       required: true
   - type: input
     id: version
     attributes:
-      label: Version / commit
+      label: Version / commit / 版本
       placeholder: "0.3.0 or a git SHA"
   - type: textarea
     id: logs
     attributes:
       label: Logs / 日志
-      description: Sidecar stderr, renderer console, or a screenshot. Strip API keys.
+      description: Sidecar stderr, renderer console, or a screenshot. Strip API keys. / sidecar 报错、渲染层控制台或截图。请去掉 API 密钥。
       render: shell
