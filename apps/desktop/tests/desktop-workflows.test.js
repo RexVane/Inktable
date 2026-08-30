@@ -18,6 +18,18 @@ function sourceBetween(start, end) {
   return renderer.slice(from, to).trim();
 }
 
+test('settings dropdowns use a themed menu instead of the native OS popup', () => {
+  const cssPath = path.resolve(__dirname, '..', 'renderer', 'workbench.css');
+  const css = fs.readFileSync(cssPath, 'utf8');
+  assert.match(renderer, /function mountThemedSelect\(/);
+  assert.match(renderer, /closeThemedSelects\(/);
+  assert.match(css, /\.tsel-menu\b/);
+  assert.match(css, /\.tsel-btn\b/);
+  assert.match(css, /background: var\(--surface\)/);
+  assert.match(css, /var\(--shadow-pop\)/);
+  assert.doesNotMatch(css, /select\s*\{[^}]*appearance:\s*none/);
+});
+
 test('every renderer inline script remains valid JavaScript', () => {
   assert.ok(scripts.length > 0, 'renderer must contain an inline script');
   for (const [i, match] of scripts.entries()) {
@@ -132,6 +144,16 @@ test('clicking a file row switches the middle column to the detail page', async 
   const readerFoot = { textContent: '' };
   const fileSearch = { style: {} };
   const backButton = { style: {} };
+  // .md 现在有原版式渲染，详情页会给出「原文 / 提取文本」切换并默认开原文。
+  // 这三个元素真实渲染时就在详情 HTML 里，stub 也必须提供，否则 setView 会
+  // 在 null 上设 onclick。
+  const toggleButton = () => ({
+    classList: { toggle() {} },
+    onclick: null,
+  });
+  const vtOriginal = toggleButton();
+  const vtText = toggleButton();
+  const vtHint = { textContent: '' };
   const countEl = { style: {}, textContent: '' };
   const titleEl = { textContent: '' };
   const selectedClasses = new Set();
@@ -182,8 +204,17 @@ test('clicking a file row switches the middle column to the detail page', async 
         if (id === 'backToList') return backButton;
         if (id === 'count') return countEl;
         if (id === 'resultsTitle') return titleEl;
+        if (id === 'vtOriginal') return vtOriginal;
+        if (id === 'vtText') return vtText;
+        if (id === 'vtHint') return vtHint;
         return null;
       },
+      // 原文视图要内嵌 vendor 脚本。这里让它停在"永不 settle"的加载态：
+      // 本例要验的是切到提取文本后全文照旧从 /content 渲染，不是 md 渲染本身
+      // （那由 viewer-formats.test.js 覆盖）。
+      querySelector: () => null,
+      createElement: () => ({ dataset: {}, style: {} }),
+      head: { appendChild() {} },
     },
     setTimeout,
     window: { inktable: { revealInFinder() {} } },
@@ -202,13 +233,22 @@ test('clicking a file row switches the middle column to the detail page', async 
       rowClick();
       await new Promise(function (resolve) { setTimeout(resolve, 0); });
       await new Promise(function (resolve) { setTimeout(resolve, 0); });
-      return { evidenceHtml: document.getElementById('evidence').innerHTML };
+      var evidenceHtml = document.getElementById('evidence').innerHTML;
+      // 默认落在原文视图（.md 可原版式渲染）；再切「提取文本」验证全文通道
+      var defaultBody = document.getElementById('readerBody').innerHTML;
+      document.getElementById('vtText').onclick();
+      await new Promise(function (resolve) { setTimeout(resolve, 0); });
+      await new Promise(function (resolve) { setTimeout(resolve, 0); });
+      return { evidenceHtml: evidenceHtml, defaultBody: defaultBody };
     })()
   `, context);
 
   assert.match(result.evidenceHtml, /资源分配\.md/);
   assert.match(result.evidenceHtml, /\/docs\/resource\.md/);
-  // 全文来自 /content 分页接口，渲染进查看器主体
+  // .md 可原版式渲染，所以详情页给出视图切换并默认进原文
+  assert.match(result.evidenceHtml, /id="vtOriginal"/);
+  assert.match(result.defaultBody, /original-loading/);
+  // 切到「提取文本」后，全文仍来自 /content 分页接口
   assert.match(readerBody.html, /正文片段/);
   assert.match(readerFoot.textContent, /全文完/);
   assert.equal(selectedClasses.has('on'), true);

@@ -2,8 +2,9 @@
    Keep this module on the existing Nebula design tokens so all seven themes
    remain single-source-of-truth in workbench.css. */
 
+/* 这一栏现在只有这一组按钮（原先左边还有个"浏览"标题，靠 margin-left:auto
+   把开关推到右侧）。标题去掉后不再需要那个推力，否则左边会空出一整段。 */
 .library-mode-switch {
-  margin-left: auto;
   display: inline-flex;
   gap: 2px;
   padding: 2px;

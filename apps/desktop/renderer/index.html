@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-+bogcxA9rN61l4U27NYWKv0PEc6ckm34si88nWr7EMQ=' 'sha256-dmpjGSRa/ZfoR5IRobpdQzlxjYn4Bvt2SyqM3ByuxmE='; style-src 'self' 'unsafe-inline'; connect-src inkdoc:; worker-src 'self' inkdoc:; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-+bogcxA9rN61l4U27NYWKv0PEc6ckm34si88nWr7EMQ=' 'sha256-7s6nLPviJTV/DHWM7oMi5VMxeW4bc/DLLghbEB6jclY='; style-src 'self' 'unsafe-inline'; connect-src inkdoc:; worker-src 'self' inkdoc:; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'" />
 <title>Inktable</title>
 <style>
   /* 结构性 reset —— 全部视觉规则集中在 workbench.css，避免两处定义漂移 */
@@ -54,13 +54,6 @@
             fill="currentColor" stroke="none"/>
         </svg>
       </button>
-      <div class="topbar-brand" aria-label="Inktable 个人知识库">
-        <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24">
-          <path d="M12 2.6 C12 2.6 5.6 10.3 5.6 14.9 a6.4 6.4 0 0 0 12.8 0 C18.4 10.3 12 2.6 12 2.6 Z" fill="currentColor"/>
-          <path d="M9.1 15.2 a3.1 3.1 0 0 0 2.5 3" stroke="rgba(255,255,255,.75)" stroke-width="1.4" fill="none" stroke-linecap="round"/>
-        </svg></span>
-        <div class="brand-copy"><div class="brand-name">Inktable</div><div class="brand-subtitle">个人知识库</div></div>
-      </div>
       <div class="view-title"><span class="scope-name" id="topbarScope">全部内容</span></div>
       <div class="topbar-spacer"></div>
       <div class="status-cluster">
@@ -490,8 +483,8 @@ function renderFileDetail(detail) {
   if (trashBtn) trashBtn.onclick = function () {
     trashFile({ file_id: file.id, name: file.name });
   };
-  // 可渲染原版式的文件（PDF/DOCX）默认打开原文视图，可切提取文本；
-  // 其余格式走全文文本 reader（滚到底自动续载）
+  // 可渲染原版式的文件（PDF / DOCX / Markdown / 纯文本 / CSV）默认打开原文
+  // 视图，可切提取文本；其余格式走全文文本 reader（滚到底自动续载）
   var kind = viewerKindOf(file.ext || file.name);
   if (kind) {
     var setView = function (view) {
@@ -516,11 +509,15 @@ function renderFileDetail(detail) {
   }
 }
 
-/* ---------- 原文查看器（inkdoc:// + PDF.js / docx-preview） ----------
+/* ---------- 原文查看器（inkdoc:// + PDF.js / docx-preview / marked） ----------
    字节通道：主进程 inkdoc:// 协议（每次请求过 sidecar 授权）。
    PDF：页面 canvas 懒渲染（滚到才画），引用按页码直达 + 文字层定位高亮。
    DOCX：docx-preview 保版式渲染，按片段文本定位高亮。
-   其余格式没有原版式渲染，详情页维持提取文本 reader。 */
+   MD：marked 渲染 + DOMPurify 消毒（md 是用户文件内容，可以内嵌脚本）。
+   TXT：等宽 pre，保留换行与缩进，textContent 不走 HTML 解析。
+   CSV：按 RFC 4180 解析后建 table，单元格逐个 textContent。
+   其余格式（html/xlsx/pptx…）仍走提取文本 reader。
+   所有文本类格式的解码顺序与后端 parsers.py 一致，见 decodeBytes()。 */
 var pendingJump = null;      // 待定位的引用 {page, snippet}
 var originalViewToken = 0;   // 切换视图/切换文件后使未完成的渲染作废
 var pdfjsLibPromise = null;
@@ -530,7 +527,33 @@ function viewerKindOf(nameOrExt) {
   var ext = s.indexOf('.') >= 0 ? s.slice(s.lastIndexOf('.') + 1) : s;
   if (ext === 'pdf') return 'pdf';
   if (ext === 'docx') return 'docx';
+  if (ext === 'md' || ext === 'markdown') return 'md';
+  if (ext === 'csv') return 'csv';
+  if (ext === 'txt' || ext === 'text' || ext === 'log') return 'text';
   return null;
+}
+
+/* 字节 → 文本。解码顺序与后端 `app/parsing/parsers.py` 逐项一致
+   （utf-8 → gb18030 → utf-16 → latin-1，都用严格模式，最后回落 replace）——
+   两边不一致的话，查看器显示的字和索引里的字会对不上，引用定位就会失灵。
+   中文 txt 在 Windows 上大量是 GBK，这一步不是可选项。 */
+function decodeBytes(buf) {
+  var bytes = new Uint8Array(buf);
+  // BOM：UTF-8 / UTF-16 两种都先剥掉，否则首字符会变成不可见的 U+FEFF
+  if (bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) {
+    bytes = bytes.subarray(3);
+  } else if (bytes.length >= 2 && bytes[0] === 0xFF && bytes[1] === 0xFE) {
+    return new TextDecoder('utf-16le').decode(bytes.subarray(2));
+  } else if (bytes.length >= 2 && bytes[0] === 0xFE && bytes[1] === 0xFF) {
+    return new TextDecoder('utf-16be').decode(bytes.subarray(2));
+  }
+  var labels = ['utf-8', 'gb18030', 'utf-16le'];
+  for (var i = 0; i < labels.length; i++) {
+    try {
+      return new TextDecoder(labels[i], { fatal: true }).decode(bytes);
+    } catch (e) { /* 这个编码解不通，换下一个 */ }
+  }
+  return new TextDecoder('utf-8').decode(bytes);   // 兜底：坏字节变 U+FFFD
 }
 
 function inkdocUrl(fileId, name) {
@@ -592,9 +615,23 @@ function ensureScript(src) {
 
 function loadPdfJs() {
   if (!pdfjsLibPromise) {
-    pdfjsLibPromise = import('vendor/pdfjs/pdf.min.mjs').then(function (lib) {
-      lib.GlobalWorkerOptions.workerSrc = 'inkdoc://app/vendor/pdfjs/pdf.worker.min.mjs';
+    // specifier 必须是 './...' 或完整 URL —— 裸的 'vendor/...' 被 ES module
+    // 解析器直接拒绝（Failed to resolve module specifier），PDF 于是一个都打不开。
+    // 用 document.baseURI 解析成绝对 file:// URL：既满足 specifier 规则，
+    // 也不依赖当前页面路径深度。
+    var url = new URL('./vendor/pdfjs/pdf.min.mjs', document.baseURI).href;
+    pdfjsLibPromise = import(url).then(function (lib) {
+      // worker 也走 file://。它是以 module script 身份被 import 的，而自定义
+      // 协议即便 standard:true 也不被 Chromium 当作合法的 module 来源
+      // （报 "Failed to fetch dynamically imported module"）。库本体已从
+      // file:// 成功加载，worker 同源同理。
+      // cmaps / 字体仍用 inkdoc://：那两类是 fetch 取的，file:// 下会被判跨源。
+      lib.GlobalWorkerOptions.workerSrc =
+        new URL('./vendor/pdfjs/pdf.worker.min.mjs', document.baseURI).href;
       return lib;
+    }).catch(function (err) {
+      pdfjsLibPromise = null;      // 失败不缓存，下次打开可重试
+      throw err;
     });
   }
   return pdfjsLibPromise;
@@ -609,9 +646,14 @@ function openOriginal(fileId, name, jump) {
   var token = originalViewToken;
   var kind = viewerKindOf(name);
   body.innerHTML = '<div class="original-loading">正在加载原文…</div>';
-  var task = kind === 'pdf'
-    ? openPdfOriginal(fileId, name, jump, body, token)
-    : openDocxOriginal(fileId, name, jump, body, token);
+  var openers = {
+    pdf: openPdfOriginal,
+    docx: openDocxOriginal,
+    md: openMarkdownOriginal,
+    csv: openCsvOriginal,
+    text: openTextOriginal,
+  };
+  var task = (openers[kind] || openDocxOriginal)(fileId, name, jump, body, token);
   task.catch(function (err) {
     if (token !== originalViewToken) return;
     body.innerHTML = '<div class="detail-empty">原文加载失败：' + esc(err.message) +
@@ -697,6 +739,8 @@ function buildPdfView(pdfjsLib, doc, body, jump, token) {
         canvas.width = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
         holder.appendChild(canvas);
+        // 摘掉骨架态：它的 min-height:340px 会把矮页面撑出一截空白
+        holder.classList.remove('pdf-page-ph');
         holder.style.height = 'auto';
         return page.render({
           canvasContext: canvas.getContext('2d'),
@@ -715,10 +759,15 @@ function buildPdfView(pdfjsLib, doc, body, jump, token) {
     });
   }
 
-  // 占位骨架先全部铺开（滚动条真实），滚到附近才真正渲染
+  // 占位骨架先全部铺开（滚动条真实），滚到附近才真正渲染。
+  //
+  // 两个类都要给：`pdf-page` 是常驻身份 —— pageWrap() 按
+  // `.pdf-page[data-page]` 找容器，缺了它 renderPage 拿到 null 就静默返回，
+  // 结果是一页都画不出来且不报错。`pdf-page-ph` 只是"还没画"的骨架态
+  // （min-height 撑出滚动条），画完由 renderPage 摘掉。
   for (var i = 1; i <= numPages; i++) {
     var ph = document.createElement('div');
-    ph.className = 'pdf-page-ph';
+    ph.className = 'pdf-page pdf-page-ph';
     ph.dataset.page = i;
     pages.appendChild(ph);
   }
@@ -840,6 +889,152 @@ function openDocxOriginal(fileId, name, jump, body, token) {
         return null;
       });
     });
+  });
+}
+
+/* ---------- Markdown ---------- */
+
+/* marked 负责 md → HTML，DOMPurify 负责"这段 HTML 能不能进 DOM"。
+   为什么必须消毒:md 是**用户文件内容**，里面可以直接写 <script> 或
+   <img onerror=...>。渲染层虽然是 file:// + CSP 'self'，但 CSP 拦不住已经
+   在同源脚本上下文里的内联事件属性，所以不能省这一步。
+   两个库都内嵌在 renderer/vendor/ 下，按 'self' 过 CSP，不出网。 */
+function openMarkdownOriginal(fileId, name, jump, body, token) {
+  return Promise.all([
+    ensureScript('vendor/marked/marked.umd.js'),
+    ensureScript('vendor/dompurify/purify.min.js'),
+  ]).then(function () {
+    if (token !== originalViewToken) return null;
+    return fetchOriginalBytes(fileId, name).then(function (buf) {
+      if (token !== originalViewToken) return null;
+      var text = decodeBytes(buf);
+      var raw = window.marked.parse(text, { gfm: true, breaks: false });
+      var clean = window.DOMPurify.sanitize(raw, {
+        // 白名单之外一律丢弃。禁 script/iframe/object/embed/form 是拦执行与
+        // 外发；禁 on* 与 style 是拦内联事件与视觉伪装。
+        FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form',
+          'input', 'button', 'link', 'meta', 'base'],
+        FORBID_ATTR: ['style', 'srcset', 'formaction', 'ping'],
+        ALLOW_DATA_ATTR: false,
+      });
+      body.innerHTML = '<div class="md-view"></div>';
+      var holder = body.querySelector('.md-view');
+      holder.innerHTML = clean;
+      // 图片与链接:相对路径在 file:// 下指不到用户文件，且点开会离开应用。
+      // 图片直接摘掉换成占位说明，链接一律交给系统浏览器。
+      stripMdImages(holder);
+      externalizeMdLinks(holder);
+      highlightInDom(holder, jump && jump.snippet);
+      return null;
+    });
+  });
+}
+
+/* 相对路径图片在 file:// 下必然加载失败（原文件不在渲染层能触及的位置），
+   留着只会显示一堆碎图标。换成一行占位，说清它是图片而不是渲染坏了。 */
+function stripMdImages(root) {
+  var imgs = root.querySelectorAll('img');
+  for (var i = 0; i < imgs.length; i++) {
+    var img = imgs[i];
+    var ph = document.createElement('span');
+    ph.className = 'md-img-ph';
+    ph.textContent = '[图片' + (img.getAttribute('alt')
+      ? '：' + img.getAttribute('alt') : '') + ']';
+    if (img.parentNode) img.parentNode.replaceChild(ph, img);
+  }
+}
+
+/* 站内导航会把渲染层导走。http(s) 加 target=_blank 交给主进程既有的
+   setWindowOpenHandler（它只放行 http/https 到系统浏览器，然后 deny 开窗）——
+   复用那条已审过的通道，不新增 IPC。其余协议（相对路径、file:、自定义）
+   去掉可点性:在 file:// 下它们指不到用户文件，留着只会把人导到空页面。 */
+function externalizeMdLinks(root) {
+  var links = root.querySelectorAll('a[href]');
+  for (var i = 0; i < links.length; i++) {
+    var a = links[i];
+    var href = a.getAttribute('href') || '';
+    if (/^https?:\/\//i.test(href)) {
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.title = href;
+    } else {
+      var span = document.createElement('span');
+      span.className = 'md-link-dead';
+      span.textContent = a.textContent;
+      span.title = href ? '相对链接，无法在查看器中打开：' + href : '';
+      if (a.parentNode) a.parentNode.replaceChild(span, a);
+    }
+  }
+}
+
+/* ---------- 纯文本 ---------- */
+
+/* 等宽 + 保留换行与缩进。用 textContent 而不是 innerHTML —— 纯文本没有任何
+   需要解析的结构，解析它只会引入风险。 */
+function openTextOriginal(fileId, name, jump, body, token) {
+  return fetchOriginalBytes(fileId, name).then(function (buf) {
+    if (token !== originalViewToken) return null;
+    body.innerHTML = '<pre class="text-view"></pre>';
+    var pre = body.querySelector('.text-view');
+    pre.textContent = decodeBytes(buf);
+    highlightInDom(pre, jump && jump.snippet);
+    return null;
+  });
+}
+
+/* ---------- CSV ---------- */
+
+/* 渲染成表格。解析按 RFC 4180 处理引号内的逗号、换行与转义双引号 ——
+   按 split(',') 拆会把带逗号的单元格拆散，那种表看着比不渲染更糟。 */
+function parseCsv(text) {
+  var rows = [];
+  var row = [];
+  var cell = '';
+  var quoted = false;
+  for (var i = 0; i < text.length; i++) {
+    var ch = text[i];
+    if (quoted) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') { cell += '"'; i++; }   // "" = 一个字面引号
+        else quoted = false;
+      } else cell += ch;
+      continue;
+    }
+    if (ch === '"') { quoted = true; continue; }
+    if (ch === ',') { row.push(cell); cell = ''; continue; }
+    if (ch === '\r') continue;                            // CRLF 只认 \n
+    if (ch === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; continue; }
+    cell += ch;
+  }
+  if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+  return rows;
+}
+
+function openCsvOriginal(fileId, name, jump, body, token) {
+  return fetchOriginalBytes(fileId, name).then(function (buf) {
+    if (token !== originalViewToken) return null;
+    var rows = parseCsv(decodeBytes(buf));
+    body.innerHTML = '<div class="csv-view"><table></table></div>';
+    var table = body.querySelector('.csv-view table');
+    // 全程 createElement + textContent:单元格是用户数据，不进 HTML 解析。
+    var limit = Math.min(rows.length, 5000);   // 超大表只渲染前 5000 行
+    for (var r = 0; r < limit; r++) {
+      var tr = document.createElement('tr');
+      for (var c = 0; c < rows[r].length; c++) {
+        var td = document.createElement(r === 0 ? 'th' : 'td');
+        td.textContent = rows[r][c];
+        tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    }
+    if (rows.length > limit) {
+      var note = document.createElement('div');
+      note.className = 'csv-more';
+      note.textContent = '共 ' + rows.length + ' 行，已显示前 ' + limit + ' 行';
+      body.querySelector('.csv-view').appendChild(note);
+    }
+    highlightInDom(table, jump && jump.snippet);
+    return null;
   });
 }
 
@@ -2303,14 +2498,138 @@ const SETTINGS_TABS = [
 
 function sheetOpen(on, tab) {
   document.getElementById('sheet').classList.toggle('show', on);
-  if (!on) clearTimeout(sourcePaneTimer);
+  if (!on) {
+    clearTimeout(sourcePaneTimer);
+    closeThemedSelects(true);
+  }
   if (on) {
     if (tab) settingsTab = tab;
     renderSettings();
   }
 }
 
+/* 主题化下拉：保留隐藏的原生 <select> 给既有 value/onchange，弹出层自己画。 */
+function closeThemedSelects(remove) {
+  var open = document.querySelectorAll('.tsel.open');
+  for (var i = 0; i < open.length; i++) open[i].classList.remove('open');
+  var menus = document.querySelectorAll('body > .tsel-menu');
+  for (var j = 0; j < menus.length; j++) {
+    menus[j].classList.remove('open');
+    if (remove) menus[j].parentNode.removeChild(menus[j]);
+  }
+}
+
+var themedSelectDismissBound = false;
+function mountThemedSelect(select) {
+  if (!select || select.dataset.themed === '1') return;
+  select.dataset.themed = '1';
+  select.classList.add('tsel-native');
+  var wrap = document.createElement('div');
+  wrap.className = 'tsel';
+  select.parentNode.insertBefore(wrap, select);
+  wrap.appendChild(select);
+
+  var btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'tsel-btn';
+  btn.setAttribute('aria-haspopup', 'listbox');
+  wrap.appendChild(btn);
+
+  var menuId = 'tsel-menu-' + (select.id || Math.random().toString(36).slice(2));
+  var stale = document.getElementById(menuId);
+  if (stale && stale.parentNode) stale.parentNode.removeChild(stale);
+  var menu = document.createElement('div');
+  menu.id = menuId;
+  menu.className = 'tsel-menu';
+  menu.setAttribute('role', 'listbox');
+  document.body.appendChild(menu);
+
+  function currentLabel() {
+    var opt = select.options[select.selectedIndex];
+    return opt ? opt.textContent : '';
+  }
+  function syncBtn() {
+    btn.textContent = currentLabel();
+  }
+  function placeMenu() {
+    var r = btn.getBoundingClientRect();
+    menu.style.left = r.left + 'px';
+    menu.style.width = r.width + 'px';
+    var below = window.innerHeight - r.bottom;
+    if (below < 168 && r.top > below) {
+      menu.style.top = 'auto';
+      menu.style.bottom = (window.innerHeight - r.top + 4) + 'px';
+    } else {
+      menu.style.bottom = 'auto';
+      menu.style.top = (r.bottom + 4) + 'px';
+    }
+  }
+  function closeMenu() {
+    wrap.classList.remove('open');
+    menu.classList.remove('open');
+  }
+  function rebuild() {
+    menu.textContent = '';
+    for (var i = 0; i < select.options.length; i++) {
+      (function (opt) {
+        var item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'tsel-opt' + (opt.selected ? ' on' : '');
+        item.setAttribute('role', 'option');
+        item.textContent = opt.textContent;
+        item.onclick = function (ev) {
+          ev.stopPropagation();
+          select.value = opt.value;
+          syncBtn();
+          closeMenu();
+          if (typeof select.onchange === 'function') select.onchange();
+        };
+        menu.appendChild(item);
+      })(select.options[i]);
+    }
+  }
+  function openMenu() {
+    closeThemedSelects(false);
+    rebuild();
+    placeMenu();
+    wrap.classList.add('open');
+    menu.classList.add('open');
+  }
+  btn.onclick = function (ev) {
+    ev.stopPropagation();
+    if (wrap.classList.contains('open')) closeMenu();
+    else openMenu();
+  };
+  var valueDesc = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value');
+  if (valueDesc && valueDesc.set) {
+    Object.defineProperty(select, 'value', {
+      configurable: true,
+      enumerable: true,
+      get: function () { return valueDesc.get.call(select); },
+      set: function (v) {
+        valueDesc.set.call(select, v);
+        syncBtn();
+      },
+    });
+  }
+  if (!themedSelectDismissBound) {
+    themedSelectDismissBound = true;
+    document.addEventListener('click', function (e) {
+      var menus = document.querySelectorAll('body > .tsel-menu.open');
+      for (var i = 0; i < menus.length; i++) {
+        if (!menus[i].contains(e.target)) closeThemedSelects(false);
+      }
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') closeThemedSelects(false);
+    });
+    window.addEventListener('scroll', function () { closeThemedSelects(false); }, true);
+  }
+  syncBtn();
+}
+
 async function renderSettings() {
+  closeThemedSelects(true);
   const body = document.getElementById('sheetBody');
   // 添加目录 / 重新发现 只对"文件来源"页有意义
   document.getElementById('btnAdd').style.display = settingsTab === 'sources' ? '' : 'none';
@@ -2724,10 +3043,23 @@ async function renderSourcesPane(pane) {
   }
 }
 
+var modelPaneGen = 0;
 async function renderModelPane(pane) {
+  var gen = ++modelPaneGen;
   document.getElementById('sheetSub').textContent = '模型配置：问答 / 知识馆整理 / 向量';
   var savedAll = await window.inktable.llmGet();
   var slots = (savedAll && savedAll.slots) || {};
+  // 空表单的 Ollama 预填地址由**后端探测**给出（见 app/config/models.py）：
+  // 11434 是官方默认，但 Windows 上常被保留端口段占掉而改口。界面不再自己
+  // 猜一个常量，否则 Mac 能拉到模型列表、Windows 静默拉不到。
+  var defaultOllama = 'http://127.0.0.1:11434';
+  try {
+    var probed = await api('/settings/models');
+    var anySlot = (probed && probed.slots)
+      ? (probed.slots.embedding || probed.slots.library) : null;
+    if (anySlot && anySlot.default_ollama) defaultOllama = anySlot.default_ollama;
+  } catch (e) {}
+  if (gen !== modelPaneGen) return;
   var qa = slots.qa || { provider: 'openai', endpoint: '', model: '', has_key: false };
   var lib = slots.library || { provider: 'ollama', endpoint: '', model: '', has_key: false };
   var emb = slots.embedding || { provider: 'ollama', endpoint: '', model: '', has_key: false };
@@ -2743,12 +3075,18 @@ async function renderModelPane(pane) {
     return '<div class="set-section"><div class="set-title">' + title + '</div>' +
       (desc ? '<div class="set-desc" style="margin:2px 0 8px">' + desc + '</div>' : '') +
       (opts.providerSelect
-        ? '<select id="prov_' + slot + '" style="margin-bottom:8px">' +
-          '<option value="openai"' + (cfg.provider === 'openai' ? ' selected' : '') + '>' +
-            (opts.providerLabels ? opts.providerLabels.openai : 'OpenAI 兼容接口（云端 / 中转）') + '</option>' +
-          '<option value="ollama"' + (cfg.provider !== 'openai' ? ' selected' : '') + '>' +
-            (opts.providerLabels ? opts.providerLabels.ollama : '本地 Ollama') + '</option>' +
-          '</select>'
+        ? (function () {
+            var options = opts.providerOptions || [
+              { value: 'openai', label: (opts.providerLabels && opts.providerLabels.openai) || 'OpenAI 兼容接口（云端 / 中转）' },
+              { value: 'ollama', label: (opts.providerLabels && opts.providerLabels.ollama) || '本地 Ollama' }
+            ];
+            return '<select id="prov_' + slot + '" style="margin-bottom:8px">' +
+              options.map(function (opt) {
+                return '<option value="' + opt.value + '"' +
+                  (cfg.provider === opt.value ? ' selected' : '') + '>' +
+                  opt.label + '</option>';
+              }).join('') + '</select>';
+          })()
         : '') +
       '<div class="llm-form">' + fields +
       '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
@@ -2762,10 +3100,13 @@ async function renderModelPane(pane) {
   }
 
   pane.innerHTML =
-    sectionHtml('qa', '知识问答', '接口格式按服务选择：云端/中转用 OpenAI 兼容格式；本地 Ollama 免密钥并自动识别已装模型', qa,
+    sectionHtml('qa', '知识问答', '先选接口格式：OpenAI 兼容、Anthropic（Claude 中转）或本地 Ollama', qa,
       { keyed: true, providerSelect: true,
-        providerLabels: { openai: 'OpenAI 兼容接口（chat/completions · 云端/中转）',
-                          ollama: '本地 Ollama（自动识别模型，免密钥）' },
+        providerOptions: [
+          { value: 'openai', label: 'OpenAI 兼容（/chat/completions · 云端/中转）' },
+          { value: 'anthropic', label: 'Anthropic 协议（/messages · Claude 中转）' },
+          { value: 'ollama', label: '本地 Ollama（自动识别模型，免密钥）' }
+        ],
         epPlaceholder: '接口地址，如 https://api.xxx.com/v1',
         hint: llmInfo.configured ? '已保存，检测后即可确认模型可用' : '未配置时问答不可用，其余功能不受影响' }) +
     '<div class="set-section"><div class="set-title">从 cc-switch 导入</div>' +
@@ -2775,12 +3116,16 @@ async function renderModelPane(pane) {
     sectionHtml('library', '知识馆整理（摘要 / 卡片 / 标签 / 文档主题摘要）',
       '支持本地 Ollama 或 OpenAI 兼容接口；选云端即表示允许文档正文发往该服务',
       lib, { keyed: true, providerSelect: true,
-        epPlaceholder: '接口地址（Ollama 如 http://127.0.0.1:11434）' }) +
+        epPlaceholder: '接口地址（Ollama 如 ' + defaultOllama + '）' }) +
     sectionHtml('embedding', '向量模型（语义检索 · 本地 Ollama）',
       '嵌入模型输出维度需与向量表 1024 维一致（检测连接会显示维度）；换模型后向量将全量重建',
-      emb, { keyed: false, epPlaceholder: 'Ollama 地址，如 http://127.0.0.1:11434' });
+      emb, { keyed: false, epPlaceholder: 'Ollama 地址，如 ' + defaultOllama });
 
-  document.getElementById('ccLoad').onclick = loadCcswitchProviders;
+  if (gen !== modelPaneGen) return;
+  mountThemedSelect(document.getElementById('prov_qa'));
+  mountThemedSelect(document.getElementById('prov_library'));
+  var ccLoad = document.getElementById('ccLoad');
+  if (ccLoad) ccLoad.onclick = loadCcswitchProviders;
 
   // ---- 通用槽位行为 ----
   function cfgOf(slot) {
@@ -2813,10 +3158,16 @@ async function renderModelPane(pane) {
     var ep = document.getElementById('ep_' + slot);
     var key = document.getElementById('key_' + slot);
     if (prov.value === 'ollama') {
-      if (ep && !ep.value) ep.value = 'http://127.0.0.1:11434';
-      if (ep) ep.placeholder = 'Ollama 地址，如 http://127.0.0.1:11434';
+      if (ep && !ep.value) ep.value = defaultOllama;
+      if (ep) ep.placeholder = 'Ollama 地址，如 ' + defaultOllama;
       if (key) { key.disabled = true; key.placeholder = '本地 Ollama 无需密钥'; }
       fillModelList(slot, true);
+    } else if (prov.value === 'anthropic') {
+      if (ep) ep.placeholder = 'Anthropic 地址，如 https://api.anthropic.com/v1';
+      if (key) {
+        key.disabled = false;
+        key.placeholder = key.dataset.hasKey === '1' ? 'API 密钥（已保存，留空表示不变）' : 'API 密钥';
+      }
     } else {
       if (ep) ep.placeholder = '接口地址，如 https://api.xxx.com/v1';
       if (key) {
@@ -2855,18 +3206,24 @@ async function renderModelPane(pane) {
             (m === cfg.model ? ' selected' : '') + '>' + esc(m) + '</option>';
         }).join('') + '</select>';
       box.innerHTML = sel;
-      document.getElementById('pick_' + slot).onchange = function () {
+      var picker = document.getElementById('pick_' + slot);
+      picker.onchange = function () {
         if (this.value) document.getElementById('model_' + slot).value = this.value;
       };
+      mountThemedSelect(picker);
     } catch (e) {
       if (!auto) box.innerHTML = '<span class="hint">拉取失败：' + esc(e.message) + '</span>';
     }
   }
 
+  function bindClick(id, fn) {
+    var el = document.getElementById(id);
+    if (el) el.onclick = fn;
+  }
   for (var s = 0; s < 3; s++) {
     (function () {
       var slot = ['qa', 'library', 'embedding'][s];
-      document.getElementById('save_' + slot).onclick = async function () {
+      bindClick('save_' + slot, async function () {
         var cfg = cfgOf(slot);
         setHint(slot, '保存中…');
         try {
@@ -2881,8 +3238,8 @@ async function renderModelPane(pane) {
         } else {
           setHint(slot, '已保存，请检测连接');
         }
-      };
-      document.getElementById('test_' + slot).onclick = async function () {
+      });
+      bindClick('test_' + slot, async function () {
         setHint(slot, '正在检测…');
         try {
           var r = await api('/settings/models/test', {
@@ -2899,24 +3256,24 @@ async function renderModelPane(pane) {
         } catch (e) {
           setHint(slot, '检测失败：' + e.message);
         }
-      };
-      document.getElementById('list_' + slot).onclick = function () {
+      });
+      bindClick('list_' + slot, function () {
         return fillModelList(slot, false);
-      };
-      document.getElementById('clear_' + slot).onclick = async function () {
+      });
+      bindClick('clear_' + slot, async function () {
         await window.inktable.llmSet(slot, { clear: true });
         if (slot === 'qa') {
           try { updateModelState(await api('/settings/llm')); } catch (e) {}
         }
         await renderSettings();
-      };
+      });
     })();
   }
 
   try {
     // 向量分区：本机 Ollama 自动识别 —— 地址默认值 + 自动拉模型列表
     var embEp = document.getElementById('ep_embedding');
-    if (embEp && !embEp.value) embEp.value = 'http://127.0.0.1:11434';
+    if (embEp && !embEp.value) embEp.value = defaultOllama;
     fillModelList('embedding', true);
   } catch (e) {}
 
@@ -2953,11 +3310,14 @@ async function loadCcswitchProviders() {
   }
   // 按来源应用分组展示，别把几十个供应商糊成一列
   var groupLabels = {
-    codex: 'Codex（OpenAI 协议，可直接使用）',
-    claude: 'Claude Code 中转（需站点兼容 OpenAI 协议）',
-    'claude-desktop': 'Claude 桌面端中转（需站点兼容 OpenAI 协议）',
+    codex: 'Codex（OpenAI 协议）',
+    opencode: 'OpenCode（OpenAI 协议）',
+    grokbuild: 'Grok Build（OpenAI 协议）',
+    gemini: 'Gemini（按 OpenAI 兼容中转导入）',
+    claude: 'Claude Code（Anthropic 协议）',
+    'claude-desktop': 'Claude 桌面端（Anthropic 协议）',
   };
-  var groupOrder = ['codex', 'claude', 'claude-desktop'];
+  var groupOrder = ['codex', 'opencode', 'grokbuild', 'gemini', 'claude', 'claude-desktop'];
   var grouped = {};
   r.providers.forEach(function (p, i) {
     (grouped[p.app_type] = grouped[p.app_type] || []).push([p, i]);
@@ -2976,6 +3336,15 @@ async function loadCcswitchProviders() {
             (p.model ? ' · ' + esc(p.model) : '') + '</span></div></div>';
       }).join('');
   }).join('');
+  var skipped = r.skipped || [];
+  if (skipped.length) {
+    box.insertAdjacentHTML('beforeend',
+      '<div class="set-desc" style="margin-top:8px">另有 ' + skipped.length +
+      ' 个未导入：' + skipped.map(function (s) {
+        return esc(s.name || '') + '（' + esc(s.app_type || '') + '，' +
+          esc(s.reason || '') + '）';
+      }).join('；') + '</div>');
+  }
   function markSelected(target) {
     box.querySelectorAll('.cc-item.on').forEach(function (x) { x.classList.remove('on'); });
     if (target) target.classList.add('on');
@@ -2986,6 +3355,12 @@ async function loadCcswitchProviders() {
       var p = r.providers[+it.dataset.i];
       if (!p) return;
       markSelected(it);
+      var format = p.api_format || (p.openai_native ? 'openai' : 'anthropic');
+      var prov = document.getElementById('prov_qa');
+      if (prov) {
+        prov.value = format;
+        if (typeof prov.onchange === 'function') prov.onchange();
+      }
       document.getElementById('ep_qa').value = p.endpoint;
       if (p.model) document.getElementById('model_qa').value = p.model;
       // cc-switch secrets never cross the sidecar HTTP boundary. Fill only
@@ -2993,7 +3368,7 @@ async function loadCcswitchProviders() {
       // settings flow explicitly.
       document.getElementById('key_qa').value = '';
       var hint = document.getElementById('hint_qa');
-      if (hint) hint.textContent = '已填入「' + p.name + '」的端点和模型；' +
+      if (hint) hint.textContent = '已填入「' + p.name + '」（' + format + '）；' +
         '出于密钥安全，请手动粘贴 API Key 后保存并检测连接';
     };
   });

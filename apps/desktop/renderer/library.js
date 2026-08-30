@@ -106,8 +106,10 @@
   function ensureModeSwitch() {
     var head = document.querySelector('#navPanel > .panel-head');
     if (!head || document.getElementById('libraryModeSwitch')) return;
+    // 这一栏只放「文件 / 知识馆」两个档。原先还加一个"浏览"标题，
+    // 但那两个按钮本身已经说清了这是什么，标题只是又占一行、又多一层措辞。
     var title = head.querySelector('.panel-title');
-    if (title) title.textContent = '浏览';
+    if (title) title.remove();
 
     var wrap = node('div', 'library-mode-switch');
     wrap.id = 'libraryModeSwitch';
