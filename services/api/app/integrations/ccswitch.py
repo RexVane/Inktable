@@ -9,10 +9,14 @@ JSON，格式随 app_type 而不同：
               `[model_providers.*] base_url = "..."`
   · claude* ：{"env": {"ANTHROPIC_BASE_URL": ..., "ANTHROPIC_AUTH_TOKEN": ...,
               "ANTHROPIC_MODEL"/"ANTHROPIC_DEFAULT_*_MODEL*": ...}}
+  · opencode：{"options": {"baseURL": ..., "apiKey": ...}, "models": {...}}
+  · gemini  ：{"env": {"GEMINI_API_KEY": ..., "GEMINI_BASE_URL"/GOOGLE_* : ...}}
+  · grokbuild：TOML config 里 [model.'…'] 的 base_url / api_key / model
+              （纯 marketplace CLI、没有密钥的条目会跳过）
 
-Inktable 的问答走 OpenAI 兼容接口（endpoint + /chat/completions），
-这里把两种格式尽力转换成 (endpoint, model, api_key) 三元组；
-Anthropic 中转是否兼容 OpenAI 协议因站而异，由用户「检测连接」验证。
+把能抽出 (endpoint, model, api_key) 的条目转成导入项，并标注
+api_format（openai / anthropic），让设置页下拉框对上协议，而不是
+一律当 OpenAI chat/completions。
 
 **只读**：以 read-only URI 打开，绝不写 cc-switch 的库。
 """
@@ -70,19 +74,92 @@ def _parse_claude(config: dict) -> tuple[str, str, str]:
     return endpoint, model, api_key
 
 
+def _parse_opencode(config: dict) -> tuple[str, str, str]:
+    """OpenCode 供应商：options.baseURL + options.apiKey，模型取 models 的第一个键。"""
+    options = config.get("options") or {}
+    if not isinstance(options, dict):
+        options = {}
+    api_key = str(options.get("apiKey") or options.get("api_key") or "")
+    endpoint = _normalize_endpoint(str(options.get("baseURL") or options.get("base_url") or ""))
+    model = ""
+    models = config.get("models")
+    if isinstance(models, dict) and models:
+        first = next(iter(models))
+        entry = models.get(first) or {}
+        model = str((entry.get("name") if isinstance(entry, dict) else "") or first)
+    return endpoint, model, api_key
+
+
+def _parse_gemini(config: dict) -> tuple[str, str, str]:
+    env = config.get("env") or {}
+    if not isinstance(env, dict):
+        env = {}
+    api_key = str(env.get("GEMINI_API_KEY") or env.get("GOOGLE_API_KEY") or "")
+    endpoint = _normalize_endpoint(str(
+        env.get("GOOGLE_GEMINI_BASE_URL")
+        or env.get("GEMINI_BASE_URL")
+        or env.get("GOOGLE_GEMINI_API_BASE")
+        or ""))
+    model = str(env.get("GEMINI_MODEL") or env.get("GOOGLE_GEMINI_MODEL") or "")
+    return endpoint, model, api_key
+
+
+def _parse_grokbuild(config: dict) -> tuple[str, str, str]:
+    """Grok Build 第三方供应商把密钥写在 TOML 的 [model.'…'] 段里。
+
+    官方 marketplace 默认配置没有 api_key，解析结果为空，调用方会跳过。
+    """
+    toml_text = str(config.get("config") or "")
+    api_key = ""
+    key_match = re.search(r'^api_key\s*=\s*"([^"]+)"', toml_text, re.MULTILINE)
+    if key_match:
+        api_key = key_match.group(1)
+    base_match = re.search(r'^base_url\s*=\s*"([^"]+)"', toml_text, re.MULTILINE)
+    model_match = re.search(
+        r"^\[models\][\s\S]*?^default\s*=\s*'([^']+)'", toml_text, re.MULTILINE)
+    if not model_match:
+        model_match = re.search(r"^\[model\.'([^']+)'\]", toml_text, re.MULTILINE)
+    if not model_match:
+        model_match = re.search(r'^model\s*=\s*"([^"]+)"', toml_text, re.MULTILINE)
+    model = model_match.group(1) if model_match else ""
+    endpoint = _normalize_endpoint(base_match.group(1) if base_match else "")
+    return endpoint, model, api_key
+
+
+def _parse_provider(app_type: str, config: dict) -> tuple[str, str, str, str] | None:
+    """返回 (endpoint, model, api_key, api_format)；无法识别则 None。"""
+    if app_type == "codex":
+        endpoint, model, api_key = _parse_codex(config)
+        return endpoint, model, api_key, "openai"
+    if app_type.startswith("claude"):
+        endpoint, model, api_key = _parse_claude(config)
+        return endpoint, model, api_key, "anthropic"
+    if app_type == "opencode":
+        endpoint, model, api_key = _parse_opencode(config)
+        return endpoint, model, api_key, "openai"
+    if app_type == "gemini":
+        endpoint, model, api_key = _parse_gemini(config)
+        return endpoint, model, api_key, "openai"
+    if app_type == "grokbuild":
+        endpoint, model, api_key = _parse_grokbuild(config)
+        return endpoint, model, api_key, "openai"
+    return None
+
+
 def read_providers(db_path: Path | str | None = None) -> dict:
     """读取 cc-switch 供应商列表。文件不存在或无法解析时优雅返回空。"""
     path = Path(db_path) if db_path else CCSWITCH_DB
     if not path.is_file():
-        return {"available": False, "providers": []}
+        return {"available": False, "providers": [], "skipped": []}
 
     uri = f"file:{quote(str(path.resolve()), safe='/')}?mode=ro&immutable=1"
     try:
         conn = sqlite3.connect(uri, uri=True)
     except sqlite3.Error:
-        return {"available": False, "providers": []}
+        return {"available": False, "providers": [], "skipped": []}
 
     providers: list[dict] = []
+    skipped: list[dict] = []
     try:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
@@ -90,7 +167,7 @@ def read_providers(db_path: Path | str | None = None) -> dict:
             "FROM providers ORDER BY is_current DESC, app_type, sort_index, name"
         ).fetchall()
     except sqlite3.Error:
-        return {"available": False, "providers": []}
+        return {"available": False, "providers": [], "skipped": []}
     finally:
         conn.close()
 
@@ -100,13 +177,16 @@ def read_providers(db_path: Path | str | None = None) -> dict:
         except (TypeError, ValueError):
             continue
         app_type = str(row["app_type"] or "")
-        if app_type == "codex":
-            endpoint, model, api_key = _parse_codex(config)
-        elif app_type.startswith("claude"):
-            endpoint, model, api_key = _parse_claude(config)
-        else:
-            continue  # gemini/opencode 等格式各异，先不猜
+        name = str(row["name"] or "")
+        parsed = _parse_provider(app_type, config)
+        if parsed is None:
+            skipped.append({"app_type": app_type, "name": name,
+                            "reason": "暂不支持的应用类型"})
+            continue
+        endpoint, model, api_key, api_format = parsed
         if not endpoint or not api_key:
+            skipped.append({"app_type": app_type, "name": name,
+                            "reason": "没有接口地址或密钥（CLI 默认配置会这样）"})
             continue
         # Never return the secret through the sidecar HTTP API. Keep an opaque
         # process-memory handle so a later explicit import request can select
@@ -117,12 +197,12 @@ def read_providers(db_path: Path | str | None = None) -> dict:
         providers.append({
             "provider_id": provider_id,
             "app_type": app_type,
-            "name": str(row["name"] or ""),
+            "name": name,
             "endpoint": endpoint,
             "model": model,
+            "api_format": api_format,
             "is_current": bool(row["is_current"]),
-            # Anthropic 中转不保证兼容 OpenAI 协议，前端提示用户检测连接
-            "openai_native": app_type == "codex",
+            "openai_native": api_format == "openai",
         })
 
     # 去重：公开句柄已包含 secret 指纹但不可逆，不需要向响应附带 key。
@@ -135,4 +215,4 @@ def read_providers(db_path: Path | str | None = None) -> dict:
         seen.add(key)
         unique.append(provider)
 
-    return {"available": True, "providers": unique}
+    return {"available": True, "providers": unique, "skipped": skipped}

@@ -69,6 +69,8 @@ def test_read_providers_parses_codex_and_claude(tmp_path):
     r = read_providers(db)
     assert r["available"] is True
     assert len(r["providers"]) == 2
+    skipped_types = {s["app_type"] for s in r["skipped"]}
+    assert "gemini" in skipped_types
 
     codex = r["providers"][0]
     assert codex["name"] == "中转A"
@@ -85,13 +87,15 @@ def test_read_providers_parses_codex_and_claude(tmp_path):
     assert "api_key" not in claude
     assert claude["provider_id"]
     assert claude["openai_native"] is False
+    assert claude["api_format"] == "anthropic"
+    assert codex["api_format"] == "openai"
     assert "sk-codex" not in json.dumps(r)
     assert "sk-claude" not in json.dumps(r)
 
 
 def test_read_providers_missing_db(tmp_path):
     r = read_providers(tmp_path / "不存在.db")
-    assert r == {"available": False, "providers": []}
+    assert r == {"available": False, "providers": [], "skipped": []}
 
 
 def test_read_providers_endpoint_already_v1(tmp_path):
@@ -104,3 +108,30 @@ def test_read_providers_endpoint_already_v1(tmp_path):
     ])
     r = read_providers(db)
     assert r["providers"][0]["endpoint"] == "https://api.example.com/v1"
+
+
+def test_read_providers_parses_opencode(tmp_path):
+    db = tmp_path / "cc.db"
+    _make_db(db, [
+        ("1", "opencode", "LiwanLab", json.dumps({
+            "npm": "@ai-sdk/openai-compatible",
+            "name": "LiwanLab",
+            "options": {
+                "baseURL": "https://metapi.example.com/v1",
+                "apiKey": "sk-open",
+            },
+            "models": {"DeepSeek-V4-Flash-0731": {"name": "DeepSeek-V4-Flash-0731"}},
+        }), 1),
+        ("2", "grokbuild", "default", json.dumps({
+            "config": "[cli]\ninstaller = \"internal\"\n",
+        }), 0),
+    ])
+    r = read_providers(db)
+    assert len(r["providers"]) == 1
+    oc = r["providers"][0]
+    assert oc["app_type"] == "opencode"
+    assert oc["endpoint"] == "https://metapi.example.com/v1"
+    assert oc["model"] == "DeepSeek-V4-Flash-0731"
+    assert oc["api_format"] == "openai"
+    assert "sk-open" not in json.dumps(r)
+    assert any(s["app_type"] == "grokbuild" for s in r["skipped"])

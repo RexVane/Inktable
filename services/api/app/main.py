@@ -895,7 +895,7 @@ class LLMConfigRequest(BaseModel):
     endpoint: str = Field(default="", max_length=2048)
     api_key: str = Field(default="", max_length=8192)
     model: str = Field(default="", max_length=512)
-    # openai = OpenAI 兼容 /chat/completions；ollama = 本地 Ollama（免密钥）
+    # openai / anthropic / ollama
     provider: str = Field(default="openai", max_length=16)
 
 
@@ -1045,12 +1045,11 @@ def list_slot_models(req: ModelListRequest) -> dict:
     endpoint = (req.endpoint or (saved or {}).get("endpoint") or "").strip().rstrip("/")
     api_key = req.api_key or (saved or {}).get("api_key") or ""
     if not endpoint and provider == "ollama":
-        # 本地 Ollama 没填地址就用默认本机地址（自动识别的前提）
-        from app.config.models import _DEFAULT_OLLAMA_URL
-        endpoint = _DEFAULT_OLLAMA_URL
+        # 本地 Ollama 没填地址就探测本机地址（11434 / 18434），不要写死官方口
+        endpoint = model_slots.discover_ollama_url()
     if not endpoint:
         raise HTTPException(status_code=422, detail="接口地址不能为空")
-    if provider == "openai" and not api_key:
+    if provider in {"openai", "anthropic"} and not api_key:
         raise HTTPException(
             status_code=422, detail="拉取模型列表需要 API 密钥（先填写或保存密钥）")
     try:

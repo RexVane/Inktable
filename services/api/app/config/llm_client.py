@@ -111,9 +111,13 @@ def probe_chat(cfg: dict, timeout: float = 15.0) -> dict:
 
 def list_models(*, provider: str, endpoint: str, api_key: str = "",
                 timeout: float = 10.0) -> list[str]:
-    """拉取可选模型名。openai 走 /models，ollama 走 /api/tags。"""
-    if provider == "openai":
-        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    """拉取可选模型名。openai/anthropic 走 /models，ollama 走 /api/tags。"""
+    if provider in {"openai", "anthropic"}:
+        if provider == "anthropic":
+            headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01",
+                       "Authorization": f"Bearer {api_key}"} if api_key else {}
+        else:
+            headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         data = _request(f"{endpoint}/models", None, headers=headers,
                         timeout=timeout)
         entries = data.get("data") if isinstance(data, dict) else data

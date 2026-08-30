@@ -54,8 +54,9 @@ class _Config:
         self.endpoint: str = ""
         self.api_key: str = ""
         self.model: str = ""
-        # openai = OpenAI 兼容 /chat/completions（云端 / 中转 / 本地 /v1）；
-        # ollama = 本地 Ollama（免密钥，地址自动补 /v1，模型可自动识别）
+        # openai    = OpenAI 兼容 /chat/completions
+        # anthropic = Anthropic /messages（Claude 中转原生协议）
+        # ollama    = 本地 Ollama（免密钥，地址自动补 /v1）
         self.provider: str = "openai"
 
 
@@ -87,7 +88,7 @@ def configure(endpoint: str, api_key: str, model: str,
               provider: str = "openai") -> None:
     """运行时配置。传空串 = 清除（回到纯本地模式）。"""
     value = _validate_endpoint(endpoint)
-    if provider not in ("openai", "ollama"):
+    if provider not in ("openai", "ollama", "anthropic"):
         provider = "openai"
     with _lock:
         _cfg.endpoint = value
@@ -99,15 +100,91 @@ def configure(endpoint: str, api_key: str, model: str,
 
 
 def _chat_url(endpoint: str, provider: str) -> str:
-    """OpenAI 兼容端点直拼 /chat/completions；本地 Ollama 自动补 /v1。"""
+    """按协议拼补全 URL。endpoint 已是规范化后的基址（通常带 /v1）。"""
     base = endpoint.rstrip("/")
+    if provider == "anthropic":
+        if base.endswith("/v1"):
+            return base + "/messages"
+        return base + "/v1/messages"
     if provider == "ollama" and not base.endswith("/v1"):
         return base + "/v1/chat/completions"
     return base + "/chat/completions"
 
 
-def _auth_header(api_key: str) -> dict:
-    return {"Authorization": f"Bearer {api_key}"} if api_key else {}
+def _auth_header(api_key: str, provider: str = "openai") -> dict:
+    if not api_key:
+        return {}
+    if provider == "anthropic":
+        # 同时带 x-api-key 和 Bearer：官方 Anthropic 认前者，不少中转只认后者
+        return {"x-api-key": api_key, "anthropic-version": "2023-06-01",
+                "Authorization": f"Bearer {api_key}"}
+    return {"Authorization": f"Bearer {api_key}"}
+
+
+def _chat_payload(messages: list[dict], *, model: str, provider: str,
+                  temperature: float, max_tokens: int | None, stream: bool) -> dict:
+    if provider != "anthropic":
+        payload: dict = {
+            "model": model, "messages": messages,
+            "temperature": temperature, "stream": stream,
+        }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        return payload
+    system = ""
+    body: list[dict] = []
+    for message in messages:
+        role = str(message.get("role") or "")
+        text = str(message.get("content") or "")
+        if role == "system":
+            system += text
+            continue
+        if role in {"user", "assistant"}:
+            body.append({"role": role, "content": text})
+    payload = {
+        "model": model, "messages": body,
+        "max_tokens": 4096 if max_tokens is None else max_tokens,
+        "temperature": temperature, "stream": stream,
+    }
+    if system.strip():
+        payload["system"] = system
+    return payload
+
+
+def _assistant_text(data: dict, provider: str) -> str:
+    if provider == "anthropic":
+        blocks = data.get("content") if isinstance(data, dict) else None
+        if not isinstance(blocks, list):
+            raise LLMError("模型服务响应格式异常")
+        parts = [
+            str(block.get("text") or "")
+            for block in blocks
+            if isinstance(block, dict)
+        ]
+        return "".join(parts)
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise LLMError("模型服务响应格式异常") from exc
+    if content is None:
+        return ""
+    if not isinstance(content, str):
+        raise LLMError("模型服务响应格式异常")
+    return content
+
+
+def _sse_text_delta(event: dict, provider: str) -> str | None:
+    if provider == "anthropic":
+        if event.get("type") != "content_block_delta":
+            return None
+        delta = event.get("delta") or {}
+        text = delta.get("text") if isinstance(delta, dict) else None
+        return text if isinstance(text, str) else None
+    try:
+        content = event["choices"][0].get("delta", {}).get("content")
+    except (KeyError, IndexError, TypeError):
+        return None
+    return content if isinstance(content, str) else None
 
 
 def _config_snapshot() -> tuple[str, str, str]:
@@ -328,17 +405,16 @@ def chat_stream(messages: list[dict], *, temperature: float = 0.1,
     endpoint, api_key, model = _config_snapshot()
     if not is_configured():
         raise LLMNotConfigured("未配置模型服务（设置 → AI 问答）")
-    payload: dict = {
-        "model": model, "messages": messages,
-        "temperature": temperature, "stream": True,
-    }
-    if max_tokens is not None:
-        payload["max_tokens"] = max_tokens
+    provider = _provider_snapshot()
+    payload = _chat_payload(
+        messages, model=model, provider=provider,
+        temperature=temperature, max_tokens=max_tokens, stream=True,
+    )
     req = urllib.request.Request(
-        _chat_url(endpoint, _provider_snapshot()),
+        _chat_url(endpoint, provider),
         data=json.dumps(payload).encode("utf-8"), method="POST",
         headers={"Content-Type": "application/json", "User-Agent": USER_AGENT,
-                 **_auth_header(api_key)},
+                 **_auth_header(api_key, provider)},
     )
     deadline = time.monotonic() + timeout
     try:
@@ -358,9 +434,9 @@ def chat_stream(messages: list[dict], *, temperature: float = 0.1,
                         return
                     try:
                         event = json.loads(data)
-                        content = event["choices"][0].get("delta", {}).get("content")
-                    except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+                    except json.JSONDecodeError:
                         continue
+                    content = _sse_text_delta(event, provider)
                     if isinstance(content, str) and content:
                         yield content
             except OSError as exc:
@@ -402,20 +478,18 @@ def chat(messages: list[dict], *, temperature: float = 0.1,
     if not is_configured():
         raise LLMNotConfigured("未配置模型服务（设置 → AI 问答）")
 
-    url = _chat_url(endpoint, _provider_snapshot())
-    payload: dict = {
-        "model": model,
-        "messages": messages,
-        "temperature": temperature,
-    }
-    if max_tokens is not None:
-        payload["max_tokens"] = max_tokens
+    provider = _provider_snapshot()
+    url = _chat_url(endpoint, provider)
+    payload = _chat_payload(
+        messages, model=model, provider=provider,
+        temperature=temperature, max_tokens=max_tokens, stream=False,
+    )
     body = json.dumps(payload).encode("utf-8")
     try:
         req = urllib.request.Request(
             url, data=body, method="POST",
             headers={"Content-Type": "application/json",
-                     "User-Agent": USER_AGENT, **_auth_header(api_key)},
+                     "User-Agent": USER_AGENT, **_auth_header(api_key, provider)},
         )
         deadline = time.monotonic() + timeout
         chunks: list[bytes] = []
@@ -457,12 +531,4 @@ def chat(messages: list[dict], *, temperature: float = 0.1,
     except (UnicodeDecodeError, json.JSONDecodeError) as e:
         raise LLMError("模型服务响应格式异常") from e
 
-    try:
-        content = data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as e:
-        raise LLMError("模型服务响应格式异常") from e
-    if content is None:
-        return ""
-    if not isinstance(content, str):
-        raise LLMError("模型服务响应格式异常")
-    return content
+    return _assistant_text(data, provider)
