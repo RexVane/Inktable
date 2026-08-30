@@ -36,7 +36,11 @@ install_feature_routers()
 
 # Re-export these names for ASGI tooling and packaging smoke tests.
 app = sidecar.app
-main = sidecar.main
+
+
+def main() -> None:
+    """Start the composed sidecar, including all feature routers."""
+    sidecar.main()
 
 
 if __name__ == "__main__":

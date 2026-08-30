@@ -12,6 +12,22 @@ import pytest
 
 from app.db import database
 from app.db.schema import SCHEMA_VERSION
+from app import alias_legacy_environment
+
+
+def test_legacy_environment_aliases_cover_standalone_module_imports() -> None:
+    environment = {
+        "INKTABLE_OLLAMA_URL": "http://127.0.0.1:11434",
+        "INKTABLE_DB": "/legacy/library.db",
+        "ORDO_DB": "/current/library.db",
+        "UNRELATED": "keep",
+    }
+
+    alias_legacy_environment(environment)
+
+    assert environment["ORDO_OLLAMA_URL"] == "http://127.0.0.1:11434"
+    assert environment["ORDO_DB"] == "/current/library.db"
+    assert environment["UNRELATED"] == "keep"
 
 
 def test_init_rejects_database_from_newer_app() -> None:
@@ -114,18 +130,30 @@ def test_default_data_directory_is_native_and_separate_from_control_root(
     monkeypatch.setattr(database.sys, "platform", "linux")
     assert database._resolve_app_dir() == tmp_path / ".local" / "share" / "Ordo"
 
-    legacy = tmp_path / "Library" / "Application Support" / "Ordo"
+    current = tmp_path / "Library" / "Application Support" / "Ordo"
+    current.mkdir(parents=True)
+    (current / "library.db").write_bytes(b"existing")
+    monkeypatch.setattr(database.sys, "platform", "darwin")
+    assert database._resolve_app_dir() == current
+
+    legacy = tmp_path / "Library" / "Application Support" / "Inktable"
     legacy.mkdir(parents=True)
-    (legacy / "library.db").write_bytes(b"existing")
+    (legacy / "library.db").write_bytes(b"old-install")
+    # Ordo library still wins when both exist.
+    assert database._resolve_app_dir() == current
+    (current / "library.db").unlink()
     assert database._resolve_app_dir() == legacy
 
-    ink = tmp_path / "Library" / "Application Support" / "Inktable"
-    ink.mkdir(parents=True)
-    (ink / "library.db").write_bytes(b"old-install")
-    # Ordo library still wins when both exist.
+    # Old Windows/Linux builds briefly used the macOS-shaped Inktable path,
+    # but an Ordo directory from another platform must never win by accident.
+    monkeypatch.setattr(database.sys, "platform", "win32")
+    (current / "library.db").write_bytes(b"foreign-ordo-copy")
     assert database._resolve_app_dir() == legacy
-    (legacy / "library.db").unlink()
-    assert database._resolve_app_dir() == ink
+
+    native_windows = tmp_path / "AppData" / "Roaming" / "Ordo" / "data"
+    native_windows.mkdir(parents=True)
+    (native_windows / "library.db").write_bytes(b"native-windows")
+    assert database._resolve_app_dir() == native_windows
 
 
 def test_self_referencing_fk_columns_are_indexed() -> None:
@@ -189,6 +217,39 @@ def test_single_instance_lock_can_be_reacquired_after_release(tmp_path, monkeypa
     database.release_single_instance_lock()
     database.acquire_single_instance_lock()
     database.release_single_instance_lock()
+
+
+def test_production_lock_also_blocks_legacy_inktable_processes(
+    tmp_path, monkeypatch,
+) -> None:
+    monkeypatch.delenv("ORDO_DB", raising=False)
+    monkeypatch.delenv("INKTABLE_DB", raising=False)
+    current = tmp_path / "ordo.lock"
+    legacy = tmp_path / "inktable.lock"
+    monkeypatch.setattr(database, "LOCK_PATH", current)
+    monkeypatch.setattr(database, "LEGACY_LOCK_PATH", legacy)
+    database.release_single_instance_lock()
+    database.acquire_single_instance_lock()
+
+    try:
+        for path in (legacy, current):
+            contender = open(path, "a+")
+            try:
+                if os.name == "nt":
+                    import msvcrt
+
+                    contender.seek(0)
+                    with pytest.raises(OSError):
+                        msvcrt.locking(contender.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    with pytest.raises(OSError):
+                        fcntl.flock(contender.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            finally:
+                contender.close()
+    finally:
+        database.release_single_instance_lock()
 
 
 def _file_db(path):

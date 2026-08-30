@@ -35,16 +35,6 @@ else:
     import fcntl
 
 
-def _alias_legacy_env() -> None:
-    """Ordo_* is canonical; Inktable_* still wins only when Ordo_* is unset."""
-    for key, value in list(os.environ.items()):
-        if key.startswith("INKTABLE_"):
-            os.environ.setdefault("ORDO_" + key[len("INKTABLE_"):], value)
-
-
-_alias_legacy_env()
-
-
 def _dir_has_db(path: Path) -> bool:
     return (path / "library.db").is_file()
 
@@ -56,22 +46,37 @@ def _resolve_app_dir() -> Path:
     home = Path.home()
     roaming = Path(os.environ.get("APPDATA") or home / "AppData" / "Roaming")
     xdg = Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share")
-    # Prefer an existing library so renaming the product does not look like
-    # data loss. New installs land in the Ordo-native path.
-    candidates = [
-        home / "Library" / "Application Support" / "Ordo" / "data",
-        home / "Library" / "Application Support" / "Ordo",
-        roaming / "Ordo" / "data",
-        roaming / "Ordo",
-        xdg / "Ordo" / "data",
-        xdg / "Ordo",
-        home / "Library" / "Application Support" / "Inktable" / "data",
-        home / "Library" / "Application Support" / "Inktable",
-        roaming / "Inktable" / "data",
-        roaming / "Inktable",
-        xdg / "Inktable" / "data",
-        xdg / "Inktable",
-    ]
+    mac_support = home / "Library" / "Application Support"
+    # Only inspect paths meaningful to this platform.  Looking at every OS's
+    # convention can silently select a synced/copy artifact from another
+    # machine.  The macOS-shaped Inktable path is retained on Windows/Linux
+    # solely because older releases actually used it there before native
+    # defaults were introduced.
+    if sys.platform == "darwin":
+        candidates = [
+            mac_support / "Ordo" / "data",
+            mac_support / "Ordo",
+            mac_support / "Inktable" / "data",
+            mac_support / "Inktable",
+        ]
+    elif sys.platform == "win32":
+        candidates = [
+            roaming / "Ordo" / "data",
+            roaming / "Ordo",
+            roaming / "Inktable" / "data",
+            roaming / "Inktable",
+            mac_support / "Inktable" / "data",
+            mac_support / "Inktable",
+        ]
+    else:
+        candidates = [
+            xdg / "Ordo" / "data",
+            xdg / "Ordo",
+            xdg / "Inktable" / "data",
+            xdg / "Inktable",
+            mac_support / "Inktable" / "data",
+            mac_support / "Inktable",
+        ]
     for path in candidates:
         if _dir_has_db(path):
             return path
@@ -85,10 +90,11 @@ def _resolve_app_dir() -> Path:
 APP_DIR = _resolve_app_dir()
 DB_PATH = APP_DIR / "library.db"
 LOCK_PATH = APP_DIR / "ordo.lock"
+LEGACY_LOCK_PATH = APP_DIR / "inktable.lock"
 BACKUP_DIR = APP_DIR / "backups"
 BACKUP_KEEP = 7
 
-_lock_fd: int | None = None
+_lock_fds: list[int] = []
 _backup_lock = threading.Lock()
 
 
@@ -100,63 +106,82 @@ class BackupError(RuntimeError):
     """数据库备份无法创建或无法通过恢复前校验。"""
 
 
-def _instance_lock_path() -> Path:
-    """Return the lock corresponding to the database selected for this process.
+def _instance_lock_paths() -> tuple[Path, ...]:
+    """Return every lock that protects the database selected by this process.
 
-    Production always uses ``LOCK_PATH``.  Tests and development may point the
+    Production takes both the legacy and current product lock.  Otherwise an
+    old Inktable process and a new Ordo process can each acquire a differently
+    named lock and concurrently write the same upgraded library.  Tests and
+    development may point the
     sidecar at an isolated database through ``ORDO_DB``; those databases
     must not contend for the production lock or for each other's locks.
     """
     override = os.environ.get("ORDO_DB") or os.environ.get("INKTABLE_DB")
     if override and override != ":memory:":
         db_path = Path(override)
-        return db_path.with_name(f"{db_path.name}.lock")
-    return LOCK_PATH
+        return (db_path.with_name(f"{db_path.name}.lock"),)
+    return (LEGACY_LOCK_PATH, LOCK_PATH)
 
 
-def acquire_single_instance_lock() -> None:
-    """单实例互斥（§9.2）。两个实例同时写 SQLite 必然损坏。"""
-    global _lock_fd
-    if _lock_fd is not None:
-        return
+def _release_lock_fd(fd: int) -> None:
+    try:
+        if sys.platform == "win32":
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
-    lock_path = _instance_lock_path()
+
+def _acquire_lock_file(lock_path: Path) -> int:
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
     try:
         if sys.platform == "win32":
-            # Windows 没有 flock：对首字节做非阻塞独占锁，语义等价 ——
-            # 锁随进程退出自动释放，第二个实例立即失败（PermissionError）。
             os.lseek(fd, 0, os.SEEK_SET)
             msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
         else:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except (BlockingIOError, PermissionError):
-        os.close(fd)
-        raise AlreadyRunning("Ordo 已在运行")
-    except OSError:
+        os.ftruncate(fd, 0)
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.write(fd, str(os.getpid()).encode())
+        return fd
+    except Exception:
         os.close(fd)
         raise
-    os.ftruncate(fd, 0)
-    os.lseek(fd, 0, os.SEEK_SET)
-    os.write(fd, str(os.getpid()).encode())
-    _lock_fd = fd
+
+
+def acquire_single_instance_lock() -> None:
+    """单实例互斥（§9.2）。两个实例同时写 SQLite 必然损坏。"""
+    global _lock_fds
+    if _lock_fds:
+        return
+
+    acquired: list[int] = []
+    try:
+        for lock_path in _instance_lock_paths():
+            acquired.append(_acquire_lock_file(lock_path))
+    except (BlockingIOError, PermissionError):
+        for held_fd in reversed(acquired):
+            _release_lock_fd(held_fd)
+        raise AlreadyRunning("Ordo 已在运行")
+    except OSError:
+        for held_fd in reversed(acquired):
+            _release_lock_fd(held_fd)
+        raise
+    _lock_fds = acquired
 
 
 def release_single_instance_lock() -> None:
     """Release the process-wide database lock, mainly for orderly shutdown."""
-    global _lock_fd
-    if _lock_fd is None:
+    global _lock_fds
+    if not _lock_fds:
         return
-    try:
-        if sys.platform == "win32":
-            os.lseek(_lock_fd, 0, os.SEEK_SET)
-            msvcrt.locking(_lock_fd, msvcrt.LK_UNLCK, 1)
-        else:
-            fcntl.flock(_lock_fd, fcntl.LOCK_UN)
-    finally:
-        os.close(_lock_fd)
-        _lock_fd = None
+    held = _lock_fds
+    _lock_fds = []
+    for fd in reversed(held):
+        _release_lock_fd(fd)
 
 
 def connect(path: Path | str | None = None) -> sqlite3.Connection:

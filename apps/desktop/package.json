@@ -2,6 +2,8 @@
   "name": "ordo-desktop",
   "version": "0.3.0",
   "description": "Ordo — local-first personal knowledge base / 本地优先的个人知识库",
+  "author": "RexVane",
+  "repository": "https://github.com/RexVane/Inktable.git",
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",

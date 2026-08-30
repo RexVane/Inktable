@@ -10,6 +10,7 @@ const rendererPath = path.join(desktopRoot, 'renderer', 'index.html');
 const libraryPath = path.join(desktopRoot, 'renderer', 'library.js');
 const libraryCssPath = path.join(desktopRoot, 'renderer', 'library.css');
 const mainPath = path.join(desktopRoot, 'electron', 'main.js');
+const builderPath = path.join(desktopRoot, 'electron-builder.yml');
 const renderer = fs.readFileSync(rendererPath, 'utf8');
 const library = fs.readFileSync(libraryPath, 'utf8');
 const libraryCss = fs.readFileSync(libraryCssPath, 'utf8');
@@ -52,6 +53,25 @@ test('ordodoc scheme allows fetch from the file:// renderer', () => {
   assert.match(main, /scheme: 'ordodoc'/);
   assert.match(main, /corsEnabled: true/);
   assert.match(main, /supportFetchAPI: true/);
+});
+
+test('non-macOS tray remains visible when optional brand assets are absent', () => {
+  assert.match(main, /icon\.isEmpty\(\).*await app\.getFileIcon\(process\.execPath/);
+  assert.match(main, /await setupGlobalEntry\(\)/);
+});
+
+test('Ordo release and tray icons are tracked and wired into packaging', () => {
+  const builder = fs.readFileSync(builderPath, 'utf8');
+  const png = path.join(desktopRoot, 'renderer', 'assets', 'brand-mark.png');
+  const icns = path.join(desktopRoot, 'build', 'icon.icns');
+  const ico = path.join(desktopRoot, 'build', 'icon.ico');
+  for (const asset of [png, icns, ico]) {
+    assert.ok(fs.existsSync(asset), `missing release icon: ${asset}`);
+    assert.ok(fs.statSync(asset).size > 1024, `release icon is unexpectedly empty: ${asset}`);
+  }
+  assert.match(main, /renderer', 'assets', 'brand-mark\.png'/);
+  assert.match(builder, /win:\s*\n\s*icon: build\/icon\.ico/);
+  assert.match(builder, /mac:\s*\n\s*icon: build\/icon\.icns/);
 });
 
 test('core workbench controls expose keyboard and assistive semantics', () => {

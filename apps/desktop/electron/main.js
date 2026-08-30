@@ -21,6 +21,7 @@ const { pathToFileURL } = require('url');
 const { trashFileById } = require('./file-operations');
 const { prepareSlotConfig } = require('./model-config');
 const { copyDataDirectory, pathsOverlap, writeJsonAtomic } = require('./data-migration');
+const { legacyUserDataDirectory } = require('./product-migration');
 
 // ---- ordodoc:// 自定义协议：原文查看器的文件字节通道 ----
 // 渲染层 connect-src 'none'，不能自己发请求；PDF.js / docx-preview 需要
@@ -119,20 +120,8 @@ app.setName('Ordo');
 (function adoptLegacyUserData() {
   // productName 从 Inktable 换成 Ordo 后，Electron 默认 userData 会变成空目录。
   // 旧安装的库、llm.enc、data-dir.json 还在 Inktable 目录里 —— 先接着用。
-  const appData = app.getPath('appData');
-  const ordoDir = path.join(appData, 'Ordo');
-  const inkDir = path.join(appData, 'Inktable');
-  const hasState = (dir) => {
-    try {
-      return ['library.db', path.join('data', 'library.db'), 'llm.enc', 'data-dir.json']
-        .some((rel) => fs.existsSync(path.join(dir, rel)));
-    } catch {
-      return false;
-    }
-  };
-  if (!hasState(ordoDir) && hasState(inkDir)) {
-    app.setPath('userData', inkDir);
-  }
+  const legacy = legacyUserDataDirectory(app.getPath('appData'));
+  if (legacy) app.setPath('userData', legacy);
 })();
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
@@ -1093,7 +1082,7 @@ function summonSearch() {
   mainWindow.webContents.send('focus-search');
 }
 
-function setupGlobalEntry() {
+async function setupGlobalEntry() {
   let accelerator = '';
   try {
     const mac = process.platform === 'darwin';
@@ -1113,13 +1102,18 @@ function setupGlobalEntry() {
     //
     // `createFromNamedImage` 只在 macOS 有效：Windows/Linux 上它返回一张
     // **0×0 的空图**且 resize 不抛错，于是 `new Tray(空图)` 悄悄成功 ——
-    // 托盘项存在但图标看不见，catch 也不会触发。非 macOS 改用随应用分发的品牌图。
-    const icon = process.platform === 'darwin'
-      ? nativeImage.createFromNamedImage('NSTouchBarSearchTemplate')
-        .resize({ width: 16, height: 16 })
-      : nativeImage.createFromPath(
-        path.join(__dirname, '..', 'build', 'brand-mark.png'))
-        .resize({ width: 16, height: 16 });
+    // 托盘项存在但图标看不见，catch 也不会触发。非 macOS 先读品牌图；
+    // 精简源码包可能不带被 gitignore 的 build 资源，此时退到可执行文件图标，
+    // 至少保证 Windows/Linux 托盘入口可见。
+    let icon;
+    if (process.platform === 'darwin') {
+      icon = nativeImage.createFromNamedImage('NSTouchBarSearchTemplate');
+    } else {
+      icon = nativeImage.createFromPath(
+        path.join(__dirname, '..', 'renderer', 'assets', 'brand-mark.png'));
+      if (icon.isEmpty()) icon = await app.getFileIcon(process.execPath, { size: 'small' });
+    }
+    icon = icon.resize({ width: 16, height: 16 });
     if (icon.isEmpty()) throw new Error('托盘图标为空，拒绝创建看不见的托盘项');
     // 模板图是 macOS 概念（按菜单栏深浅自动反色）；其他平台设了没用
     if (process.platform === 'darwin') icon.setTemplateImage(true);
@@ -1162,7 +1156,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
   }
   startupComplete = true;
   createWindow();
-  setupGlobalEntry();
+  await setupGlobalEntry();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

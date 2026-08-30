@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import ntpath
 import os
+import posixpath
 import sys
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 DISK_ROOT_PLATFORMS = frozenset({"win32", "darwin"})
@@ -27,14 +29,20 @@ def is_drive_root(path: Path | str) -> bool:
 
     Windows: ``C:\\``. macOS: ``/`` or ``/Volumes/Name``.
     """
-    raw = os.path.normpath(os.path.expanduser(os.fspath(path)))
+    raw = os.path.expanduser(os.fspath(path))
     if sys.platform == "win32":
-        return len(raw) == 3 and raw[1:] == ":\\"
+        # Do not use os.path here: tests intentionally evaluate Windows rules
+        # on macOS/Linux, where os.path is posixpath and cannot normalize a
+        # Windows drive.  The policy must depend on the target platform, not
+        # on whichever host happens to run the check.
+        drive, tail = ntpath.splitdrive(ntpath.normpath(raw))
+        return len(drive) == 2 and drive[1] == ":" and tail == "\\"
     if sys.platform == "darwin":
-        if raw == os.sep:
+        normalized = posixpath.normpath(raw)
+        if normalized == "/":
             return True
-        parts = Path(raw).parts
-        return len(parts) == 3 and parts[0] == os.sep and parts[1] == "Volumes" and bool(parts[2])
+        parts = PurePosixPath(normalized).parts
+        return len(parts) == 3 and parts[0] == "/" and parts[1] == "Volumes" and bool(parts[2])
     return False
 
 

@@ -65,7 +65,7 @@ jobs:
         run: uv run ruff check .
 
       - name: Compile application modules
-        run: uv run python -m compileall -q app
+        run: uv run python -m compileall -q app src
 
       - name: Run backend tests
         env:
@@ -112,6 +112,7 @@ jobs:
         run: >-
           uv run pytest -q
           tests/test_sources.py::test_windows_discovery_returns_fixed_drive_roots
+          tests/test_sources.py::test_drive_root_paths_match_windows_and_macos
           tests/test_cli.py
           tests/test_database.py::test_single_instance_lock_can_be_reacquired_after_release
 

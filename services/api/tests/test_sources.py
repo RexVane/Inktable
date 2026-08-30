@@ -86,7 +86,9 @@ def test_drive_root_paths_match_windows_and_macos(monkeypatch):
     monkeypatch.setattr(policy.sys, "platform", "win32")
     assert policy.is_drive_root(r"C:\\")
     assert policy.is_drive_root("D:\\")
+    assert policy.is_drive_root("e:/")
     assert not policy.is_drive_root(r"C:\\Users")
+    assert not policy.is_drive_root("\\\\server\\share\\")
 
     monkeypatch.setattr(policy.sys, "platform", "darwin")
     assert policy.is_drive_root("/")

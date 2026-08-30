@@ -5,7 +5,9 @@ const fs = require('fs');
 const path = require('path');
 
 const CONTROL_FILES = new Set(['data-dir.json', 'llm.enc']);
-const TRANSIENT_ROOT_FILES = new Set(['ordo.lock']);
+// Old libraries can still be opened in place after the Ordo rename.  Neither
+// generation of the process lock is user data, so never copy either one.
+const TRANSIENT_ROOT_FILES = new Set(['ordo.lock', 'inktable.lock']);
 
 function normalized(value) {
   const resolved = path.resolve(value);

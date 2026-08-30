@@ -22,6 +22,7 @@ test('migration copies verified data but never moves control files or the live l
   fs.writeFileSync(path.join(control, 'data-dir.json'), '{"dir":"old"}');
   fs.writeFileSync(path.join(control, 'llm.enc'), 'encrypted-secret');
   fs.writeFileSync(path.join(control, 'ordo.lock'), '1234');
+  fs.writeFileSync(path.join(control, 'inktable.lock'), 'legacy-1234');
 
   const result = copyDataDirectory(control, target, control);
 
@@ -31,6 +32,7 @@ test('migration copies verified data but never moves control files or the live l
   assert.equal(fs.existsSync(path.join(target, 'data-dir.json')), false);
   assert.equal(fs.existsSync(path.join(target, 'llm.enc')), false);
   assert.equal(fs.existsSync(path.join(target, 'ordo.lock')), false);
+  assert.equal(fs.existsSync(path.join(target, 'inktable.lock')), false);
   assert.equal(fs.existsSync(path.join(control, 'library.db')), true,
     'old data must remain available for rollback');
 

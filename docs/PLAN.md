@@ -901,6 +901,38 @@ ExpandedEvidence
 因此本轮代码可以作为安全收口候选提交，但 M9 的总完成标志仍是**未达成**；只有
 远端 CI、跨平台打包 smoke、固定质量评测和上述发布项完成后才能转稳定版候选。
 
+##### Ordo 更名兼容审计（2026-08-30）
+
+基于远端 `main@8bd0e12` 的全项目更名继续执行发布级审计。更名提交本身覆盖显示名、
+`appId`、sidecar、`ordodoc://`、Python 包名和 `ORDO_*` 环境变量，但首次本机全量
+验证暴露出一项确定红灯，并在兼容边界发现若干不能只靠机械替换解决的问题。本轮处理：
+
+- Windows/macOS 磁盘根判断改为显式 `ntpath` / `posixpath` 语义，不再依赖运行测试的
+  主机路径模块；修复 `test_drive_root_paths_match_windows_and_macos` 在 macOS/Linux 的
+  确定失败，并把该契约加入跨平台 CI 定向任务。
+- `ordo-api` CLI 改走 `app.entrypoint` 组合入口，保证与桌面版、PyInstaller 版一样挂载
+  知识馆路由；CI 的 compileall 同时覆盖 `app` 与 `src`。
+- 旧 `INKTABLE_*` 到 `ORDO_*` 的别名在 `app` 包导入时统一建立，使不经过数据库模块的
+  独立维护脚本也能继续读取旧配置；显式新变量始终优先。
+- 生产 sidecar 同时持有 `inktable.lock` 与 `ordo.lock`，防止旧 Inktable 与新 Ordo
+  用两个文件锁同时写同一个升级后数据库；数据目录迁移明确排除两代瞬态锁文件。
+- 数据目录候选只检查当前平台的原生路径，并保留确实曾被旧版本使用的兼容路径，避免
+  误选从另一台系统同步过来的同名目录。Electron 用户目录按“真实数据库 > 自定义目录
+  指针 > 模型密钥配置”排序，避免空 Ordo 配置遮住完整的旧 Inktable 资料库；断开的
+  外置盘指针仍被保留。
+- 加入完整 Ordo 发布图标（PNG/ICNS/ICO）与包元数据；非 macOS 托盘在可选品牌资源
+  缺失时退回可执行文件图标，不再生成不可见入口。
+
+本机复验结果：后端 `463 passed, 2 skipped, 5` 个上游 SWIG 弃用 warning，Ruff、
+`uv lock/sync --check` 和 `compileall app src` 通过；桌面端 `63/63 passed`，Node 语法
+与 CSP 哈希通过。`ordo-sidecar` 已由 PyInstaller 实际构建并以冻结产物完成 headless
+健康冒烟，`frozen=True`，sqlite-vec、FTS5、中文检索、OCR、嵌入与发布检索配置均通过。
+macOS arm64 DMG 已重新打包为 `Ordo-0.3.0-arm64.dmg`，包内标识为 `com.ordo.app`、
+图标为 `icon.icns`，并包含 `Resources/sidecar/ordo-sidecar`。产物 SHA-256：DMG
+`7f16ecf91431a84c7299aa4b3b0193e8fa482991dcc2ce4f26e3db5bc902ed07`，sidecar
+`48c37b9f96c7e5963ce9d5ba0e1e0e59bd16d8a22bfb1e19ca09ff8b5775fee5`。当前 DMG
+仍按项目既定配置未签名/未公证；Windows 安装包和真机升级演练仍属于发布前验收项。
+
 #### M9.1 恢复可执行基线和 CI 门禁
 
 实施：
