@@ -23,9 +23,17 @@ concurrency:
 
 jobs:
   pytest:
-    name: Python 3.12 · pytest
-    runs-on: ubuntu-latest
+    # 必须两个平台都跑：产品在 Windows 上用、代码在 macOS 上写，而这条缝里
+    # 藏着的问题只在 Windows 上现形（内联脚本 CSP 哈希、CRLF、保留端口段、
+    # 平台专属 API 静默返回空值）。只测 Linux 等于这一整类问题没有防线。
+    name: Python 3.12 · pytest · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
 
     defaults:
       run:
@@ -47,6 +55,10 @@ jobs:
           cache-dependency-glob: services/api/uv.lock
 
       - name: Install locked dependencies
+        # 缓存与目标常不同盘，硬链接不可用时退化为整拷（否则只是 warning，
+        # 但 Windows 上会拖慢每次安装）
+        env:
+          UV_LINK_MODE: copy
         run: uv sync --frozen --group dev
 
       - name: Compile application modules
@@ -55,13 +67,22 @@ jobs:
       - name: Run backend tests
         env:
           PYTHONHASHSEED: "0"
+          # 打到保证没人听的口：探测逻辑遇到显式 env 就不再探活，测试保持封闭
           INKTABLE_OLLAMA_URL: "http://127.0.0.1:9"
+          # 不设这个就会落到 ~/Library/Application Support/Inktable ——
+          # 在开发机上那正是用户的真实库
+          INKTABLE_DB: ${{ runner.temp }}/inktable-ci.db
         run: uv run pytest -q
 
   desktop:
-    name: Node 22 · desktop tests
-    runs-on: ubuntu-latest
+    name: Node 22 · desktop tests · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
 
     defaults:
       run:
@@ -83,3 +104,12 @@ jobs:
 
       - name: Run desktop tests
         run: npm test
+
+      # 渲染层的内联脚本由 CSP sha256 白名单钉住，改了内容不重算就会被
+      # Chromium 静默拦掉**整块**前端 JS —— 界面照常渲染，但什么都不工作。
+      # desktop 测试里已有一条双向比对；这一步在它失败时把实测哈希打出来。
+      # 不用 `|| echo`：Windows runner 的 PowerShell 5.1 没有 `||`，自己会红。
+      - name: Report CSP hash drift
+        if: failure()
+        continue-on-error: true
+        run: node scripts/csp-hash.js
