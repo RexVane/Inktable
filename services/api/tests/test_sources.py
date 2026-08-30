@@ -80,6 +80,64 @@ def test_macos_discovery_returns_volume_roots_not_apps(monkeypatch):
     assert called["wechat"] == 0
 
 
+def test_linux_discovery_returns_volume_roots_not_apps(monkeypatch):
+    from app.discovery import sources
+
+    called = {"wechat": 0}
+
+    def boom():
+        called["wechat"] += 1
+        raise AssertionError("Linux must not list IM/browser folders as sources")
+
+    monkeypatch.setattr(sources.sys, "platform", "linux")
+    monkeypatch.setattr(sources, "linux_volume_roots", lambda: [
+        sources.Path("/"), sources.Path("/mnt/data"),
+    ])
+    monkeypatch.setattr(sources.Path, "is_dir", lambda _self: True)
+    monkeypatch.setattr(sources, "_linux_boot_volume_name", lambda: "系统盘")
+    monkeypatch.setattr(sources, "discover_wechat", boom)
+    monkeypatch.setattr(sources, "discover_browsers", boom)
+    monkeypatch.setattr(sources, "discover_system", boom)
+    found = sources.discover_all()
+    assert [item.path for item in found] == [
+        str(sources.Path("/")), str(sources.Path("/mnt/data")),
+    ]
+    assert [item.name for item in found] == ["系统盘", "data"]
+    assert all(item.is_drive_root for item in found)
+    assert all(item.discovered_by == "fixed_drive" for item in found)
+    assert called["wechat"] == 0
+
+
+def test_linux_volume_roots_keeps_local_disks_skips_virtual(monkeypatch):
+    from app.discovery import sources
+
+    monkeypatch.setattr(sources.sys, "platform", "linux")
+    monkeypatch.setattr(sources, "_iter_linux_mounts", lambda: [
+        ("/dev/nvme0n1p2", "/", "ext4"),
+        ("proc", "/proc", "proc"),
+        ("tmpfs", "/tmp", "tmpfs"),
+        ("/dev/sdb1", "/mnt/data", "ext4"),
+        ("/dev/sda1", "/boot/efi", "vfat"),
+        ("/dev/loop0", "/snap/foo", "squashfs"),
+    ])
+    monkeypatch.setattr(sources, "_linux_device_is_removable", lambda _dev: False)
+
+    def _is_dir(self):
+        return True
+
+    def _is_mount(self):
+        return str(self) in {
+            str(sources.Path("/")), str(sources.Path("/mnt/data")),
+        }
+
+    monkeypatch.setattr(sources.Path, "is_dir", _is_dir)
+    monkeypatch.setattr(sources.Path, "is_mount", _is_mount)
+    roots = [str(p) for p in sources.linux_volume_roots()]
+    assert str(sources.Path("/")) in roots
+    assert str(sources.Path("/mnt/data")) in roots
+    assert not any(item.endswith("proc") or "snap" in item or "efi" in item for item in roots)
+
+
 def test_drive_root_paths_match_windows_and_macos(monkeypatch):
     from app.watcher import policy
 
@@ -95,6 +153,15 @@ def test_drive_root_paths_match_windows_and_macos(monkeypatch):
     assert not policy.is_drive_root("/Users/me")
     assert not policy.is_drive_root("/Volumes/Data/subdir")
     assert not policy.is_drive_root("/Volumes")
+
+    monkeypatch.setattr(policy.sys, "platform", "linux")
+    assert policy.is_drive_root("/")
+    assert policy.is_drive_root("/mnt/data")
+    assert policy.is_drive_root("/media/user/Disk")
+    assert policy.is_drive_root("/run/media/me/Disk")
+    assert not policy.is_drive_root("/mnt/data/subdir")
+    assert not policy.is_drive_root("/home/me")
+    assert not policy.is_drive_root("/usr")
 
 
 def test_windows_wechat_custom_root_reports_direct_documents(tmp_path, monkeypatch):

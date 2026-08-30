@@ -63,6 +63,113 @@ def fixed_drive_roots() -> list[Path]:
     return roots
 
 
+_LINUX_LOCAL_FS = frozenset({
+    "ext2", "ext3", "ext4", "xfs", "btrfs", "f2fs", "jfs", "reiserfs",
+    "zfs", "ntfs", "ntfs3", "exfat", "fuseblk",
+})
+_LINUX_SKIP_MOUNT_PREFIXES = (
+    "/proc", "/sys", "/dev", "/snap", "/boot", "/run/user",
+)
+
+
+def _unescape_mount(value: str) -> str:
+    return (
+        value.replace("\\040", " ")
+        .replace("\\011", "\t")
+        .replace("\\012", "\n")
+        .replace("\\134", "\\")
+    )
+
+
+def _iter_linux_mounts() -> list[tuple[str, str, str]]:
+    """Return ``(device, mountpoint, fstype)`` rows from ``/proc/mounts``."""
+    try:
+        text = Path("/proc/mounts").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    rows: list[tuple[str, str, str]] = []
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        rows.append((_unescape_mount(parts[0]), _unescape_mount(parts[1]), parts[2]))
+    return rows
+
+
+def _linux_device_is_removable(device: str) -> bool:
+    """Best-effort: skip USB/optical, keep internal disks (Windows DRIVE_FIXED)."""
+    if device.startswith("/dev/loop") or device.startswith("/dev/sr"):
+        return True
+    name = os.path.basename(device)
+    if not name:
+        return False
+    # /dev/sda1 -> sda ; /dev/nvme0n1p2 -> nvme0n1 ; /dev/mmcblk0p1 -> mmcblk0
+    disk = name
+    if disk.startswith("nvme") and "p" in disk:
+        disk = disk.rsplit("p", 1)[0]
+    elif disk.startswith("mmcblk") and "p" in disk:
+        disk = disk.rsplit("p", 1)[0]
+    else:
+        disk = disk.rstrip("0123456789")
+    try:
+        return Path(f"/sys/block/{disk}/removable").read_text(encoding="ascii").strip() == "1"
+    except OSError:
+        return False
+
+
+def linux_volume_roots() -> list[Path]:
+    """Local Linux volumes: boot ``/`` plus extra local-disk mounts.
+
+    Extra mounts typically land at ``/mnt``, ``/media``, ``/run/media``, or a
+    separate partition such as ``/data``. Virtual, network, and removable
+    filesystems stay out — same idea as Windows ``DRIVE_FIXED``.
+    """
+    if sys.platform != "linux":
+        return []
+    roots: list[Path] = []
+    seen: set[str] = set()
+    boot = Path("/")
+    if boot.is_dir():
+        roots.append(boot)
+        seen.add("/")
+    for device, mountpoint, fstype in _iter_linux_mounts():
+        if fstype not in _LINUX_LOCAL_FS:
+            continue
+        if mountpoint in seen:
+            continue
+        if any(
+            mountpoint == prefix or mountpoint.startswith(prefix + "/")
+            for prefix in _LINUX_SKIP_MOUNT_PREFIXES
+        ) and not mountpoint.startswith("/run/media/"):
+            continue
+        if mountpoint.startswith("/boot"):
+            continue
+        if device.startswith("/dev/loop"):
+            continue
+        if _linux_device_is_removable(device):
+            continue
+        path = Path(mountpoint)
+        try:
+            if not path.is_dir() or not path.is_mount():
+                continue
+        except OSError:
+            continue
+        roots.append(path)
+        seen.add(mountpoint)
+    return roots
+
+
+def volume_roots() -> list[Path]:
+    """Local-disk roots for the current desktop OS."""
+    if sys.platform == "win32":
+        return fixed_drive_roots()
+    if sys.platform == "darwin":
+        return macos_volume_roots()
+    if sys.platform == "linux":
+        return linux_volume_roots()
+    return []
+
+
 def macos_volume_roots() -> list[Path]:
     """Local Mac volumes: boot disk ``/`` plus extra mounts under ``/Volumes``.
 
@@ -111,6 +218,8 @@ def disk_root_label(root: Path | str) -> str:
         return f"{drive} 盘"
     parts = path.parts
     if raw in {"/", "", os.sep} or parts in {("/",), (os.sep,)}:
+        if sys.platform == "linux":
+            return _linux_boot_volume_name()
         return _macos_boot_volume_name()
     return path.name or raw
 
@@ -133,18 +242,27 @@ def _macos_boot_volume_name() -> str:
     return "Macintosh HD"
 
 
+def _linux_boot_volume_name() -> str:
+    try:
+        r = subprocess.run(
+            ["findmnt", "-n", "-o", "LABEL", "/"],
+            capture_output=True, text=True, timeout=2,
+        )
+        name = (r.stdout or "").strip().split("\n")[0].strip()
+        if name:
+            return name
+    except Exception:
+        pass
+    return "系统盘"
+
+
 def discover_fixed_drives() -> list[Source]:
     """Discover local disks as the only auto top-level sources.
 
     Do not recursively probe here: the real file count is produced by the
     background source scan after the user enables a disk.
     """
-    if sys.platform == "win32":
-        roots = fixed_drive_roots()
-    elif sys.platform == "darwin":
-        roots = macos_volume_roots()
-    else:
-        roots = []
+    roots = volume_roots()
     return [
         Source(
             name=disk_root_label(root),
@@ -761,9 +879,9 @@ def discover_system() -> list[Source]:
 # ---------------------------------------------------------------- 汇总
 
 def discover_all() -> list[Source]:
-    # Windows / macOS：本地磁盘是唯一顶层来源，盘内目录由
+    # 桌面系统：本地磁盘是唯一顶层来源，盘内目录由
     # /files/tree 按真实文件路径逐层展开，不再把应用缓存目录列成来源。
-    if sys.platform in {"win32", "darwin"}:
+    if sys.platform in {"win32", "darwin", "linux"}:
         return discover_fixed_drives()
 
     sources: list[Source] = []

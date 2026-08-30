@@ -543,6 +543,14 @@ def test_macos_boot_skip_covers_other_volumes():
     assert "system" in scanner.MAC_BOOT_SKIP_DIRS
 
 
+def test_linux_boot_skip_covers_other_volumes():
+    """Walking Linux ``/`` must not recurse into ``/mnt`` / ``/proc``."""
+    assert "mnt" in scanner.LINUX_BOOT_SKIP_DIRS
+    assert "media" in scanner.LINUX_BOOT_SKIP_DIRS
+    assert "proc" in scanner.LINUX_BOOT_SKIP_DIRS
+    assert "home" not in scanner.LINUX_BOOT_SKIP_DIRS
+
+
 def test_scan_never_modifies_files(db, source, tmp_path):
     """扫描绝不改动原文件 —— PLAN §1 第一条不可协商约束。"""
     paths = []

@@ -1,7 +1,7 @@
 {
   "name": "ordo-desktop",
   "version": "0.3.0",
-  "description": "Ordo — local-first personal knowledge base for macOS and Windows / 本地优先的个人知识库（macOS / Windows）",
+  "description": "Ordo — local-first personal knowledge base for macOS, Windows, and Linux / 本地优先的个人知识库（macOS / Windows / Linux）",
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",

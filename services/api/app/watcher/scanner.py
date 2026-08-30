@@ -77,6 +77,14 @@ MAC_BOOT_SKIP_DIRS = {
     "dev", "net", "opt", "home", "applications", "library", "network",
     "preboot", "update",
 }
+# Walking Linux ``/`` must not descend into other disks (``/mnt``, ``/media``)
+# or OS trees that a Windows drive letter never contains. Do **not** skip
+# ``home`` — that is where user documents live.
+LINUX_BOOT_SKIP_DIRS = {
+    "proc", "sys", "dev", "run", "snap", "tmp", "boot", "lost+found",
+    "mnt", "media", "usr", "bin", "sbin", "lib", "lib32", "lib64",
+    "opt", "var", "root", "srv", "cdrom",
+}
 INSTALL_MARKERS = (
     ("python.exe",),
     ("code.exe",),
@@ -445,15 +453,18 @@ def iter_files(root: Path, max_depth: int = MAX_DEPTH,
         kept: list[str] = []
         skipped = 0
         boot_skip = (
-            sys.platform == "darwin"
-            and str(root) == os.sep
-            and current == root
+            sys.platform in {"darwin", "linux"}
+            and str(Path(root)) in {os.sep, str(Path("/"))}
+            and current == Path(root)
+        )
+        boot_skip_names = (
+            MAC_BOOT_SKIP_DIRS if sys.platform == "darwin" else LINUX_BOOT_SKIP_DIRS
         )
         for dirname in dirnames:
             candidate = current / dirname
             if (
                 should_skip_dir(dirname)
-                or (boot_skip and dirname.casefold() in MAC_BOOT_SKIP_DIRS)
+                or (boot_skip and dirname.casefold() in boot_skip_names)
                 or _normal_path(candidate) in pruned
                 or _is_reparse_dir(candidate)
             ):

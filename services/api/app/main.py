@@ -43,8 +43,7 @@ from app.db.visibility import VISIBLE_FILES_COND
 from app.discovery.sources import (
     discover_all,
     disk_root_label,
-    fixed_drive_roots,
-    macos_volume_roots,
+    volume_roots,
 )
 from app.watcher.policy import is_drive_root, resolve_source_policy, uses_disk_root_sources
 from app.health import collect_health
@@ -222,6 +221,16 @@ def _drive_root_for(path: str) -> Path | None:
             return Path("/") / "Volumes" / parts[2]
         if parts and parts[0] == "/":
             return Path("/")
+    if sys.platform == "linux":
+        parts = Path(os.path.abspath(os.path.normpath(path))).parts
+        if len(parts) >= 5 and parts[1] == "run" and parts[2] == "media":
+            return Path("/") / "run" / "media" / parts[3] / parts[4]
+        if len(parts) >= 4 and parts[1] == "media":
+            return Path("/") / "media" / parts[2] / parts[3]
+        if len(parts) >= 3 and parts[1] in {"mnt", "media"}:
+            return Path("/") / parts[1] / parts[2]
+        if parts and parts[0] == "/":
+            return Path("/")
     return None
 
 
@@ -229,7 +238,7 @@ def _legacy_drive_roots(conn) -> list[Path]:
     """Find disks represented by legacy non-manual child sources."""
     if not uses_disk_root_sources():
         return []
-    live = fixed_drive_roots() if sys.platform == "win32" else macos_volume_roots()
+    live = volume_roots()
     fixed = {
         os.path.normcase(os.path.normpath(str(root))): root
         for root in live

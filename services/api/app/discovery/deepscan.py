@@ -39,6 +39,11 @@ _REPARSE = 0x400      # FILE_ATTRIBUTE_REPARSE_POINT
 
 def _fixed_drives() -> list[Path]:
     """固定磁盘的根。可移动盘/网络盘不扫 —— 拔了就失效，别推荐。"""
+    from app.discovery.sources import volume_roots
+
+    roots = volume_roots()
+    if roots:
+        return roots
     if sys.platform != "win32":
         return [HOME]
     import ctypes

@@ -47,6 +47,20 @@ mac:
   hardenedRuntime: false
   gatekeeperAssess: false
 
+linux:
+  icon: icon.png
+  category: Office
+  maintainer: RexVane
+  synopsis: Local-first personal knowledge base
+  desktop:
+    StartupWMClass: ordo
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
 dmg:
   title: Ordo
   contents:

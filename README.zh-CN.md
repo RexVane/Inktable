@@ -11,11 +11,11 @@
 <p align="center">
   <a href="https://github.com/RexVane/Ordo/actions/workflows/backend-tests.yml"><img src="https://github.com/RexVane/Ordo/actions/workflows/backend-tests.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT"></a>
-  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg" alt="macOS 与 Windows">
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg" alt="macOS、Windows、Linux">
 </p>
 
 <p align="center">
-  <strong>本地优先的个人知识库（macOS / Windows）。</strong><br>
+  <strong>本地优先的个人知识库（macOS / Windows / Linux）。</strong><br>
   把已经散落在磁盘上的资料变成可检索、可问答、可回溯证据的知识空间。<br>
   <strong>默认不移动、不复制、不改名任何文件</strong> —— 组织全部发生在索引层。
 </p>
@@ -29,7 +29,7 @@
 - **本地或云端模型** — 本机 Ollama，或云端/中转 API（Chat Completions / Responses / Anthropic Messages）。
 - **默认隐私** — 渲染层 CSP 没有网络出口。文件字节走 `ordodoc://`，主进程先核对该路径是否已在库内登记。
 
-Windows 与 macOS 都以**本地磁盘**为顶层来源（`C:\`、`/`、`/Volumes/…`）。微信、浏览器、下载文件夹不再单独列为来源。
+桌面系统都以**本地磁盘**为顶层来源（`C:\`、`/`、`/Volumes/…`、`/mnt/…`）。微信、浏览器、下载文件夹不再单独列为来源。
 
 ## 仓库结构
 
@@ -39,7 +39,7 @@ services/api/     FastAPI 侧车（SQLite / FTS5 / sqlite-vec）
 docs/             设计、评测、发布说明
 ```
 
-当前版本 **0.3.0**。Windows 已日常使用。尚未代码签名 —— 见 [限制](#限制)。
+当前版本 **0.3.0**。Windows 已日常使用；macOS 与 Linux 同一套磁盘来源模型。尚未代码签名 —— 见 [限制](#限制)。
 
 ## 开始使用
 
@@ -59,11 +59,16 @@ cd ..\..\apps\desktop ; npm install ; npm start
 
 需要 Python 3.12、[uv](https://docs.astral.sh/uv/)、Node.js 20+。用 `ORDO_DB` 指向临时库，避免碰到真实资料库。可选：本机 [Ollama](https://ollama.com) 安装 `bge-m3` 做语义检索（不装仍可用关键词检索）。
 
-打包 Windows 安装包（先冻结 sidecar）：
+打包安装包（先冻结 sidecar）：
 
 ```powershell
 cd services\api ; uv run --group dev pyinstaller sidecar.spec --clean --noconfirm
 cd ..\..\apps\desktop ; npm run dist -- --win --x64
+```
+
+```bash
+cd services/api && uv run --group dev pyinstaller sidecar.spec --clean --noconfirm
+cd ../../apps/desktop && npm run dist -- --linux --x64
 ```
 
 ## 架构
@@ -98,13 +103,13 @@ Electron 主进程 ──stdin: {token}──▶  Python sidecar (FastAPI)
 - [安全](SECURITY.zh-CN.md)
 - [行为准则](CODE_OF_CONDUCT.zh-CN.md)
 - [0.3.0 发布说明](docs/RELEASE-0.3.0.md)
-- [Windows 移植](docs/WINDOWS-PORT.md)
+- [Windows 移植](docs/WINDOWS-PORT.md) · [Linux](docs/LINUX.md)
 - [方案](docs/PLAN.md) · [硬约束](docs/HANDOFF.md)
 - [评测](docs/eval/README.md) — 冻结 v8：Recall@5 94.3%、MRR@10 88.1%、nDCG@10 91.0%
 
 ## 限制
 
-- 未代码签名；macOS 首次打开需右键 → 打开
+- 未代码签名；macOS 首次打开需右键 → 打开。Linux 提供 AppImage / deb
 - 原版式查看仅 PDF / DOCX；其余格式走提取文本
 - 向量槽位仅支持本机 Ollama
 - 入库白名单：`.txt` `.md` `.pdf` `.docx` `.csv` `.html` `.htm`
