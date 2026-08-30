@@ -18,7 +18,6 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from urllib.parse import urlparse
 
 from app.config.endpoints import EndpointPolicyError, normalize_model_endpoint
 
