@@ -17,7 +17,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 HOME = Path.home()
 
@@ -71,7 +71,11 @@ def discover_fixed_drives() -> list[Source]:
     """
     return [
         Source(
-            name=f"{root.drive.rstrip(':')} 盘",
+            # `Path.drive` follows the host OS.  Tests and migration tools can
+            # legitimately feed a Windows root while running on POSIX, where
+            # `Path("B:/").drive` is empty.  Parse the drive syntax explicitly
+            # so discovery has one cross-platform contract.
+            name=f"{PureWindowsPath(str(root)).drive.rstrip(':')} 盘",
             path=str(root),
             kind="system",
             discovered_by="fixed_drive",

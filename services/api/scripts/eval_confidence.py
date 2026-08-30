@@ -22,7 +22,6 @@ import argparse
 import io
 import json
 import random
-import statistics
 import sys
 from pathlib import Path
 

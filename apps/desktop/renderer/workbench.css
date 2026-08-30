@@ -609,7 +609,8 @@ textarea:focus-visible,
 }
 
 .splitter:hover::after,
-body.resizing .splitter::after {
+body.resizing .splitter::after,
+.splitter:focus-visible::after {
   background: var(--accent);
   width: 2px;
   left: 1.5px;
@@ -1979,6 +1980,12 @@ body.resizing * {
 }
 
 .set-nav-item {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font: inherit;
   padding: 6px 10px;
   margin-bottom: 2px;
   border-radius: var(--radius-ctl);
@@ -2031,6 +2038,22 @@ body.resizing * {
   justify-content: space-between;
   gap: 14px;
   padding: 8px 0;
+}
+
+.set-row[hidden] {
+  display: none !important;
+}
+
+.set-ctl {
+  flex: 0 0 260px;
+  min-width: 180px;
+  max-width: 58%;
+}
+
+.set-ctl input,
+.set-ctl .tsel,
+.set-ctl select {
+  width: 100%;
 }
 
 .set-info {
@@ -2134,8 +2157,7 @@ body.resizing * {
 /* 表单与 CC-Switch */
 .llm-form {
   margin-top: 8px;
-  padding: 12px 0 6px;
-  border-bottom: 1px solid var(--line);
+  padding: 4px 0 6px;
 }
 
 .set-section .llm-form {
@@ -2150,9 +2172,22 @@ body.resizing * {
   font-weight: 650;
 }
 
+.llm-form .set-row {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.llm-form .set-row:last-of-type {
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.llm-form .tsel {
+  margin: 0;
+}
+
 .llm-form input {
   width: 100%;
-  margin-bottom: 8px;
+  margin-bottom: 0;
   padding: 7px 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius-ctl);
@@ -2166,6 +2201,19 @@ body.resizing * {
 .llm-form input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.llm-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 12px 0 4px;
+}
+
+.llm-actions .hint {
+  margin-right: auto;
 }
 
 .cc-group {
@@ -3112,4 +3160,27 @@ select.tsel-native {
 .tsel-opt.on {
   background: var(--accent-soft);
   font-weight: 600;
+}
+
+select:disabled { opacity: .55; cursor: not-allowed; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}
+
+@media (forced-colors: active) {
+  button:focus-visible,
+  input:focus-visible,
+  textarea:focus-visible,
+  select:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 2px solid Highlight !important;
+    outline-offset: 2px;
+  }
+  .splitter::after { background: ButtonText; }
 }

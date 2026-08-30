@@ -118,7 +118,7 @@ def test_library_enrich_route_delegates_bounded_batch(monkeypatch) -> None:
             'available': True,
             'provider': 'local_ollama',
             'model': 'fake',
-            'prompt_version': 'library-enrichment-v2',
+            'prompt_version': 'library-enrichment-v3',
             'claimed': 2,
             'ready': 2,
             'failed': 0,
@@ -136,6 +136,35 @@ def test_library_enrich_route_delegates_bounded_batch(monkeypatch) -> None:
 
         too_large = client.post('/library/enrich?limit=21')
         assert too_large.status_code == 422
+    finally:
+        conn.close()
+
+
+def test_library_enrichment_run_routes_create_read_and_cancel() -> None:
+    app, conn = _app()
+    try:
+        client = TestClient(app)
+        created = client.post('/library/enrichment/runs?retry_failed=true')
+        assert created.status_code == 200
+        run = created.json()
+        assert run['status'] == 'running'
+        assert run['include_failed'] is True
+
+        read = client.get(f"/library/enrichment/runs/{run['id']}")
+        assert read.status_code == 200
+        assert read.json()['id'] == run['id']
+
+        cancelled = client.post(
+            f"/library/enrichment/runs/{run['id']}/cancel"
+        )
+        assert cancelled.status_code == 200
+        assert cancelled.json()['status'] == 'cancelled'
+        assert cancelled.json()['cancel_requested'] is True
+
+        missing = client.get(
+            '/library/enrichment/runs/123e4567-e89b-12d3-a456-426614174000'
+        )
+        assert missing.status_code == 404
     finally:
         conn.close()
 

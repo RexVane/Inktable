@@ -20,6 +20,8 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlparse
 
+from app.config.endpoints import EndpointPolicyError, normalize_model_endpoint
+
 SLOTS = ("library", "embedding")
 PROVIDERS = ("openai", "ollama")
 
@@ -98,21 +100,12 @@ _lock = threading.Lock()
 
 
 def _validate_endpoint(endpoint: str, *, allow_local: bool = True) -> str:
-    """只接受绝对 http(s) 地址且不得内嵌凭据（密钥走 Authorization 头）。"""
-    value = (endpoint or "").strip().rstrip("/")
-    if not value:
-        raise SlotConfigError("接口地址不能为空")
-    parsed = urlparse(value)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise SlotConfigError("接口地址必须是有效的 http:// 或 https:// URL")
-    if parsed.username is not None or parsed.password is not None:
-        raise SlotConfigError("接口地址不能包含用户名或密码")
-    if not allow_local and parsed.scheme == "http" and parsed.hostname not in (
-        "localhost", "127.0.0.1", "::1",
-    ):
-        # 云端明文 http 会把密钥与库内容裸奔在网络上
-        raise SlotConfigError("云端接口必须使用 https://（本地服务可用 http）")
-    return value
+    """Compatibility wrapper around the one shared endpoint policy."""
+    del allow_local
+    try:
+        return normalize_model_endpoint(endpoint)
+    except EndpointPolicyError as exc:
+        raise SlotConfigError(str(exc)) from exc
 
 
 def configure(slot: str, provider: str, endpoint: str,

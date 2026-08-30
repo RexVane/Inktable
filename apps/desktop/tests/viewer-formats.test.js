@@ -113,8 +113,10 @@ test('PDF page placeholders carry the class pageWrap() looks them up by', () => 
   // 真实缺陷:占位只给了 `pdf-page-ph`，而 pageWrap() 按
   // `.pdf-page[data-page]` 找容器。类名不匹配 → renderPage 拿到 null 就
   // `return null`，于是**一页都画不出来、也不报任何错**。
+  // 参数表不写死：它已经因为新增 session 参数变过一次，而这条测试要钉的是
+  // 类名，不是函数签名。
   const build = renderer.match(
-    /function buildPdfView\(pdfjsLib, doc, body, jump, token\) \{[\s\S]*?\n\}/)[0];
+    /function buildPdfView\([^)]*\) \{[\s\S]*?\n\}/)[0];
   const phClass = build.match(/ph\.className = '([^']+)'/);
   assert.ok(phClass, 'buildPdfView 必须给占位设置 className');
   const tokens = phClass[1].split(/\s+/);

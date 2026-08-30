@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-+bogcxA9rN61l4U27NYWKv0PEc6ckm34si88nWr7EMQ=' 'sha256-7s6nLPviJTV/DHWM7oMi5VMxeW4bc/DLLghbEB6jclY='; style-src 'self' 'unsafe-inline'; connect-src inkdoc:; worker-src 'self' inkdoc:; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-+bogcxA9rN61l4U27NYWKv0PEc6ckm34si88nWr7EMQ=' 'sha256-CqYdFtA6Z/Kx52iNafviHJZpKwlo/wq2Ygstl2Wqim8='; style-src 'self' 'unsafe-inline'; connect-src inkdoc:; worker-src 'self' inkdoc:; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'" />
 <title>Inktable</title>
 <style>
   /* 结构性 reset —— 全部视觉规则集中在 workbench.css，避免两处定义漂移 */
@@ -80,7 +80,8 @@
           <div class="panel-head"><span class="panel-title">文件库</span></div>
           <div class="nav" id="nav"></div>
         </section>
-        <div class="splitter" id="splitNav" role="separator" aria-orientation="vertical"></div>
+        <div class="splitter" id="splitNav" role="separator" aria-orientation="vertical"
+          tabindex="0" aria-label="调整文件库宽度" aria-valuemin="160" aria-valuemax="360" aria-valuenow="214"></div>
         <section class="results-panel" aria-label="文件管理">
           <div class="panel-head">
             <button class="back-button" id="backToList" type="button" style="display:none"><svg class="btn-icon" viewBox="0 0 16 16"><path d="M10 3.5L5.5 8L10 12.5" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg><span>返回</span></button>
@@ -90,25 +91,28 @@
           <div class="file-search" id="fileSearch">
             <div class="query-controls">
               <span class="search-ico" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M11.5 11.5L14.5 14.5M6.5 12C3.46 12 1 9.54 1 6.5C1 3.46 3.46 1 6.5 1C9.54 1 12 3.46 12 6.5C12 9.54 9.54 12 6.5 12Z" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg></span>
-              <input class="search" id="q" placeholder="搜索文件内容或文件名…" autocomplete="off" />
+              <input class="search" id="q" aria-label="搜索文件内容或文件名"
+                placeholder="搜索文件内容或文件名…" autocomplete="off" />
               <button class="query-submit" id="querySubmit" type="button" title="搜索" aria-label="搜索"><svg viewBox="0 0 16 16"><path d="M6 3.5L10.5 8L6 12.5" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
             </div>
           </div>
           <div class="rows" id="rows"><div class="workbench-empty"><div><div class="empty-mark"><svg viewBox="0 0 24 24"><path d="M10 18a8 8 0 100-16 8 8 0 000 16zm11 3l-6-6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg></div><div class="empty-title">正在载入内容</div></div></div></div>
           <div class="evidence-content" id="evidence" style="display:none"></div>
         </section>
-        <div class="splitter" id="splitQa" role="separator" aria-orientation="vertical"></div>
+        <div class="splitter" id="splitQa" role="separator" aria-orientation="vertical"
+          tabindex="0" aria-label="调整知识问答宽度" aria-valuemin="260" aria-valuemax="520" aria-valuenow="330"></div>
         <aside class="qa-panel" id="qaPanel" aria-label="知识问答">
           <div class="panel-head qa-head"><span class="panel-title">知识问答</span><button class="qa-clear" id="qaJournal" type="button" title="找回过往调查（本地记录）">历史</button><button class="qa-clear" id="qaClear" type="button" title="清空本次会话的问答">清空</button><button class="model-state" id="modelState" type="button">未配置模型</button></div>
           <div class="answer-rows" id="answerRows"><div class="qa-empty"><div><div class="empty-mark"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3m.08 4h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></div><div class="empty-title">询问你的知识库</div><div class="empty-meta">回答会附带可定位的原文引用</div></div></div></div>
           <div class="qa-composer">
             <div class="composer-box">
-              <textarea id="askQ" rows="1" placeholder="询问你的文件，或随便聊聊…"></textarea>
+              <textarea id="askQ" rows="1" aria-label="知识问答输入"
+                placeholder="询问你的文件，或随便聊聊…"></textarea>
               <button id="askSubmit" class="qa-submit" type="button" title="提问（Enter）" aria-label="提问"><svg viewBox="0 0 16 16"><path d="M8 12.5V3.5M3.5 8L8 3.5L12.5 8" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
             </div>
             <div class="composer-foot">
               <div class="qa-mode" role="group" aria-label="回答档位">
-                <button class="qa-mode-btn" id="qaModeQuick" type="button" title="快速简洁回答：不带引用，单轮生成，速度优先">快速</button>
+                <button class="qa-mode-btn" id="qaModeQuick" type="button" title="快速简洁回答：单轮生成并保留确定性引用校验">快速</button>
                 <button class="qa-mode-btn" id="qaModeDeep" type="button" title="全量检索 + 逐条引用校验，慢但严谨">深度</button>
               </div>
               <div class="composer-hint" id="composerHint">Enter 发送 · Shift+Enter 换行 · 逐条引用校验</div>
@@ -118,11 +122,12 @@
       </div>
     </div>
   </div>
-  <div class="toast" id="toast"></div>
+  <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
   <div class="ctx" id="ctx"></div>
 
-  <div class="sheet" id="sheet">
-    <div class="sheet-box">
+  <div class="sheet" id="sheet" role="dialog" aria-modal="true"
+    aria-label="设置" aria-hidden="true">
+    <div class="sheet-box" tabindex="-1">
       <div class="sheet-head">
         <h2>设置</h2>
         <span class="sub" id="sheetSub"></span>
@@ -223,6 +228,10 @@ function initSplitters() {
     if (qaPanel) qaPanel.classList.toggle('is-collapsed', !qaOpen);
     splitNav.classList.toggle('is-collapsed', !navOpen);
     splitQa.classList.toggle('is-collapsed', !qaOpen);
+    splitNav.tabIndex = navOpen ? 0 : -1;
+    splitQa.tabIndex = qaOpen ? 0 : -1;
+    splitNav.setAttribute('aria-valuenow', String(Math.round(navWidth)));
+    splitQa.setAttribute('aria-valuenow', String(Math.round(qaWidth)));
     if (toggleNav) {
       toggleNav.classList.toggle('on', navOpen);
       toggleNav.setAttribute('aria-expanded', navOpen ? 'true' : 'false');
@@ -273,6 +282,26 @@ function initSplitters() {
 
   splitNav.addEventListener('mousedown', function (e) { startDrag(e, true); });
   splitQa.addEventListener('mousedown', function (e) { startDrag(e, false); });
+
+  function resizeWithKeyboard(event, isNav) {
+    var min = isNav ? 160 : 260;
+    var max = isNav ? 360 : 520;
+    var value = isNav ? navWidth : qaWidth;
+    var step = event.shiftKey ? 30 : 10;
+    if (event.key === 'Home') value = min;
+    else if (event.key === 'End') value = max;
+    else if (event.key === 'ArrowLeft') value += isNav ? -step : step;
+    else if (event.key === 'ArrowRight') value += isNav ? step : -step;
+    else return;
+    event.preventDefault();
+    value = Math.max(min, Math.min(max, value));
+    if (isNav) navWidth = value;
+    else qaWidth = value;
+    updateCols();
+    save();
+  }
+  splitNav.addEventListener('keydown', function (e) { resizeWithKeyboard(e, true); });
+  splitQa.addEventListener('keydown', function (e) { resizeWithKeyboard(e, false); });
 }
 
 function currentScopeLabel() {
@@ -493,7 +522,7 @@ function renderFileDetail(detail) {
       if (view === 'original') {
         openOriginal(file.id, file.name || '', pendingJump);
       } else {
-        originalViewToken++;   // 停掉原文视图的异步回写
+        stopOriginalView();   // 停掉网络、PDF worker、观察器和异步回写
         setHint('vtHint', '');
         startReader(file.id, Array.isArray(detail.sections) ? detail.sections : []);
       }
@@ -521,6 +550,22 @@ function renderFileDetail(detail) {
 var pendingJump = null;      // 待定位的引用 {page, snippet}
 var originalViewToken = 0;   // 切换视图/切换文件后使未完成的渲染作废
 var pdfjsLibPromise = null;
+var activeOriginalCleanup = null;
+var MAX_DOCX_VIEW_BYTES = 64 * 1024 * 1024;
+var MAX_IPC_ORIGINAL_BYTES = 16 * 1024 * 1024;
+
+function releaseOriginalResources() {
+  var cleanup = activeOriginalCleanup;
+  activeOriginalCleanup = null;
+  if (typeof cleanup === 'function') {
+    try { cleanup(); } catch (e) {}
+  }
+}
+
+function stopOriginalView() {
+  originalViewToken++;
+  releaseOriginalResources();
+}
 
 function viewerKindOf(nameOrExt) {
   var s = String(nameOrExt || '').toLowerCase();
@@ -570,13 +615,48 @@ function setHint(id, text) {
   if (el) el.textContent = text;
 }
 
-function fetchOriginalBytes(fileId, name) {
-  // 主通道：inkdoc://（流式 + Range）；失败自动回退 IPC base64 保底通道，
-  // 保证原文查看在任何协议问题下都可用。
-  return fetch(inkdocUrl(fileId, name)).then(function (resp) {
+function readResponseBytesLimited(resp, limit) {
+  var declared = parseInt(resp.headers.get('content-length') || '0', 10);
+  if (declared > limit) throw new Error('文件过大，原版式查看上限为 ' +
+    Math.round(limit / 1024 / 1024) + ' MB');
+  if (!resp.body || typeof resp.body.getReader !== 'function') {
+    return resp.arrayBuffer().then(function (buf) {
+      if (buf.byteLength > limit) throw new Error('文件超过原版式查看上限');
+      return buf;
+    });
+  }
+  var reader = resp.body.getReader();
+  var chunks = [];
+  var total = 0;
+  function read() {
+    return reader.read().then(function (part) {
+      if (part.done) {
+        var merged = new Uint8Array(total);
+        var offset = 0;
+        chunks.forEach(function (chunk) { merged.set(chunk, offset); offset += chunk.byteLength; });
+        return merged.buffer;
+      }
+      total += part.value.byteLength;
+      if (total > limit) {
+        return reader.cancel().then(function () {
+          throw new Error('文件超过原版式查看上限');
+        });
+      }
+      chunks.push(part.value);
+      return read();
+    });
+  }
+  return read();
+}
+
+function fetchOriginalBytes(fileId, name, limit, signal) {
+  // DOCX 需要完整 ZIP，但必须有硬上限；PDF 不走这里，直接把 URL 交给
+  // PDF.js，才能保留 Range/流式加载。
+  return fetch(inkdocUrl(fileId, name), { signal: signal }).then(function (resp) {
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    return resp.arrayBuffer();
-  }).catch(function () {
+    return readResponseBytesLimited(resp, limit);
+  }).catch(function (err) {
+    if (signal && signal.aborted) throw err;
     return window.inktable.apiRequest({
       path: '/files/' + encodeURIComponent(String(fileId)) + '/raw',
       method: 'GET',
@@ -584,7 +664,11 @@ function fetchOriginalBytes(fileId, name) {
       if (!result || !result.ok) {
         throw new Error((result && result.error) || ('HTTP ' + (result && result.status)));
       }
+      if (!result.b64 || result.b64.length > Math.ceil(MAX_IPC_ORIGINAL_BYTES * 4 / 3) + 8) {
+        throw new Error('协议回退只支持 16 MB 以内的文件');
+      }
       var bin = atob(result.b64);
+      if (bin.length > limit) throw new Error('文件超过原版式查看上限');
       var bytes = new Uint8Array(bin.length);
       for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
       return bytes.buffer;
@@ -642,7 +726,7 @@ function openOriginal(fileId, name, jump) {
   var foot = document.getElementById('readerFoot');
   if (foot) foot.textContent = '';
   if (!body) return;
-  originalViewToken++;
+  stopOriginalView();
   var token = originalViewToken;
   var kind = viewerKindOf(name);
   body.innerHTML = '<div class="original-loading">正在加载原文…</div>';
@@ -656,6 +740,7 @@ function openOriginal(fileId, name, jump) {
   var task = (openers[kind] || openDocxOriginal)(fileId, name, jump, body, token);
   task.catch(function (err) {
     if (token !== originalViewToken) return;
+    releaseOriginalResources();
     body.innerHTML = '<div class="detail-empty">原文加载失败：' + esc(err.message) +
       '（文件可能已被移动或删除，可切「提取文本」查看索引内容）</div>';
   });
@@ -664,25 +749,39 @@ function openOriginal(fileId, name, jump) {
 /* ---------- PDF ---------- */
 
 function openPdfOriginal(fileId, name, jump, body, token) {
+  var session = {
+    loadingTask: null,
+    observer: null,
+    renderTasks: new Set(),
+    cleanup: function () {
+      if (session.observer) session.observer.disconnect();
+      session.renderTasks.forEach(function (task) {
+        try { task.cancel(); } catch (e) {}
+      });
+      session.renderTasks.clear();
+      if (session.loadingTask) {
+        try { session.loadingTask.destroy(); } catch (e) {}
+      }
+    },
+  };
+  activeOriginalCleanup = session.cleanup;
   return loadPdfJs().then(function (pdfjsLib) {
     if (token !== originalViewToken) return null;
-    return fetchOriginalBytes(fileId, name).then(function (buf) {
-      if (token !== originalViewToken) return null;
-      return pdfjsLib.getDocument({
-        data: new Uint8Array(buf),
-        cMapUrl: 'inkdoc://app/vendor/pdfjs/cmaps/',
-        cMapPacked: true,
-        standardFontDataUrl: 'inkdoc://app/vendor/pdfjs/standard_fonts/',
-      }).promise;
-    }).then(function (doc) {
+    session.loadingTask = pdfjsLib.getDocument({
+      url: inkdocUrl(fileId, name),
+      cMapUrl: 'inkdoc://app/vendor/pdfjs/cmaps/',
+      cMapPacked: true,
+      standardFontDataUrl: 'inkdoc://app/vendor/pdfjs/standard_fonts/',
+    });
+    return session.loadingTask.promise.then(function (doc) {
       if (token !== originalViewToken || !doc) return null;
-      buildPdfView(pdfjsLib, doc, body, jump || {}, token);
+      buildPdfView(pdfjsLib, doc, body, jump || {}, token, session);
       return null;
     });
   });
 }
 
-function buildPdfView(pdfjsLib, doc, body, jump, token) {
+function buildPdfView(pdfjsLib, doc, body, jump, token, session) {
   body.innerHTML = '';
   var view = document.createElement('div');
   view.className = 'pdf-view';
@@ -725,6 +824,7 @@ function buildPdfView(pdfjsLib, doc, body, jump, token) {
   }
 
   function renderPage(pageNo) {
+    if (pageNo < 1 || pageNo > numPages) return Promise.resolve(null);
     if (rendered[pageNo] || rendering[pageNo]) return Promise.resolve(null);
     rendering[pageNo] = true;
     return firstScale().then(function () {
@@ -735,6 +835,7 @@ function buildPdfView(pdfjsLib, doc, body, jump, token) {
         var holder = pageWrap(pageNo);
         if (!holder) return null;
         holder.innerHTML = '';
+        holder.classList.remove('pdf-page-ph');
         var canvas = document.createElement('canvas');
         canvas.width = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
@@ -742,20 +843,24 @@ function buildPdfView(pdfjsLib, doc, body, jump, token) {
         // 摘掉骨架态：它的 min-height:340px 会把矮页面撑出一截空白
         holder.classList.remove('pdf-page-ph');
         holder.style.height = 'auto';
-        return page.render({
+        var renderTask = page.render({
           canvasContext: canvas.getContext('2d'),
           viewport: viewport,
-        }).promise.then(function () {
+        });
+        session.renderTasks.add(renderTask);
+        return renderTask.promise.then(function () {
           rendered[pageNo] = true;
-          delete rendering[pageNo];
           return page;
         }).catch(function (err) {
-          delete rendering[pageNo];
           holder.innerHTML = '<div class="pdf-page-err">第 ' + pageNo +
             ' 页渲染失败</div>';
           throw err;
+        }).finally(function () {
+          session.renderTasks.delete(renderTask);
         });
       });
+    }).finally(function () {
+      delete rendering[pageNo];
     });
   }
 
@@ -778,6 +883,7 @@ function buildPdfView(pdfjsLib, doc, body, jump, token) {
       renderPage(pageNo).catch(function () {});
     });
   }, { root: document.getElementById('evidence'), rootMargin: '700px 0px' });
+  session.observer = observer;
   Array.prototype.forEach.call(pages.children, function (el) { observer.observe(el); });
 
   function scrollToPage(pageNo, afterRender) {
@@ -870,12 +976,14 @@ function scaleOfPage(page) {
 /* ---------- DOCX ---------- */
 
 function openDocxOriginal(fileId, name, jump, body, token) {
+  var controller = new AbortController();
+  activeOriginalCleanup = function () { controller.abort(); };
   return Promise.all([
     ensureScript('vendor/docx/jszip.min.js'),
     ensureScript('vendor/docx/docx-preview.min.js'),
   ]).then(function () {
     if (token !== originalViewToken) return null;
-    return fetchOriginalBytes(fileId, name).then(function (buf) {
+    return fetchOriginalBytes(fileId, name, MAX_DOCX_VIEW_BYTES, controller.signal).then(function (buf) {
       if (token !== originalViewToken) return null;
       body.innerHTML = '<div class="docx-view"></div>';
       var holder = body.querySelector('.docx-view');
@@ -1541,24 +1649,14 @@ async function removeFileFromLibrary(file) {
 }
 
 async function trashFile(file) {
-  var name = String(file.name || '').slice(0, 24);
-  var ok = confirm('把「' + name + '」移到废纸篓？\n\n' +
-    '原文件与保全副本会移入废纸篓（可从废纸篓恢复），\n库中的记录与索引一并移除。');
-  if (!ok) return;
   try {
-    var r = await api('/files/remove', { method: 'POST', body: JSON.stringify({
-      file_ids: [file.file_id || file.id] }) });
-    var targets = (r.paths || []).concat(r.preserved_paths || []);
-    var failed = 0;
-    for (var i = 0; i < targets.length; i++) {
-      if (window.inktable.trashItem) {
-        var res = await window.inktable.trashItem(targets[i]);
-        if (!res || !res.ok) failed += 1;
-      }
+    var result = await window.inktable.trashFile(file.file_id || file.id);
+    if (result && result.cancelled) return;
+    if (!result || !result.ok) {
+      toast('删除失败：' + ((result && result.error) || '未知错误'));
+      return;
     }
-    toast(failed
-      ? '记录已移除，但 ' + failed + ' 个文件移入废纸篓失败'
-      : '已移到废纸篓');
+    toast('已移到废纸篓');
     if (detailPageOpen) showListPage();
     await refreshAfterLibraryChange();
   } catch (e) { toast('删除失败：' + e.message); }
@@ -2490,6 +2588,7 @@ function stopWatchPolling() {
 /* ---------- 设置（通用配置 / 文件来源 / 模型配置） ---------- */
 let settingsTab = 'general';
 let sourcePaneTimer = null;
+let sheetReturnFocus = null;
 const SETTINGS_TABS = [
   ['general', '通用配置'],
   ['sources', '文件来源'],
@@ -2497,14 +2596,23 @@ const SETTINGS_TABS = [
 ];
 
 function sheetOpen(on, tab) {
-  document.getElementById('sheet').classList.toggle('show', on);
+  const sheet = document.getElementById('sheet');
+  if (on && !sheet.classList.contains('show')) sheetReturnFocus = document.activeElement;
+  sheet.classList.toggle('show', on);
+  sheet.setAttribute('aria-hidden', on ? 'false' : 'true');
   if (!on) {
     clearTimeout(sourcePaneTimer);
     closeThemedSelects(true);
   }
   if (on) {
     if (tab) settingsTab = tab;
-    renderSettings();
+    Promise.resolve(renderSettings()).then(function () {
+      const close = document.getElementById('btnClose');
+      if (close) close.focus();
+    });
+  } else if (sheetReturnFocus && typeof sheetReturnFocus.focus === 'function') {
+    sheetReturnFocus.focus();
+    sheetReturnFocus = null;
   }
 }
 
@@ -2628,6 +2736,34 @@ function mountThemedSelect(select) {
   syncBtn();
 }
 
+document.getElementById('sheet').addEventListener('keydown', function (event) {
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    // 先关最内层：下拉开着时 Esc 只收下拉，不顺手把整个设置页也关掉
+    if (document.querySelector('body > .tsel-menu.open')) {
+      closeThemedSelects(false);
+      return;
+    }
+    sheetOpen(false);
+    return;
+  }
+  if (event.key !== 'Tab') return;
+  const focusable = [].slice.call(this.querySelectorAll(
+    'button:not([disabled]), input:not([disabled]), select:not([disabled]), ' +
+    'textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'))
+    .filter(function (el) { return el.getClientRects().length > 0; });
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+});
+
 async function renderSettings() {
   closeThemedSelects(true);
   const body = document.getElementById('sheetBody');
@@ -2637,8 +2773,9 @@ async function renderSettings() {
   document.getElementById('sheetHint').textContent = '';
   body.innerHTML = '<div class="set-layout">' +
     '<nav class="set-nav">' + SETTINGS_TABS.map(function (t) {
-      return '<div class="set-nav-item' + (settingsTab === t[0] ? ' on' : '') +
-        '" data-tab="' + esc(t[0]) + '">' + esc(t[1]) + '</div>';
+      return '<button type="button" class="set-nav-item' +
+        (settingsTab === t[0] ? ' on' : '') + '" data-tab="' +
+        esc(t[0]) + '">' + esc(t[1]) + '</button>';
     }).join('') + '</nav>' +
     '<div class="set-pane" id="setPane"></div></div>';
   body.querySelectorAll('.set-nav-item').forEach(function (it) {
@@ -3064,49 +3201,80 @@ async function renderModelPane(pane) {
   var lib = slots.library || { provider: 'ollama', endpoint: '', model: '', has_key: false };
   var emb = slots.embedding || { provider: 'ollama', endpoint: '', model: '', has_key: false };
 
+  function selectHtml(id, options, current) {
+    return '<select id="' + id + '">' + options.map(function (opt) {
+      return '<option value="' + esc(opt.value) + '"' +
+        (current === opt.value ? ' selected' : '') + '>' +
+        esc(opt.label) + '</option>';
+    }).join('') + '</select>';
+  }
+  function fieldRow(label, desc, control, extra) {
+    extra = extra || {};
+    return '<div class="set-row"' +
+      (extra.id ? ' id="' + extra.id + '"' : '') +
+      (extra.hidden ? ' hidden' : '') + '>' +
+      '<div class="set-info"><div class="set-label">' + label + '</div>' +
+      (desc ? '<div class="set-desc">' + desc + '</div>' : '') +
+      '</div><div class="set-ctl">' + control + '</div></div>';
+  }
+  function sourceOf(provider, slot) {
+    if (provider === 'ollama') return 'ollama';
+    if (provider === 'openai' || provider === 'anthropic' || provider === 'responses') return 'api';
+    return slot === 'qa' ? 'api' : 'ollama';
+  }
+  function protocolOf(provider) {
+    return (provider === 'anthropic' || provider === 'responses') ? provider : 'openai';
+  }
   function sectionHtml(slot, title, desc, cfg, opts) {
-    var fields =
-      '<input id="ep_' + slot + '" placeholder="' + (opts.epPlaceholder || '接口地址，如 https://api.xxx.com/v1') + '" value="' + esc(cfg.endpoint) + '">' +
-      '<input id="model_' + slot + '" placeholder="模型名" value="' + esc(cfg.model) + '">' +
-      (opts.keyed
-        ? '<input id="key_' + slot + '" type="password" placeholder="' +
-          (cfg.has_key ? 'API 密钥（已保存，留空表示不变）' : 'API 密钥') + '">'
-        : '');
+    var source = sourceOf(cfg.provider, slot);
+    var proto = protocolOf(cfg.provider);
+    var api = source === 'api';
+    var rows = '';
+    if (opts.sourceSelect) {
+      rows += fieldRow('来源', opts.sourceDesc || '',
+        selectHtml('src_' + slot, [
+          { value: 'ollama', label: '本地 Ollama' },
+          { value: 'api', label: '云端 / 中转 API' }
+        ], source));
+    }
+    rows += fieldRow('接口地址', '',
+      '<input id="ep_' + slot + '" placeholder="' +
+        esc(opts.epPlaceholder || '接口地址，如 https://api.xxx.com/v1') +
+        '" value="' + esc(cfg.endpoint) + '">');
+    if (opts.protocolSelect) {
+      rows += fieldRow('协议', '',
+        selectHtml('proto_' + slot, [
+          { value: 'openai', label: 'Chat Completions' },
+          { value: 'responses', label: 'Responses' },
+          { value: 'anthropic', label: 'Anthropic Messages' }
+        ], proto), { id: 'protoRow_' + slot, hidden: !api });
+    }
+    if (opts.keyed) {
+      rows += fieldRow('API 密钥',
+        cfg.has_key ? '当前：已保存' : '当前：未填写',
+        '<input id="key_' + slot + '" type="password" placeholder="' +
+          (cfg.has_key ? 'API 密钥（已保存，留空表示不变）' : 'API 密钥') + '">',
+        { id: 'keyRow_' + slot, hidden: opts.sourceSelect && !api });
+    }
+    rows += fieldRow('模型', '',
+      '<input id="model_' + slot + '" placeholder="模型名" value="' + esc(cfg.model) + '">');
     return '<div class="set-section"><div class="set-title">' + title + '</div>' +
       (desc ? '<div class="set-desc" style="margin:2px 0 8px">' + desc + '</div>' : '') +
-      (opts.providerSelect
-        ? (function () {
-            var options = opts.providerOptions || [
-              { value: 'openai', label: (opts.providerLabels && opts.providerLabels.openai) || 'OpenAI 兼容接口（云端 / 中转）' },
-              { value: 'ollama', label: (opts.providerLabels && opts.providerLabels.ollama) || '本地 Ollama' }
-            ];
-            return '<select id="prov_' + slot + '" style="margin-bottom:8px">' +
-              options.map(function (opt) {
-                return '<option value="' + opt.value + '"' +
-                  (cfg.provider === opt.value ? ' selected' : '') + '>' +
-                  opt.label + '</option>';
-              }).join('') + '</select>';
-          })()
-        : '') +
-      '<div class="llm-form">' + fields +
-      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
-      '<button class="mini" id="save_' + slot + '">保存</button>' +
+      '<div class="llm-form">' + rows +
+      '<div class="llm-actions">' +
+      '<span class="hint" id="hint_' + slot + '">' + (opts.hint || '') + '</span>' +
+      '<button class="mini" id="list_' + slot + '">发现模型</button>' +
       '<button class="mini" id="test_' + slot + '">检测连接</button>' +
-      '<button class="mini" id="list_' + slot + '">拉取模型列表</button>' +
       '<button class="mini danger" id="clear_' + slot + '">清除</button>' +
-      '<span class="hint" id="hint_' + slot + '">' + (opts.hint || '') + '</span></div>' +
-      '<div id="listBox_' + slot + '"></div>' +
-      '</div></div>';
+      '<button class="mini" id="save_' + slot + '">保存</button>' +
+      '</div><div id="listBox_' + slot + '"></div></div></div>';
   }
 
   pane.innerHTML =
-    sectionHtml('qa', '知识问答', '先选接口格式：OpenAI 兼容、Anthropic（Claude 中转）或本地 Ollama', qa,
-      { keyed: true, providerSelect: true,
-        providerOptions: [
-          { value: 'openai', label: 'OpenAI 兼容（/chat/completions · 云端/中转）' },
-          { value: 'anthropic', label: 'Anthropic 协议（/messages · Claude 中转）' },
-          { value: 'ollama', label: '本地 Ollama（自动识别模型，免密钥）' }
-        ],
+    sectionHtml('qa', '知识问答',
+      '先选本地或云端，再填写接口地址与模型。云端需选择协议并填写密钥',
+      qa, { keyed: true, sourceSelect: true, protocolSelect: true,
+        sourceDesc: '本地免密钥；云端/中转需填写协议与密钥',
         epPlaceholder: '接口地址，如 https://api.xxx.com/v1',
         hint: llmInfo.configured ? '已保存，检测后即可确认模型可用' : '未配置时问答不可用，其余功能不受影响' }) +
     '<div class="set-section"><div class="set-title">从 cc-switch 导入</div>' +
@@ -3114,24 +3282,35 @@ async function renderModelPane(pane) {
     '点选一项即可填入上方问答表单（填入后仍需保存并检测连接）</div>' +
     '<div id="ccList"><button class="mini" id="ccLoad">读取 cc-switch 配置</button></div></div>' +
     sectionHtml('library', '知识馆整理（摘要 / 卡片 / 标签 / 文档主题摘要）',
-      '支持本地 Ollama 或 OpenAI 兼容接口；选云端即表示允许文档正文发往该服务',
-      lib, { keyed: true, providerSelect: true,
+      '选云端即表示允许文档正文发往该服务',
+      lib, { keyed: true, sourceSelect: true,
+        sourceDesc: '本地 Ollama 或云端 OpenAI 兼容接口',
         epPlaceholder: '接口地址（Ollama 如 ' + defaultOllama + '）' }) +
     sectionHtml('embedding', '向量模型（语义检索 · 本地 Ollama）',
       '嵌入模型输出维度需与向量表 1024 维一致（检测连接会显示维度）；换模型后向量将全量重建',
       emb, { keyed: false, epPlaceholder: 'Ollama 地址，如 ' + defaultOllama });
 
   if (gen !== modelPaneGen) return;
-  mountThemedSelect(document.getElementById('prov_qa'));
-  mountThemedSelect(document.getElementById('prov_library'));
+  ['src_qa', 'proto_qa', 'src_library'].forEach(function (id) {
+    mountThemedSelect(document.getElementById(id));
+  });
   var ccLoad = document.getElementById('ccLoad');
   if (ccLoad) ccLoad.onclick = loadCcswitchProviders;
 
   // ---- 通用槽位行为 ----
   function cfgOf(slot) {
-    var provider = document.getElementById('prov_' + slot)
-      ? document.getElementById('prov_' + slot).value
-      : (slot === 'qa' ? 'openai' : 'ollama');
+    var src = document.getElementById('src_' + slot);
+    var proto = document.getElementById('proto_' + slot);
+    var provider;
+    if (!src) {
+      provider = slot === 'qa' ? 'openai' : 'ollama';
+    } else if (src.value === 'ollama') {
+      provider = 'ollama';
+    } else if (proto) {
+      provider = proto.value || 'openai';
+    } else {
+      provider = 'openai';
+    }
     return {
       slot: slot,
       provider: provider,
@@ -3142,47 +3321,53 @@ async function renderModelPane(pane) {
     };
   }
   function providerOf(slot) {
-    return document.getElementById('prov_' + slot)
-      ? document.getElementById('prov_' + slot).value
-      : (slot === 'qa' ? 'openai' : 'ollama');
+    return cfgOf(slot).provider;
   }
   function setHint(slot, text) {
     var el = document.getElementById('hint_' + slot);
     if (el) el.textContent = text;
   }
 
-  // 接口格式切换：更新占位/密钥可用性；本地 Ollama 自动拉取已装模型列表
-  function applyProviderUi(slot) {
-    var prov = document.getElementById('prov_' + slot);
-    if (!prov) return;
+  // 来源/协议切换：本地隐藏协议与密钥；云端按协议更新地址占位
+  function applySourceUi(slot) {
+    var src = document.getElementById('src_' + slot);
+    if (!src) return;
+    var local = src.value === 'ollama';
     var ep = document.getElementById('ep_' + slot);
     var key = document.getElementById('key_' + slot);
-    if (prov.value === 'ollama') {
+    var protoRow = document.getElementById('protoRow_' + slot);
+    var keyRow = document.getElementById('keyRow_' + slot);
+    var proto = document.getElementById('proto_' + slot);
+    if (protoRow) protoRow.hidden = local;
+    if (keyRow) keyRow.hidden = local;
+    if (local) {
       if (ep && !ep.value) ep.value = defaultOllama;
       if (ep) ep.placeholder = 'Ollama 地址，如 ' + defaultOllama;
       if (key) { key.disabled = true; key.placeholder = '本地 Ollama 无需密钥'; }
       fillModelList(slot, true);
-    } else if (prov.value === 'anthropic') {
-      if (ep) ep.placeholder = 'Anthropic 地址，如 https://api.anthropic.com/v1';
-      if (key) {
-        key.disabled = false;
-        key.placeholder = key.dataset.hasKey === '1' ? 'API 密钥（已保存，留空表示不变）' : 'API 密钥';
-      }
-    } else {
-      if (ep) ep.placeholder = '接口地址，如 https://api.xxx.com/v1';
-      if (key) {
-        key.disabled = false;
-        key.placeholder = key.dataset.hasKey === '1' ? 'API 密钥（已保存，留空表示不变）' : 'API 密钥';
-      }
+      return;
+    }
+    var kind = proto ? proto.value : 'openai';
+    if (ep) {
+      ep.placeholder = kind === 'anthropic'
+        ? 'Anthropic 地址，如 https://api.anthropic.com/v1'
+        : '接口地址，如 https://api.xxx.com/v1';
+    }
+    if (key) {
+      key.disabled = false;
+      key.placeholder = key.dataset.hasKey === '1'
+        ? 'API 密钥（已保存，留空表示不变）' : 'API 密钥';
     }
   }
   ['qa', 'library'].forEach(function (slot) {
-    var prov = document.getElementById('prov_' + slot);
-    if (!prov) return;
+    var src = document.getElementById('src_' + slot);
+    if (!src) return;
     var key = document.getElementById('key_' + slot);
     if (key) key.dataset.hasKey = key.placeholder.indexOf('已保存') >= 0 ? '1' : '0';
-    prov.onchange = function () { applyProviderUi(slot); };
-    if (prov.value === 'ollama') applyProviderUi(slot);
+    src.onchange = function () { applySourceUi(slot); };
+    var proto = document.getElementById('proto_' + slot);
+    if (proto) proto.onchange = function () { applySourceUi(slot); };
+    applySourceUi(slot);
   });
 
   async function fillModelList(slot, auto) {
@@ -3356,10 +3541,15 @@ async function loadCcswitchProviders() {
       if (!p) return;
       markSelected(it);
       var format = p.api_format || (p.openai_native ? 'openai' : 'anthropic');
-      var prov = document.getElementById('prov_qa');
-      if (prov) {
-        prov.value = format;
-        if (typeof prov.onchange === 'function') prov.onchange();
+      var src = document.getElementById('src_qa');
+      if (src) {
+        src.value = 'api';
+        if (typeof src.onchange === 'function') src.onchange();
+      }
+      var proto = document.getElementById('proto_qa');
+      if (proto) {
+        proto.value = format === 'anthropic' ? 'anthropic' : 'openai';
+        if (typeof proto.onchange === 'function') proto.onchange();
       }
       document.getElementById('ep_qa').value = p.endpoint;
       if (p.model) document.getElementById('model_qa').value = p.model;
@@ -3465,14 +3655,14 @@ document.getElementById('querySubmit').onclick = function () {
 document.getElementById('askSubmit').onclick = function () {
   runAsk(document.getElementById('askQ').value);
 };
-/* 回答档位：快速 = 单轮轻量管线（跳过逐条引用校验与重试）；
+/* 回答档位：快速 = 单轮轻量管线（确定性引用校验、无模型重试）；
    深度 = 全量检索 + 逐条引用校验（默认）。选择存 localStorage */
 var qaMode = localStorage.getItem('qaMode') === 'quick' ? 'quick' : 'deep';
 function applyQaMode() {
   document.getElementById('qaModeQuick').classList.toggle('active', qaMode === 'quick');
   document.getElementById('qaModeDeep').classList.toggle('active', qaMode === 'deep');
   document.getElementById('composerHint').textContent = qaMode === 'quick'
-    ? 'Enter 发送 · Shift+Enter 换行 · 快速简洁回答（无引用，引用是深度档的）'
+    ? 'Enter 发送 · Shift+Enter 换行 · 单轮回答（保留确定性引用校验）'
     : 'Enter 发送 · Shift+Enter 换行 · 带可溯源引用（逐条校验）';
   localStorage.setItem('qaMode', qaMode);
 }

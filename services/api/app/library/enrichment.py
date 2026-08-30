@@ -22,8 +22,10 @@ import os
 import re
 import sqlite3
 import time
+import unicodedata
 import urllib.error
 import urllib.request
+import uuid
 from dataclasses import dataclass
 from typing import Callable
 
@@ -38,7 +40,7 @@ from app.library.core import (
 
 PROMPT_VERSION = "library-enrichment-v3"
 DEFAULT_BATCH = 3
-MAX_BATCH = 10
+MAX_BATCH = 20
 LEASE_SECONDS = 15 * 60
 MAX_SUMMARY_CHARS = 800
 MAX_TAGS = 4
@@ -63,6 +65,15 @@ _TIMEOUT = float(os.environ.get("INKTABLE_LIBRARY_TIMEOUT", "120"))
 
 _ALLOWED_LANGUAGES = {"zh", "en", "mixed", "other"}
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.S)
+
+
+def _clean_term(value: object) -> str:
+    """Normalize model vocabulary without changing the user's display case."""
+    return " ".join(unicodedata.normalize("NFKC", str(value or "")).split())
+
+
+def _term_key(value: object) -> str:
+    return _clean_term(value).casefold()
 
 
 class EnrichmentUnavailable(RuntimeError):
@@ -186,7 +197,12 @@ def _document_packet(conn: sqlite3.Connection, claim: EnrichmentClaim) -> dict |
 
 
 def _norm_tag(name: str) -> str:
-    return _TAG_NOISE.sub("", (name or "").strip().casefold())
+    """折叠键：NFKC + casefold 之后再去掉空格/连字符/点等噪声字符。
+
+    比 `_term_key` 更狠一档，专门用来认出「机器学习 / 机器-学习 / 机器 学习」
+    是同一个标签 —— 这三个字符串按名 INSERT OR IGNORE 是认不出来的。
+    """
+    return _TAG_NOISE.sub("", _term_key(name))
 
 
 def _is_generic_tag(name: str) -> bool:
@@ -319,12 +335,12 @@ def _parse_result(raw: str, categories: list[dict], tags: list[dict]) -> dict:
                 if len(tag_ids) >= MAX_TAGS:
                     break
 
-    # 新建分类/标签：解析只做长度与批内去重；**与现有词表同名不在这里
-    # 丢弃** —— apply 阶段按名 INSERT OR IGNORE + SELECT，天然折算回
-    # 现有条目（那里才拿得到 id）。
+    # 新建分类：解析只做长度与批内去重，同名折算留给 apply 阶段（那里才拿得到
+    # id）。新建标签则在这里就按 _norm_tag 折回提示词里的现有标签 —— 「机器学习」
+    # 与「机器 学习」按名 INSERT OR IGNORE 认不出是同一个，那正是标签灌水的来源。
     new_category = None
-    raw_new_category = str(data.get("new_category") or "").strip()
-    if raw_new_category and len(raw_new_category) <= 24:
+    raw_new_category = _clean_term(data.get("new_category"))
+    if raw_new_category and len(raw_new_category) <= 12:
         new_category = raw_new_category
 
     new_tags: list[str] = []
@@ -333,8 +349,8 @@ def _parse_result(raw: str, categories: list[dict], tags: list[dict]) -> dict:
     raw_new_tags = data.get("new_tags")
     if isinstance(raw_new_tags, list):
         for value in raw_new_tags:
-            name = str(value or "").strip()
-            if not name or len(name) > 16 or _is_generic_tag(name):
+            name = _clean_term(value)
+            if not name or len(name) > 8 or _is_generic_tag(name):
                 continue
             folded = by_norm.get(_norm_tag(name))
             if folded:
@@ -361,16 +377,87 @@ def _parse_result(raw: str, categories: list[dict], tags: list[dict]) -> dict:
     }
 
 
+def _run_payload(row: sqlite3.Row) -> dict:
+    return {
+        "id": str(row["id"]),
+        "status": str(row["status"]),
+        "include_failed": bool(row["include_failed"]),
+        "cancel_requested": bool(row["cancel_requested"]),
+        "claimed": int(row["claimed_count"]),
+        "ready": int(row["ready_count"]),
+        "failed": int(row["failed_count"]),
+        "stale": int(row["stale_count"]),
+        "created_at": float(row["created_at"]),
+        "updated_at": float(row["updated_at"]),
+    }
+
+
+def create_enrichment_run(
+    conn: sqlite3.Connection,
+    *,
+    include_failed: bool = False,
+    now: float | None = None,
+) -> dict:
+    """Create one durable user action; each item can be attempted once in it."""
+    ts = time.time() if now is None else float(now)
+    run_id = str(uuid.uuid4())
+    conn.execute(
+        """INSERT INTO library_enrichment_runs
+           (id, include_failed, created_at, updated_at)
+           VALUES (?, ?, ?, ?)""",
+        (run_id, int(include_failed), ts, ts),
+    )
+    return enrichment_run(conn, run_id)
+
+
+def enrichment_run(conn: sqlite3.Connection, run_id: str) -> dict:
+    row = conn.execute(
+        "SELECT * FROM library_enrichment_runs WHERE id=?", (run_id,)
+    ).fetchone()
+    if row is None:
+        raise KeyError(run_id)
+    return _run_payload(row)
+
+
+def cancel_enrichment_run(
+    conn: sqlite3.Connection,
+    run_id: str,
+    *,
+    now: float | None = None,
+) -> dict:
+    """Prevent another batch from being claimed; current calls finish safely."""
+    ts = time.time() if now is None else float(now)
+    cursor = conn.execute(
+        """UPDATE library_enrichment_runs
+           SET cancel_requested=1,
+               status=CASE WHEN status='completed' THEN status ELSE 'cancelled' END,
+               updated_at=?
+           WHERE id=?""",
+        (ts, run_id),
+    )
+    if cursor.rowcount != 1:
+        raise KeyError(run_id)
+    return enrichment_run(conn, run_id)
+
+
 def claim_items(
     conn: sqlite3.Connection,
     *,
     limit: int = DEFAULT_BATCH,
     now: float | None = None,
     lease_seconds: float = LEASE_SECONDS,
+    include_failed: bool = False,
+    run_id: str | None = None,
 ) -> list[EnrichmentClaim]:
     """Claim visible indexed items for a short-lived enrichment lease."""
     ts = time.time() if now is None else float(now)
     limit = max(1, min(int(limit), MAX_BATCH))
+
+    if run_id is not None:
+        run = enrichment_run(conn, run_id)
+        if run["status"] != "running" or run["cancel_requested"]:
+            return []
+        include_failed = bool(run["include_failed"])
 
     # Make newly indexed contents visible to this worker and mark reindexed
     # documents stale before claiming anything.
@@ -388,11 +475,16 @@ def claim_items(
                     AND length(trim(dr.full_text)) > 0
               )
               AND (
-                  li.enrichment_status IN ('pending', 'stale', 'failed')
+                  li.enrichment_status IN ('pending', 'stale')
+                  OR (? = 1 AND li.enrichment_status = 'failed')
                   OR (li.enrichment_status = 'ready'
                       AND COALESCE(li.prompt_version, '') != ?)
                   OR (li.enrichment_status = 'running' AND li.updated_at <= ?)
               )
+              AND (? IS NULL OR NOT EXISTS (
+                  SELECT 1 FROM library_enrichment_run_items ri
+                  WHERE ri.run_id = ? AND ri.item_id = li.id
+              ))
             ORDER BY
               CASE li.enrichment_status
                 WHEN 'stale' THEN 0
@@ -403,7 +495,8 @@ def claim_items(
               END,
               li.updated_at, li.id
             LIMIT ?""",
-        (PROMPT_VERSION, ts - lease_seconds, limit),
+        (int(include_failed), PROMPT_VERSION, ts - lease_seconds,
+         run_id, run_id, limit),
     ).fetchall()
 
     claims: list[EnrichmentClaim] = []
@@ -414,12 +507,25 @@ def claim_items(
                WHERE id=?""",
             (ts, row["id"]),
         )
+        if run_id is not None:
+            conn.execute(
+                """INSERT INTO library_enrichment_run_items
+                   (run_id, item_id, outcome, updated_at)
+                   VALUES (?, ?, 'running', ?)""",
+                (run_id, row["id"], ts),
+            )
         claims.append(EnrichmentClaim(
             item_id=int(row["id"]),
             content_id=int(row["content_id"]),
             title=str(row["title"] or ""),
             input_hash=str(row["input_hash"]),
         ))
+    if run_id is not None and claims:
+        conn.execute(
+            """UPDATE library_enrichment_runs
+               SET claimed_count=claimed_count+?, updated_at=? WHERE id=?""",
+            (len(claims), ts, run_id),
+        )
     return claims
 
 
@@ -476,19 +582,27 @@ def _apply_success(
 
     # 模型提议的新分类：写锁内创建（幂等）。模型在飞期间别人可能已建了
     # 同名分类 —— 按名取 existing，避免重复。
-    new_category_name = str(result.get("new_category") or "").strip()
+    new_category_name = _clean_term(result.get("new_category"))
     if new_category_name and category_id is None:
-        # categories.name 没有唯一约束 —— 必须先查后插（写锁内，无竞态），
-        # 同名分类天然折算回已有 id
-        row = conn.execute(
-            "SELECT id FROM categories WHERE name = ?", (new_category_name,)
-        ).fetchone()
+        # AI-created categories are root categories. NFKC/casefold matching
+        # folds visual/case variants into an existing root without accidentally
+        # selecting a same-named child from another branch.
+        row = next(
+            (
+                candidate
+                for candidate in conn.execute(
+                    "SELECT id, name FROM categories WHERE parent_id IS NULL ORDER BY id"
+                ).fetchall()
+                if _term_key(candidate["name"]) == _term_key(new_category_name)
+            ),
+            None,
+        )
         if row is None:
             conn.execute(
                 "INSERT INTO categories(name, sort_order) VALUES (?, 0)",
                 (new_category_name,))
             row = conn.execute(
-                "SELECT id FROM categories WHERE name = ?", (new_category_name,)
+                "SELECT id FROM categories WHERE rowid=last_insert_rowid()"
             ).fetchone()
         category_id = int(row["id"]) if row else None
 
@@ -517,7 +631,7 @@ def _apply_success(
     for name in result.get("new_tags") or []:
         if len(tag_ids) >= MAX_TAGS:
             break
-        clean = str(name or "").strip()
+        clean = _clean_term(name)
         if not clean or _is_generic_tag(clean):
             continue
         folded = existing_by_norm.get(_norm_tag(clean))
@@ -527,8 +641,21 @@ def _apply_success(
             continue
         if vocab_size >= NEW_TAG_VOCAB_CAP:
             continue
-        conn.execute("INSERT OR IGNORE INTO tags(name) VALUES (?)", (clean,))
-        row = conn.execute("SELECT id FROM tags WHERE name = ?", (clean,)).fetchone()
+        row = next(
+            (
+                candidate
+                for candidate in conn.execute(
+                    "SELECT id, name FROM tags ORDER BY id"
+                ).fetchall()
+                if _term_key(candidate["name"]) == _term_key(clean)
+            ),
+            None,
+        )
+        if row is None:
+            conn.execute("INSERT OR IGNORE INTO tags(name) VALUES (?)", (clean,))
+            row = conn.execute(
+                "SELECT id FROM tags WHERE name = ? ORDER BY id LIMIT 1", (clean,)
+            ).fetchone()
         if row and int(row["id"]) not in tag_ids:
             tag_ids.append(int(row["id"]))
             existing_by_norm[_norm_tag(clean)] = int(row["id"])
@@ -572,6 +699,59 @@ def _concurrency(provider: str) -> int:
     return 4 if provider == "openai" else 1
 
 
+def _record_run_outcome(
+    conn: sqlite3.Connection,
+    run_id: str | None,
+    claim: EnrichmentClaim,
+    outcome: str,
+    *,
+    error: str | None = None,
+    now: float | None = None,
+) -> None:
+    if run_id is None:
+        return
+    columns = {
+        "ready": "ready_count",
+        "failed": "failed_count",
+        "stale": "stale_count",
+    }
+    column = columns[outcome]
+    ts = time.time() if now is None else float(now)
+    conn.execute(
+        """UPDATE library_enrichment_run_items
+           SET outcome=?, error=?, updated_at=?
+           WHERE run_id=? AND item_id=?""",
+        (outcome, str(error)[:500] if error else None, ts, run_id, claim.item_id),
+    )
+    conn.execute(
+        f"""UPDATE library_enrichment_runs
+            SET {column}={column}+1, updated_at=? WHERE id=?""",
+        (ts, run_id),
+    )
+
+
+def _complete_empty_run(
+    conn: sqlite3.Connection,
+    run_id: str | None,
+    *,
+    now: float | None = None,
+) -> dict | None:
+    if run_id is None:
+        return None
+    ts = time.time() if now is None else float(now)
+    conn.execute(
+        """UPDATE library_enrichment_runs
+           SET status=CASE
+                 WHEN cancel_requested=1 THEN 'cancelled'
+                 ELSE 'completed'
+               END,
+               updated_at=?
+           WHERE id=? AND status='running'""",
+        (ts, run_id),
+    )
+    return enrichment_run(conn, run_id)
+
+
 def run_enrichment_batch(
     db_provider: Callable[[], sqlite3.Connection],
     write_lock,
@@ -579,6 +759,8 @@ def run_enrichment_batch(
     limit: int = DEFAULT_BATCH,
     generate_fn: Callable[[str], str] | None = None,
     model: str | None = None,
+    include_failed: bool = False,
+    run_id: str | None = None,
 ) -> dict:
     """Run a bounded, resumable enrichment batch.
 
@@ -596,6 +778,7 @@ def run_enrichment_batch(
                 "provider": cfg["provider"],
                 "model": cfg["model"],
                 "prompt_version": PROMPT_VERSION,
+                "run_id": run_id,
                 "claimed": 0,
                 "ready": 0,
                 "failed": 0,
@@ -609,7 +792,13 @@ def run_enrichment_batch(
     with write_lock:
         conn = db_provider()
         try:
-            claims = claim_items(conn, limit=limit)
+            claims = claim_items(
+                conn,
+                limit=limit,
+                include_failed=include_failed,
+                run_id=run_id,
+            )
+            run_state = _complete_empty_run(conn, run_id) if not claims else None
             conn.commit()
         except Exception:
             conn.rollback()
@@ -644,6 +833,9 @@ def run_enrichment_batch(
                 conn = db_provider()
                 try:
                     outcome = _apply_failure(conn, claim, error)
+                    _record_run_outcome(
+                        conn, run_id, claim, outcome, error=error,
+                    )
                     conn.commit()
                 except Exception:
                     conn.rollback()
@@ -657,17 +849,25 @@ def run_enrichment_batch(
                 outcome = _apply_success(
                     conn, claim, parsed, model=active_model,
                 )
+                _record_run_outcome(conn, run_id, claim, outcome)
                 conn.commit()
             except Exception:
                 conn.rollback()
                 raise
         counters[outcome] += 1
 
+    if run_id is not None and claims:
+        with write_lock:
+            conn = db_provider()
+            run_state = enrichment_run(conn, run_id)
+
     return {
         "available": True,
         "provider": "injected" if model is not None else cfg["provider"],
         "model": active_model,
         "prompt_version": PROMPT_VERSION,
+        "run_id": run_id,
+        "run_status": run_state["status"] if run_state else None,
         "claimed": len(claims),
         **counters,
     }

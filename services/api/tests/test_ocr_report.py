@@ -105,6 +105,43 @@ def test_retry_scanned_requeues_and_indexes(client, tmp_path, monkeypatch):
     assert client.post("/index/retry_scanned", headers=H).json()["requeued"] == 0
 
 
+def test_retry_scanned_re_registers_hash_failed_file(client, tmp_path):
+    """A real hash_failed row must execute the scanner retry path, not 500."""
+    import sqlite3
+
+    source = tmp_path / "src"
+    source.mkdir()
+    document = source / "可恢复.md"
+    document.write_text("哈希读取恢复后的知识正文。", encoding="utf-8")
+    client.post(
+        "/sources/enable",
+        headers=H,
+        json={"name": "S", "path": str(source)},
+    )
+
+    raw = sqlite3.connect(tmp_path / "t.db")
+    raw.execute(
+        "UPDATE files SET state = 'failed', error_code = 'hash_failed' WHERE path = ?",
+        (str(document),),
+    )
+    raw.commit()
+    raw.close()
+
+    result = client.post("/index/retry_scanned", headers=H)
+    assert result.status_code == 200
+    assert result.json()["hash_retried"] == 1
+    assert result.json()["hash_recovered"] == 1
+    assert result.json()["hash_failed"] == 0
+
+    raw = sqlite3.connect(tmp_path / "t.db")
+    state, error_code = raw.execute(
+        "SELECT state, error_code FROM files WHERE path = ?", (str(document),)
+    ).fetchone()
+    raw.close()
+    assert state != "failed"
+    assert error_code is None
+
+
 def test_qa_answer_length_setting(client):
     """回答长度档位：默认 auto；可设数字；非法值拒绝。"""
     assert client.get("/settings/qa", headers=H).json()["answer_max_tokens"] == "auto"

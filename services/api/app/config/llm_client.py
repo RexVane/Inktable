@@ -16,7 +16,16 @@ import time
 import urllib.error
 import urllib.request
 
+from app.config.endpoints import (
+    EndpointPolicyError,
+    normalize_model_endpoint,
+    open_model_request,
+)
+
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.S)
+MAX_JSON_RESPONSE_BYTES = 4 * 1024 * 1024
+MAX_MODELS = 10_000
+MAX_MODEL_ID_CHARS = 512
 
 
 class LLMClientError(RuntimeError):
@@ -43,8 +52,11 @@ def _request(url: str, payload: dict | None, *, headers: dict | None = None,
         method="POST" if payload is not None else "GET",
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+        with open_model_request(req, timeout=timeout) as resp:
+            raw = resp.read(MAX_JSON_RESPONSE_BYTES + 1)
+            if len(raw) > MAX_JSON_RESPONSE_BYTES:
+                raise LLMClientError("模型服务响应过大")
+            return json.loads(raw.decode("utf-8"))
     except urllib.error.HTTPError as exc:
         detail = ""
         try:
@@ -52,6 +64,8 @@ def _request(url: str, payload: dict | None, *, headers: dict | None = None,
         except Exception:  # noqa: BLE001
             pass
         raise LLMClientError(f"HTTP {exc.code}：{detail or exc.reason}") from exc
+    except EndpointPolicyError as exc:
+        raise LLMClientError(str(exc)) from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise LLMClientError(f"连接失败：{exc}") from exc
     except json.JSONDecodeError as exc:
@@ -112,7 +126,11 @@ def probe_chat(cfg: dict, timeout: float = 15.0) -> dict:
 def list_models(*, provider: str, endpoint: str, api_key: str = "",
                 timeout: float = 10.0) -> list[str]:
     """拉取可选模型名。openai/anthropic 走 /models，ollama 走 /api/tags。"""
-    if provider in {"openai", "anthropic"}:
+    try:
+        endpoint = normalize_model_endpoint(endpoint)
+    except EndpointPolicyError as exc:
+        raise LLMClientError(str(exc)) from exc
+    if provider in {"openai", "anthropic", "responses"}:
         if provider == "anthropic":
             headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01",
                        "Authorization": f"Bearer {api_key}"} if api_key else {}
@@ -123,13 +141,17 @@ def list_models(*, provider: str, endpoint: str, api_key: str = "",
         entries = data.get("data") if isinstance(data, dict) else data
         if not isinstance(entries, list):
             raise LLMClientError("响应缺少 models 列表")
-        names = [str(e.get("id") or "") for e in entries
+        if len(entries) > MAX_MODELS:
+            raise LLMClientError("模型列表数量超过上限")
+        names = [str(e.get("id") or "")[:MAX_MODEL_ID_CHARS] for e in entries
                  if isinstance(e, dict) and e.get("id")]
     else:
         data = _request(f"{endpoint}/api/tags", None, timeout=timeout)
         models = data.get("models") if isinstance(data, dict) else None
         if not isinstance(models, list):
             raise LLMClientError("响应缺少 models 列表")
-        names = [str(m.get("name") or "") for m in models
+        if len(models) > MAX_MODELS:
+            raise LLMClientError("模型列表数量超过上限")
+        names = [str(m.get("name") or "")[:MAX_MODEL_ID_CHARS] for m in models
                  if isinstance(m, dict) and m.get("name")]
     return sorted(dict.fromkeys(names))

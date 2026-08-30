@@ -482,7 +482,7 @@ def test_answer_length_setting_applies(db, scripted):
 
 
 def test_general_question_routes_past_kb(db, scripted):
-    """通用问题（寒暄/常识/写作）→ 模型带内声明通用路由，自然回答不拒答。"""
+    """明确寒暄在检索前本地分流，不把个人文件片段发给模型。"""
     scripted("【通用】你好！我可以帮你检索本地文件、总结资料，也能回答一般问题。")
     a = ask(db, "你好，你能做什么？")
     assert a.status == "answered"
@@ -491,6 +491,28 @@ def test_general_question_routes_past_kb(db, scripted):
     assert "你好" in a.answer
     assert "【通用】" not in a.answer, "路由标记不能泄漏到答案里"
     assert a.validation["mode"] == "general"
+    assert a.validation["route"] == "local_general"
+    assert a.validation["personal_files_sent"] is False
+    assert a.used_personal_files is False
+    assert a.trace["route"] == "local_general"
+    sent = json.dumps(_FakeLLM.seen[-1]["messages"], ensure_ascii=False)
+    assert "汝窑" not in sent and "两淮盐政" not in sent
+
+
+def test_self_contained_translation_skips_retrieval(db, scripted, monkeypatch):
+    scripted("The build completed successfully.")
+    monkeypatch.setattr(
+        answer_module,
+        "retrieve_context",
+        lambda *_args, **_kwargs: pytest.fail("general transform must not retrieve"),
+    )
+
+    result = ask(db, "请翻译成英文：构建已成功完成。")
+
+    assert result.status == "answered"
+    assert result.mode == "general"
+    assert result.answer == "The build completed successfully."
+    assert result.used_personal_files is False
 
 
 def test_explicit_knowledge_scope_rejects_general_route(db, scripted):
@@ -764,18 +786,19 @@ def _verifier_counter(monkeypatch):
     return calls
 
 
-def test_quick_mode_is_concise_without_citations(db, scripted, monkeypatch):
-    """快速档契约 = 简洁回答、无引用：引用标记被剥离、蕴含校验零调用。"""
+def test_quick_mode_is_concise_with_deterministic_citations(db, scripted, monkeypatch):
+    """快速档保留引用和本地支持检查，但不增加第二次模型调用。"""
     scripted("汝窑的烧成温度在一千二百度上下 [C1]。")
     calls = _verifier_counter(monkeypatch)
     a = ask(db, "汝窑的烧成温度是多少", qa_mode="quick")
 
     assert a.status == "answered"
-    assert "[C1]" not in a.answer
+    assert "[C1]" in a.answer
     assert "烧成温度" in a.answer
-    assert a.citations == []
+    assert a.citations and a.citations[0]["file_name"] == "瓷器.txt"
     assert a.validation["qa_mode"] == "quick"
-    assert a.validation["support_check"] == "skipped_quick"
+    assert a.validation["support_check"] == "deterministic_quick"
+    assert a.validation["unsupported_claims"] == 0
     assert calls["n"] == 0
     assert len(_FakeLLM.seen) == 1
 
@@ -801,13 +824,15 @@ def test_quick_mode_falls_back_without_retry(db, scripted):
     assert len(_FakeLLM.seen) == 1
 
 
-def test_quick_mode_passes_uncited_answer_through(db, scripted):
-    """快速档不做引用仪式：模型的无引用回答按原文透传（契约即"快"）。"""
+def test_quick_mode_rejects_unsupported_uncited_answer(db, scripted):
+    """快速档仍只有一轮，但无证据自由发挥只能降级为检索片段。"""
     scripted("一段自由发挥、与检索证据毫无重叠的泛泛回答。")
     a = ask(db, "汝窑的烧成温度是多少", qa_mode="quick")
 
-    assert a.status == "answered"
-    assert a.citations == []
+    assert a.status == "fallback"
+    assert a.answer is None
+    assert a.retrieved
+    assert a.validation["support_check"] == "deterministic_quick"
     assert len(_FakeLLM.seen) == 1
 
 
@@ -877,6 +902,104 @@ def test_ollama_provider_keyless_with_v1_url(fake_server):
     assert text == "确认"
     assert _FakeLLM.seen[0]["path"].endswith("/v1/chat/completions")
     assert _FakeLLM.seen[0]["auth"] == ""
+
+
+class _ProtocolLLM(BaseHTTPRequestHandler):
+    """按请求路径回对应协议的最小合法响应，并记下请求体。"""
+
+    last: dict = {}
+    reply = "确认"
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        type(self).last = {
+            "path": self.path,
+            "auth": self.headers.get("Authorization", ""),
+            "x_api_key": self.headers.get("x-api-key", ""),
+            "version": self.headers.get("anthropic-version", ""),
+            "body": body,
+        }
+        if self.path.endswith("/messages"):
+            payload = {"content": [{"type": "text", "text": self.reply}]}
+        elif self.path.endswith("/responses"):
+            payload = {
+                "output_text": self.reply,
+                "output": [{
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": self.reply}],
+                }],
+            }
+        else:
+            payload = {"choices": [{"message": {"role": "assistant", "content": self.reply}}]}
+        resp = json.dumps(payload).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(resp)))
+        self.end_headers()
+        self.wfile.write(resp)
+
+    def log_message(self, *a):
+        pass
+
+
+@pytest.fixture
+def protocol_server():
+    srv = HTTPServer(("127.0.0.1", 0), _ProtocolLLM)
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    _ProtocolLLM.last = {}
+    yield f"http://127.0.0.1:{srv.server_port}/v1"
+    srv.shutdown()
+
+
+def test_unknown_provider_is_rejected():
+    with pytest.raises(llm.LLMError, match="未知模型服务类型"):
+        llm.configure("http://127.0.0.1:9/v1", "sk", "m", provider="mystery")
+
+
+def test_cloud_protocols_require_api_key():
+    for provider in ("openai", "anthropic", "responses"):
+        with pytest.raises(llm.LLMError, match="API 密钥"):
+            llm.configure("http://127.0.0.1:9/v1", "", "m", provider=provider)
+
+
+def test_anthropic_provider_posts_messages(protocol_server):
+    llm.configure(protocol_server, "sk-ant", "claude", provider="anthropic")
+    try:
+        text = llm.chat(
+            [{"role": "system", "content": "简洁"},
+             {"role": "user", "content": "hi"}],
+            max_tokens=8, timeout=5)
+    finally:
+        llm.configure("", "", "")
+
+    assert text == "确认"
+    seen = _ProtocolLLM.last
+    assert seen["path"].endswith("/v1/messages")
+    assert seen["x_api_key"] == "sk-ant"
+    assert seen["version"] == "2023-06-01"
+    assert seen["body"]["system"] == "简洁"
+    assert seen["body"]["messages"] == [{"role": "user", "content": "hi"}]
+
+
+def test_responses_provider_posts_responses(protocol_server):
+    llm.configure(protocol_server, "sk-resp", "gpt", provider="responses")
+    try:
+        text = llm.chat(
+            [{"role": "system", "content": "简洁"},
+             {"role": "user", "content": "hi"}],
+            max_tokens=16, timeout=5)
+    finally:
+        llm.configure("", "", "")
+
+    assert text == "确认"
+    seen = _ProtocolLLM.last
+    assert seen["path"].endswith("/v1/responses")
+    assert seen["auth"] == "Bearer sk-resp"
+    assert seen["body"]["instructions"] == "简洁"
+    assert seen["body"]["input"] == [{"role": "user", "content": "hi"}]
+    assert seen["body"]["max_output_tokens"] == 16
+    assert "messages" not in seen["body"]
 
 
 def test_condense_adapts_to_reasoning_models(db, scripted):

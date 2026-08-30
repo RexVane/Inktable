@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import sqlite3
-import sys
 from pathlib import Path
 
 REAL = Path.home() / "Library" / "Application Support" / "Inktable" / "library.db"

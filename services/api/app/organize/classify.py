@@ -17,6 +17,8 @@ import fnmatch
 import sqlite3
 import time
 
+from app.db.visibility import VISIBLE_FILES_COND
+
 AUTO_EXT_ROOT = "按扩展名"
 AUTO_EXT_CONFIDENCE = 0.66
 AUTO_EXT_RULE_PRIORITY = 900
@@ -78,11 +80,11 @@ def category_tree(conn: sqlite3.Connection) -> list[dict]:
     计数只含可见文件：停用来源的文件不计入（与 /stats、/files 同口径）。
     """
     rows = conn.execute(
-        """SELECT c.id, c.parent_id, c.name, c.sort_order,
+        f"""SELECT c.id, c.parent_id, c.name, c.sort_order,
                   (SELECT count(*) FROM files f
                    LEFT JOIN sources s ON s.id = f.source_id
-                   WHERE f.category_id = c.id AND f.state != 'missing'
-                     AND (f.source_id IS NULL OR s.enabled = 1)) AS file_count
+                   WHERE f.category_id = c.id
+                     AND {VISIBLE_FILES_COND}) AS file_count
            FROM categories c ORDER BY c.sort_order, c.name"""
     ).fetchall()
     by_parent: dict[int | None, list] = {}
@@ -127,7 +129,10 @@ def assign_category(
     n = 0
     for fid in file_ids:
         old = conn.execute(
-            "SELECT category_id FROM files WHERE id = ?", (fid,)
+            f"""SELECT f.category_id FROM files f
+                LEFT JOIN sources s ON s.id = f.source_id
+                WHERE f.id = ? AND {VISIBLE_FILES_COND}""",
+            (fid,),
         ).fetchone()
         if old is None:
             continue
@@ -215,8 +220,10 @@ def backfill_rule(conn: sqlite3.Connection, rule_id: int) -> int:
     if r is None:
         raise CategoryError("规则不存在")
     rows = conn.execute(
-        "SELECT id, name, ext, source_id FROM files "
-        "WHERE category_id IS NULL AND confirmed_by_user = 0"
+        f"""SELECT f.id, f.name, f.ext, f.source_id FROM files f
+            LEFT JOIN sources s ON s.id = f.source_id
+            WHERE f.category_id IS NULL AND f.confirmed_by_user = 0
+              AND {VISIBLE_FILES_COND}"""
     ).fetchall()
     ext = (r["match_ext"] or "").lower()
     hit_ids = []
@@ -278,8 +285,10 @@ def _ensure_global_ext_rule(
 def auto_classify_by_ext(conn: sqlite3.Connection) -> dict:
     """默认自动分类：把未分类文件按扩展名归入分类，不覆盖用户手工结果。"""
     rows = conn.execute(
-        "SELECT id, ext FROM files "
-        "WHERE state != 'missing' AND category_id IS NULL AND confirmed_by_user = 0"
+        f"""SELECT f.id, f.ext FROM files f
+            LEFT JOIN sources s ON s.id = f.source_id
+            WHERE f.category_id IS NULL AND f.confirmed_by_user = 0
+              AND {VISIBLE_FILES_COND}"""
     ).fetchall()
     if not rows:
         return {"classified": 0, "groups": 0, "categories_created": 0, "rules_created": 0}

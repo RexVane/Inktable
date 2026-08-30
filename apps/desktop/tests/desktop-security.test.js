@@ -54,6 +54,21 @@ test('inkdoc scheme allows fetch from the file:// renderer', () => {
   assert.match(main, /supportFetchAPI: true/);
 });
 
+test('core workbench controls expose keyboard and assistive semantics', () => {
+  assert.match(renderer, /id="splitNav"[\s\S]*?tabindex="0"[\s\S]*?aria-valuenow="214"/);
+  assert.match(renderer, /id="splitQa"[\s\S]*?tabindex="0"[\s\S]*?aria-valuenow="330"/);
+  assert.match(renderer, /resizeWithKeyboard/);
+  assert.match(renderer, /id="toast" role="status" aria-live="polite"/);
+  assert.match(renderer, /id="sheet" role="dialog" aria-modal="true"/);
+  assert.match(renderer, /sheetReturnFocus/);
+  assert.match(renderer, /event\.key === 'Escape'/);
+  assert.match(renderer, /aria-label="知识问答输入"/);
+  assert.doesNotMatch(renderer, /快速简洁回答：不带引用/);
+  assert.match(renderer, /保留确定性引用校验/);
+  assert.match(fs.readFileSync(path.join(desktopRoot, 'renderer', 'workbench.css'), 'utf8'),
+    /prefers-reduced-motion: reduce/);
+});
+
 test('every inline script is CSP-hash declared, with no stale hashes', () => {
   const policy = renderer.match(/http-equiv="Content-Security-Policy" content="([^"]+)"/);
   assert.ok(policy, 'renderer must declare a Content Security Policy');
@@ -144,6 +159,10 @@ function rendererRequests() {
     ['/library/relations/status', 'GET'],
     ['/library/sync', 'POST'],
     ['/library/enrich?limit=3', 'POST'],
+    ['/library/enrichment/runs', 'POST'],
+    ['/library/enrichment/runs?retry_failed=true', 'POST'],
+    ['/library/enrichment/runs/123e4567-e89b-12d3-a456-426614174000/step?limit=20', 'POST'],
+    ['/library/enrichment/runs/123e4567-e89b-12d3-a456-426614174000/cancel', 'POST'],
     ['/library/relations/rebuild?limit=1000&top_k=8&min_score=0.6&chunks_per_item=16', 'POST'],
   ];
 }
@@ -194,6 +213,11 @@ test('library proxy routes are admitted by exact method and resource shape', () 
     ['GET', '/library/relations/status'],
     ['POST', '/library/sync'],
     ['POST', '/library/enrich?limit=3'],
+    ['POST', '/library/enrichment/runs'],
+    ['POST', '/library/enrichment/runs?retry_failed=true'],
+    ['GET', '/library/enrichment/runs/123e4567-e89b-12d3-a456-426614174000'],
+    ['POST', '/library/enrichment/runs/123e4567-e89b-12d3-a456-426614174000/step?limit=20'],
+    ['POST', '/library/enrichment/runs/123e4567-e89b-12d3-a456-426614174000/cancel'],
     ['POST', '/library/relations/rebuild?limit=1000&top_k=8&min_score=0.6&chunks_per_item=16'],
   ];
   for (const [method, requestPath] of admitted) {
@@ -213,6 +237,9 @@ test('library proxy routes are admitted by exact method and resource shape', () 
     ['GET', '/library/items?offset=0&limit=36'],
     ['POST', '/library/sync?force=true'],
     ['POST', '/library/enrich?limit=3&provider=cloud'],
+    ['POST', '/library/enrichment/runs?retry_failed=false'],
+    ['POST', '/library/enrichment/runs/not-a-uuid/cancel'],
+    ['POST', '/library/enrichment/runs/123e4567-e89b-12d3-a456-426614174000/step?limit=20&provider=cloud'],
     ['POST', '/library/relations/rebuild?limit=1000'],
     ['POST', '/library/relations/rebuild/force'],
     ['DELETE', '/library/items/42'],
@@ -294,7 +321,15 @@ test('main process has single-instance, key-clear, and timeout cleanup guards', 
   assert.match(main, /safeStorage\.isEncryptionAvailable\(\)/);
   assert.match(main, /authorizeShellPath/);
   assert.match(main, /\/files\/authorize_path/);
-  assert.match(main, /if \(!await authorizeShellPath\(filePath, 'trash'\)\)/);
+  assert.match(main, /ipcMain\.handle\('file:trash-by-id'/);
+  assert.match(main, /trashFileById/);
+  assert.doesNotMatch(main, /ipcMain\.handle\('shell:trash'/);
+  assert.doesNotMatch(rendererScripts, /trashItem\(/);
+  assert.match(main, /env\.INKTABLE_DATA_DIR = currentDataDir\(\)/);
+  assert.match(main, /copyDataDirectory/);
+  assert.match(main, /\/db\/integrity_check/);
+  assert.match(main, /writeJsonAtomic\(dataDirConfigPath\(\)/);
+  assert.doesNotMatch(main, /fs\.rmSync\(oldDir/);
 });
 
 test('development and packaged sidecar launch modes stay separated', () => {

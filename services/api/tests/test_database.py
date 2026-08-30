@@ -6,6 +6,7 @@ import os
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -93,6 +94,29 @@ def test_connect_readonly_cannot_write_and_sets_no_journal_mode(tmp_path) -> Non
             reader.execute("INSERT INTO settings(key, value) VALUES ('x', 'y')")
     finally:
         reader.close()
+
+
+def test_default_data_directory_is_native_and_separate_from_control_root(
+    tmp_path, monkeypatch,
+) -> None:
+    monkeypatch.delenv("INKTABLE_DATA_DIR", raising=False)
+    monkeypatch.delenv("APPDATA", raising=False)
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    monkeypatch.setattr(database.Path, "home", lambda: tmp_path)
+
+    monkeypatch.setattr(database.sys, "platform", "darwin")
+    assert database._resolve_app_dir() == (
+        tmp_path / "Library" / "Application Support" / "Inktable" / "data"
+    )
+    monkeypatch.setattr(database.sys, "platform", "win32")
+    assert database._resolve_app_dir() == tmp_path / "AppData" / "Roaming" / "Inktable" / "data"
+    monkeypatch.setattr(database.sys, "platform", "linux")
+    assert database._resolve_app_dir() == tmp_path / ".local" / "share" / "Inktable"
+
+    legacy = tmp_path / "Library" / "Application Support" / "Inktable"
+    legacy.mkdir(parents=True)
+    (legacy / "library.db").write_bytes(b"existing")
+    assert database._resolve_app_dir() == legacy
 
 
 def test_self_referencing_fk_columns_are_indexed() -> None:

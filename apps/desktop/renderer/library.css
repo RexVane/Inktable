@@ -257,6 +257,14 @@
   .library-grid { grid-template-columns: 1fr; }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .library-surface *, .library-surface *::before, .library-surface *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}
+
 /* ---------- 左栏知识馆树（仅知识馆模式显示） ---------- */
 .library-nav { display: none; }
 

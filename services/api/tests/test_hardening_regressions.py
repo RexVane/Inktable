@@ -6,7 +6,6 @@ import importlib
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -47,21 +46,21 @@ def test_file_shell_authorization_requires_exact_indexed_path(api, tmp_path):
                VALUES(?,?,?,?,?,?)""",
             ("S", str(tmp_path), "manual", "test", 1, time.time()),
         ).lastrowid
-        conn.execute(
+        file_id = conn.execute(
             """INSERT INTO files(volume_uuid,inode,path,name,origin_path,source_id,
                                   ext,size,state,is_dataless,mtime,detected_at)
                VALUES('v','i',?,?,?,?,?,1,'registered',0,1,?)""",
             (str(known), known.name, str(known), source_id, ".txt", time.time()),
-        )
+        ).lastrowid
         conn.commit()
 
     allowed = client.post(
         "/files/authorize_path", headers=H,
-        json={"path": str(known), "action": "trash"},
+        json={"path": str(known), "action": "open"},
     )
     denied = client.post(
         "/files/authorize_path", headers=H,
-        json={"path": str(unknown), "action": "trash"},
+        json={"path": str(unknown), "action": "open"},
     )
     traversal = client.post(
         "/files/authorize_path", headers=H,
@@ -70,6 +69,101 @@ def test_file_shell_authorization_requires_exact_indexed_path(api, tmp_path):
     assert allowed.json() == {"authorized": True}
     assert denied.json() == {"authorized": False}
     assert traversal.json() == {"authorized": False}
+    assert client.post(
+        "/files/authorize_path", headers=H,
+        json={"path": str(known), "action": "trash"},
+    ).status_code == 422
+
+    targets = client.get(f"/files/{file_id}/trash-targets", headers=H)
+    assert targets.status_code == 200
+    assert targets.json()["targets"] == [{"kind": "source", "path": str(known)}]
+
+
+def test_trash_targets_include_existing_preserved_copy_without_duplicates(api, tmp_path):
+    client, main_mod = api
+    source = tmp_path / "missing.txt"
+    preserved = tmp_path / "preserved" / "missing.txt"
+    preserved.parent.mkdir()
+    preserved.write_text("recoverable", encoding="utf-8")
+    with main_mod._db_lock:
+        conn = main_mod.db()
+        conn.execute(
+            """INSERT INTO files(volume_uuid,inode,path,name,origin_path,preserved_path,
+                                  ext,size,state,is_dataless,mtime,detected_at)
+               VALUES('v','preserved',?,?,?,?,?,1,'missing',0,1,?)""",
+            (str(source), source.name, str(source), str(preserved), ".txt", time.time()),
+        )
+        file_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.commit()
+
+    result = client.get(f"/files/{file_id}/trash-targets", headers=H).json()
+    assert result["targets"] == [{"kind": "preserved", "path": str(preserved)}]
+    raw = client.get(f"/files/{file_id}/raw", headers=H)
+    assert raw.status_code == 200
+    assert raw.content == b"recoverable"
+
+
+def test_disabled_source_cannot_be_read_or_mutated_by_known_file_id(api, tmp_path):
+    client, main_mod = api
+    known = tmp_path / "private.txt"
+    known.write_text("private evidence", encoding="utf-8")
+    with main_mod._db_lock:
+        conn = main_mod.db()
+        source_id = conn.execute(
+            """INSERT INTO sources(name,path,kind,discovered_by,enabled,created_at)
+               VALUES(?,?,?,?,1,?)""",
+            ("Private", str(tmp_path), "manual", "test", time.time()),
+        ).lastrowid
+        file_id = conn.execute(
+               """INSERT INTO files(volume_uuid,inode,path,name,origin_path,source_id,
+                                  ext,size,state,is_dataless,mtime,detected_at)
+               VALUES('v','private',?,?,?,?,?,1,'registered',0,1,?)""",
+            (str(known), known.name, str(known), source_id, ".txt", time.time()),
+        ).lastrowid
+        conn.commit()
+
+    book_id = client.post("/books", headers=H, json={"name": "Private book"}).json()["id"]
+    first_add = client.post(
+        "/books/add", headers=H,
+        json={"book_id": book_id, "file_ids": [file_id]},
+    ).json()
+    duplicate_add = client.post(
+        "/books/add", headers=H,
+        json={"book_id": book_id, "file_ids": [file_id, file_id]},
+    ).json()
+    assert first_add["added"] == 1
+    assert duplicate_add["already_present"] == 1
+
+    client.post("/sources/disable", headers=H, json={"source_id": source_id})
+
+    assert client.get(f"/files/{file_id}/detail", headers=H).status_code == 404
+    assert client.get(f"/files/{file_id}/content", headers=H).status_code == 404
+    assert client.get(f"/files/{file_id}/raw", headers=H).status_code == 404
+    assert client.get(f"/files/{file_id}/trash-targets", headers=H).status_code == 404
+    assert client.post(
+        "/files/authorize_path", headers=H,
+        json={"path": str(known), "action": "open"},
+    ).json() == {"authorized": False}
+    assert client.get("/books", headers=H).json()["books"][0]["n"] == 0
+
+    new_book = client.post(
+        "/books", headers=H, json={"name": "Cannot add hidden"}
+    ).json()["id"]
+    hidden_add = client.post(
+        "/books/add", headers=H,
+        json={"book_id": new_book, "file_ids": [file_id, 999999]},
+    ).json()
+    assert hidden_add["added"] == 0
+    assert hidden_add["not_found"] == 2
+
+    category_id = client.post(
+        "/categories", headers=H, json={"name": "Hidden target"}
+    ).json()["id"]
+    classified = client.post(
+        "/files/classify", headers=H,
+        json={"file_ids": [file_id], "category_id": category_id},
+    ).json()
+    assert classified["assigned"] == 0
 
 
 def test_invalid_llm_endpoint_is_422_and_never_configured(api):
@@ -247,7 +341,7 @@ def test_nonstream_chat_has_absolute_deadline(monkeypatch):
             raise OSError("closed")
 
     llm.configure("http://127.0.0.1:9/v1", "secret", "model")
-    monkeypatch.setattr(llm.urllib.request, "urlopen", lambda *_a, **_k: SlowResponse())
+    monkeypatch.setattr(llm, "open_model_request", lambda *_a, **_k: SlowResponse())
     started = time.monotonic()
     try:
         with pytest.raises(llm.LLMConnectionError) as exc:

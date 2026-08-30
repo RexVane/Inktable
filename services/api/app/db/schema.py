@@ -285,7 +285,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS journal_fts USING fts5(
 # not part of SCHEMA: on a legacy database CREATE TABLE IF NOT EXISTS cannot add
 # newer files columns such as preserved_path. init_db runs the backfill only
 # after additive migrations have completed, inside the migration transaction.
-from app.library.core import LIBRARY_BOOTSTRAP_SQL, LIBRARY_SCHEMA
+from app.library.core import LIBRARY_SCHEMA
 
 SCHEMA = f"{SCHEMA}\n{LIBRARY_SCHEMA}"
 

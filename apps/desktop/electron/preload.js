@@ -42,7 +42,7 @@ contextBridge.exposeInMainWorld('inktable', {
   },
   revealInFinder: (filePath) => ipcRenderer.invoke('shell:reveal', filePath),
   openPath: (filePath) => ipcRenderer.invoke('shell:open', filePath),
-  trashItem: (filePath) => ipcRenderer.invoke('shell:trash', filePath),
+  trashFile: (fileId) => ipcRenderer.invoke('file:trash-by-id', fileId),
   setZoom: (factor) => {
     const f = Number(factor);
     webFrame.setZoomFactor(Number.isFinite(f) && f >= 0.5 && f <= 2 ? f : 1);

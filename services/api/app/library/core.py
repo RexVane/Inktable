@@ -51,6 +51,39 @@ CREATE INDEX IF NOT EXISTS idx_library_items_category
 CREATE INDEX IF NOT EXISTS idx_library_items_updated
     ON library_items(updated_at DESC);
 
+-- A user-triggered enrichment pass is a durable, bounded unit of work.  The
+-- item ledger prevents a failed document from being selected over and over in
+-- one click-loop, while the cancellation flag lets the UI stop before the next
+-- batch without pretending an in-flight model request was interrupted.
+CREATE TABLE IF NOT EXISTS library_enrichment_runs (
+    id               TEXT PRIMARY KEY,
+    status           TEXT NOT NULL DEFAULT 'running'
+                         CHECK (status IN ('running', 'cancelled', 'completed')),
+    include_failed   INTEGER NOT NULL DEFAULT 0 CHECK (include_failed IN (0, 1)),
+    cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK (cancel_requested IN (0, 1)),
+    claimed_count    INTEGER NOT NULL DEFAULT 0,
+    ready_count      INTEGER NOT NULL DEFAULT 0,
+    failed_count     INTEGER NOT NULL DEFAULT 0,
+    stale_count      INTEGER NOT NULL DEFAULT 0,
+    created_at       REAL NOT NULL,
+    updated_at       REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS library_enrichment_run_items (
+    run_id     TEXT NOT NULL
+                   REFERENCES library_enrichment_runs(id) ON DELETE CASCADE,
+    item_id    INTEGER NOT NULL
+                   REFERENCES library_items(id) ON DELETE CASCADE,
+    outcome    TEXT NOT NULL DEFAULT 'running'
+                   CHECK (outcome IN ('running', 'ready', 'failed', 'stale')),
+    error      TEXT,
+    updated_at REAL NOT NULL,
+    PRIMARY KEY (run_id, item_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_library_enrichment_run_items_outcome
+    ON library_enrichment_run_items(run_id, outcome);
+
 CREATE TABLE IF NOT EXISTS library_item_tags (
     library_item_id INTEGER NOT NULL
         REFERENCES library_items(id) ON DELETE CASCADE,

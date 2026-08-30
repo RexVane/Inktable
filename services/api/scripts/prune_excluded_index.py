@@ -54,7 +54,7 @@ from app.index.pipeline import (  # noqa: E402
     _delete_content_indexes_batch,
 )
 
-RESIDUE_CONTENTS = f"""
+RESIDUE_CONTENTS = """
     SELECT c.id FROM contents c
     WHERE EXISTS (SELECT 1 FROM files f WHERE f.content_id = c.id)
       -- 判据是「**每一份**副本都被排除」，不是「没有可见副本」。两者差别很大：

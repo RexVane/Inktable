@@ -67,6 +67,8 @@ def test_metadata_ask_uses_sql_without_rag(api_client, monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert body["mode"] == "metadata"
+    assert body["answer_source"] == "metadata"
+    assert body["used_personal_files"] is False
     assert "1 个" in body["answer"]
     assert body["citations"] == []
 
@@ -462,6 +464,37 @@ def test_model_slot_list_uses_saved_credentials(api_client, clean_model_slots, m
         srv.shutdown()
 
 
+def test_model_slot_list_never_reuses_key_for_another_origin(
+    api_client, clean_model_slots, monkeypatch,
+):
+    client, _main_mod = api_client
+    from app.config import llm_client
+
+    saved = client.post("/settings/models", headers=H, json={
+        "slot": "library",
+        "provider": "openai",
+        "endpoint": "https://api.example.com/v1",
+        "api_key": "origin-bound-secret",
+        "model": "m-1",
+    })
+    assert saved.status_code == 200
+    monkeypatch.setattr(
+        llm_client,
+        "list_models",
+        lambda **_kwargs: pytest.fail("cross-origin request must not receive saved key"),
+    )
+
+    response = client.post("/settings/models/list", headers=H, json={
+        "slot": "library",
+        "provider": "openai",
+        "endpoint": "https://other.example/v1",
+    })
+
+    assert response.status_code == 422
+    assert "API 密钥" in response.json()["detail"]
+    assert "origin-bound-secret" not in response.text
+
+
 def test_model_slot_list_requires_endpoint(api_client, clean_model_slots):
     """openai 格式没地址必须 422；ollama 格式空地址回退默认本机地址。"""
     client, _main_mod = api_client
@@ -512,3 +545,27 @@ def test_qa_slot_accepts_ollama_provider(api_client, clean_model_slots):
     assert body["provider"] == "ollama"
     assert body["configured"] is True      # 本地 Ollama 免密钥也算已配置
     assert client.get("/settings/llm", headers=H).json()["provider"] == "ollama"
+
+
+def test_qa_slot_accepts_anthropic_and_responses(api_client, clean_model_slots):
+    client, _main_mod = api_client
+    anthropic = client.post("/settings/models", headers=H, json={
+        "slot": "qa", "provider": "anthropic",
+        "endpoint": "https://api.anthropic.com/v1",
+        "api_key": "sk-ant", "model": "claude-sonnet"})
+    assert anthropic.status_code == 200
+    assert anthropic.json()["provider"] == "anthropic"
+    assert "sk-ant" not in json.dumps(anthropic.json())
+
+    responses = client.post("/settings/models", headers=H, json={
+        "slot": "qa", "provider": "responses",
+        "endpoint": "https://api.example.com/v1",
+        "api_key": "sk-resp", "model": "gpt-4.1"})
+    assert responses.status_code == 200
+    assert responses.json()["provider"] == "responses"
+
+    bad = client.post("/settings/models", headers=H, json={
+        "slot": "qa", "provider": "mystery",
+        "endpoint": "https://api.example.com/v1",
+        "api_key": "sk", "model": "m"})
+    assert bad.status_code == 422
