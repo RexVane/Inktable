@@ -1,7 +1,7 @@
 [project]
 name = "ordo-api"
 version = "0.3.0"
-description = "Local-first personal knowledge base sidecar for Ordo (indexes files in place; never moves originals)"
+description = "Ordo sidecar: local-first personal knowledge base (indexes files in place; never moves originals) / Ordo 本地优先个人知识库的 sidecar（原文件不动）"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

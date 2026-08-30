@@ -6,8 +6,8 @@
 
 <p align="center">
   <strong>Local-first personal knowledge base for macOS and Windows.</strong><br>
-  Indexes files where they already live — searchable, citable, and askable —<br>
-  without moving, copying, or renaming anything on disk.
+  Turns files already on your disks into a searchable, citable, askable knowledge space.<br>
+  <strong>Never moves, copies, or renames originals</strong> — organization happens in the index.
 </p>
 
 <p align="center">
@@ -122,3 +122,7 @@ Keys are stored with Electron `safeStorage`. The sidecar keeps them in memory �
 - Embedding slot is local Ollama only
 - Ingest whitelist: `.txt` `.md` `.pdf` `.docx` `.csv` `.html` `.htm`
 - Full-text index caps a document at 10 MB
+
+## License
+
+[MIT](LICENSE)

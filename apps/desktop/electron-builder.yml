@@ -1,6 +1,6 @@
 appId: com.ordo.app
 productName: Ordo
-copyright: Ordo
+copyright: Copyright © 2026 RexVane
 
 directories:
   output: ../../dist
