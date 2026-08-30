@@ -170,9 +170,9 @@ def test_drive_root_paths_match_windows_and_macos(monkeypatch):
     assert not policy.is_drive_root("/usr")
 
     monkeypatch.setattr(
-        policy.Path,
-        "is_mount",
-        lambda self: str(self) in {"/data", "/srv/archive"},
+        policy,
+        "_is_linux_mount",
+        lambda path: path in {"/data", "/srv/archive"},
     )
     assert policy.is_drive_root("/data")
     assert policy.is_drive_root("/srv/archive")

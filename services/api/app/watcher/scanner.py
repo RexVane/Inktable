@@ -232,6 +232,14 @@ def _is_mount_dir(path: Path) -> bool:
         return False
 
 
+def _is_unix_boot_root(path: Path | str) -> bool:
+    """Recognize target-OS ``/`` even in Windows-hosted policy tests."""
+    raw = os.fspath(path)
+    if os.name == "nt" and sys.platform in {"darwin", "linux"}:
+        raw = raw.replace("\\", "/")
+    return raw == "/"
+
+
 def _is_profile_or_drive_root(path: Path) -> bool:
     """家目录与盘根永远不算代码项目。
 
@@ -432,7 +440,7 @@ def iter_files(root: Path, max_depth: int = MAX_DEPTH,
     root = Path(root)
     root_depth = len(root.parts)
     pruned = {_normal_path(p) for p in prune_roots}
-    linux_boot_scan = sys.platform == "linux" and str(root) == "/"
+    linux_boot_scan = sys.platform == "linux" and _is_unix_boot_root(root)
 
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         current = Path(dirpath)
@@ -463,7 +471,7 @@ def iter_files(root: Path, max_depth: int = MAX_DEPTH,
         skipped = 0
         boot_skip = (
             sys.platform in {"darwin", "linux"}
-            and str(Path(root)) in {os.sep, str(Path("/"))}
+            and _is_unix_boot_root(root)
             and current == Path(root)
         )
         boot_skip_names = (

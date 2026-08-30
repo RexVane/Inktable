@@ -12,6 +12,7 @@ import logging
 import mimetypes
 import multiprocessing
 import os
+import posixpath
 import queue
 import secrets
 import sys
@@ -20,7 +21,7 @@ import time
 import contextlib
 from collections import OrderedDict
 from contextlib import asynccontextmanager
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal
 
 import uvicorn
@@ -222,11 +223,20 @@ def _drive_root_for(path: str, roots: list[Path] | None = None) -> Path | None:
         if parts and parts[0] == "/":
             return Path("/")
     if sys.platform == "linux":
-        normalized = os.path.abspath(os.path.normpath(path))
+        def linux_path_text(value: Path | str) -> str:
+            raw = os.fspath(value)
+            if os.name == "nt":
+                raw = raw.replace("\\", "/")
+            return posixpath.abspath(posixpath.normpath(raw))
+
+        normalized = linux_path_text(path)
         candidates = list(roots if roots is not None else volume_roots())
-        matches = [root for root in candidates if _path_within(normalized, str(root))]
+        matches = [
+            root for root in candidates
+            if posixpath.commonpath((normalized, linux_path_text(root))) == linux_path_text(root)
+        ]
         if matches:
-            return max(matches, key=lambda root: len(Path(root).parts))
+            return max(matches, key=lambda root: len(PurePosixPath(linux_path_text(root)).parts))
     return None
 
 

@@ -77,26 +77,34 @@ def _is_nested_mount(root: Path, candidate: Path) -> bool:
         return False
 
 
+def _target_path_text(path: Path | str) -> str:
+    """Render a target-OS path without inheriting the CI host's separator."""
+    raw = os.fspath(path)
+    if os.name == "nt" and sys.platform in {"darwin", "linux"}:
+        return raw.replace("\\", "/")
+    return raw
+
+
 def _scan_drive(root: Path, counts: dict[str, int], deadline: float) -> bool:
     """迭代枚举一个盘，统计每个目录**直接包含**的文档数。
 
     返回 False 表示时间预算耗尽（结果仍然可用，只是不完整）。
     """
-    root = Path(root)
-    stack = [str(root)]
+    root_text = _target_path_text(root)
+    root_path = Path(root_text)
+    stack = [root_text]
     visited = 0
     while stack:
         visited += 1
         if visited % 512 == 0 and time.time() > deadline:
             return False
-        current = stack.pop()
-        current_path = Path(current)
+        current = _target_path_text(stack.pop())
         boot_skip_names = (
             MAC_BOOT_SKIP_DIRS if sys.platform == "darwin"
             else LINUX_BOOT_SKIP_DIRS if sys.platform == "linux"
             else set()
         )
-        boot_root = str(root) == "/" and current_path == root
+        boot_root = root_text == "/" and current == root_text
         try:
             with os.scandir(current) as it:
                 docs = 0
@@ -104,11 +112,11 @@ def _scan_drive(root: Path, counts: dict[str, int], deadline: float) -> bool:
                     name = entry.name
                     try:
                         if entry.is_dir(follow_symlinks=False):
-                            candidate = Path(entry.path)
+                            candidate = Path(_target_path_text(entry.path))
                             if (
                                 _skip_name(name)
                                 or (boot_root and name.casefold() in boot_skip_names)
-                                or _is_nested_mount(root, candidate)
+                                or _is_nested_mount(root_path, candidate)
                             ):
                                 continue
                             # 重解析点（junction/符号链接/挂载点）不下钻：
@@ -116,7 +124,7 @@ def _scan_drive(root: Path, counts: dict[str, int], deadline: float) -> bool:
                             st = entry.stat(follow_symlinks=False)
                             if getattr(st, "st_file_attributes", 0) & _REPARSE:
                                 continue
-                            stack.append(entry.path)
+                            stack.append(_target_path_text(entry.path))
                         elif not name.startswith("."):
                             if os.path.splitext(name)[1].lower() in DOC_EXTS:
                                 docs += 1

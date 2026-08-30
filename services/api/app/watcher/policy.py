@@ -24,6 +24,14 @@ def uses_disk_root_sources() -> bool:
     return sys.platform in DISK_ROOT_PLATFORMS
 
 
+def _is_linux_mount(path: str) -> bool:
+    """Best-effort real mount check, isolated for cross-platform policy tests."""
+    try:
+        return Path(path).is_mount()
+    except OSError:
+        return False
+
+
 def is_drive_root(path: Path | str) -> bool:
     """Return whether path is a top-level local disk root.
 
@@ -68,10 +76,7 @@ def is_drive_root(path: Path | str) -> bool:
             for prefix in system_prefixes
         ):
             return False
-        try:
-            return Path(normalized).is_mount()
-        except OSError:
-            return False
+        return _is_linux_mount(normalized)
     return False
 
 
