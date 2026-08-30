@@ -18,10 +18,14 @@
     tagId: null,          // 左栏树选中的标签
     taxonomy: null,
     treeItems: [],        // /library/tree 全量叶子
-    enriching: false,     // AI 整理循环进行中
+    enriching: false,     // sidecar 正在排水（用户点的或半小时扫描）
     enrichDone: 0,        // 本轮已整理篇数
+    enrichFailed: 0,
     enrichStop: false,    // 再点一次按钮 = 停止
-    enrichRunId: null,    // 后端持久化运行 id（防失败项在同轮自旋）
+    enrichRunId: null,
+    enrichMode: null,     // user | idle
+    enrichPollTimer: null,
+    enrichWasRunning: false,
     treeOpen: (function () {
       try { return JSON.parse(localStorage.getItem('libraryTreeOpen') || '{}') || {}; }
       catch (e) { return {}; }
@@ -428,6 +432,7 @@
       state.stats = results[0];
       state.relations = results[1];
       state.enrichment = results[2];
+      applyWorkerStatus(results[2], { toast: false });
       var page = results[3];
       state.taxonomy = results[4];
       state.treeItems = results[5] && results[5].items || [];
@@ -449,12 +454,72 @@
     return card;
   }
 
+  function stopEnrichPoll() {
+    if (!state.enrichPollTimer) return;
+    clearInterval(state.enrichPollTimer);
+    state.enrichPollTimer = null;
+  }
+
+  function startEnrichPoll() {
+    if (state.enrichPollTimer) return;
+    state.enrichPollTimer = setInterval(function () {
+      pollEnrichmentWorker();
+    }, 2500);
+  }
+
+  function applyWorkerStatus(payload, opts) {
+    opts = opts || {};
+    var worker = (payload && payload.worker) || {};
+    var running = !!worker.running;
+    var was = state.enrichWasRunning;
+    state.enriching = running;
+    state.enrichRunId = worker.run_id || null;
+    state.enrichDone = number(worker.ready);
+    state.enrichFailed = number(worker.failed);
+    state.enrichMode = worker.mode || null;
+    state.enrichStop = !!worker.stopping;
+    if (running) startEnrichPoll();
+    else stopEnrichPoll();
+    if (opts.toast && was && !running) {
+      var failed = state.enrichFailed;
+      var idle = worker.last_mode === 'idle';
+      if (worker.error) {
+        showToast(worker.error);
+      } else if (state.enrichStop) {
+        showToast('已停止：完成 ' + state.enrichDone + ' 篇' +
+          (failed ? '，失败 ' + failed + ' 篇' : ''));
+      } else if (state.enrichDone || failed) {
+        showToast((idle ? '后台整理完成 ' : '整理完成 ') +
+          state.enrichDone + ' 篇' +
+          (failed ? '，失败 ' + failed + ' 篇（需点击“重试失败项”）' : ''));
+      } else if (!idle) {
+        showToast('没有需要整理的条目');
+      }
+      if (state.active) refreshLibrary(true);
+    }
+    state.enrichWasRunning = running;
+    var btn = document.getElementById('libraryEnrichBtn');
+    if (btn) {
+      btn.textContent = enrichButtonLabel();
+      btn.disabled = !!worker.stopping;
+    }
+  }
+
+  async function pollEnrichmentWorker() {
+    try {
+      var st = await api('/library/enrichment/status');
+      state.enrichment = st;
+      applyWorkerStatus(st, { toast: true });
+    } catch (err) {
+      /* sidecar 重启时下一次轮询会接上 */
+    }
+  }
+
   async function stopEnrichmentPass() {
     state.enrichStop = true;
-    var runId = state.enrichRunId;
-    if (!runId) return;
     try {
-      await api('/library/enrichment/runs/' + runId + '/cancel', 'POST');
+      var snap = await api('/library/enrichment/drain/cancel', 'POST');
+      applyWorkerStatus({ worker: snap }, { toast: false });
       showToast('将在当前批次完成后停止');
     } catch (err) {
       showToast('停止请求失败：' + err.message);
@@ -466,48 +531,31 @@
       await stopEnrichmentPass();
       return;
     }
-    state.enriching = true;
-    state.enrichStop = false;
-    state.enrichDone = 0;
-    state.enrichRunId = null;
-    var failed = 0;
     try {
-      var createPath = '/library/enrichment/runs' +
-        (retryFailed ? '?retry_failed=true' : '');
-      var run = await api(createPath, 'POST');
-      state.enrichRunId = run.id;
-      while (!state.enrichStop) {
-        var result = await api(
-          '/library/enrichment/runs/' + state.enrichRunId + '/step?limit=20',
-          'POST');
-        if (result.available === false) {
-          await stopEnrichmentPass();
-          showToast(result.error || '整理模型不可用（设置 → 模型 里配置知识馆整理）');
-          break;
-        }
-        state.enrichDone += number(result.ready);
-        failed += number(result.failed);
-        if (!number(result.claimed) || result.run_status === 'completed' ||
-            result.run_status === 'cancelled') break;
-        await refreshLibrary(true);
-      }
-      if (state.enrichStop) {
-        showToast('已停止：完成 ' + state.enrichDone + ' 篇' +
-          (failed ? '，失败 ' + failed + ' 篇' : ''));
-      } else if (state.enrichDone || failed) {
-        showToast('整理完成 ' + state.enrichDone + ' 篇' +
-          (failed ? '，失败 ' + failed + ' 篇（需点击“重试失败项”）' : ''));
-      } else {
+      var snap = await api(
+        retryFailed ? '/library/enrichment/drain?retry_failed=true'
+          : '/library/enrichment/drain',
+        'POST');
+      applyWorkerStatus({ worker: snap }, { toast: false });
+      if (!snap.running && !state.enriching) {
         showToast(retryFailed ? '没有需要重试的失败项' : '没有需要整理的条目');
+      } else {
+        showToast(retryFailed ? '开始重试失败项' : '开始整理全部待办条目');
+        startEnrichPoll();
       }
+      if (state.active) renderOverview();
     } catch (err) {
       showToast('整理失败：' + err.message);
-    } finally {
-      state.enriching = false;
-      state.enrichStop = false;
-      state.enrichRunId = null;
-      await refreshLibrary(true);
     }
+  }
+
+  function enrichButtonLabel() {
+    if (state.enrichStop && state.enriching) return '正在停止…';
+    if (state.enriching) {
+      var prefix = state.enrichMode === 'idle' ? '后台整理中… 已完 ' : '整理中… 已完 ';
+      return prefix + state.enrichDone + ' 篇（点击停止）';
+    }
+    return 'AI 整理全部';
   }
 
   function actionToolbar(shell) {
@@ -532,16 +580,13 @@
     });
     bar.appendChild(sync);
 
-    // 每次点击创建一个持久化运行；同一条目在该运行中最多尝试一次。
-    // 进行中再点一次会让后端停止认领下一批（当前模型请求安全完成）。
+    // 点一次交给 sidecar 排水到空；进行中再点一次会停止认领下一批。
     var enrich = button(
-      state.enriching
-        ? (state.enrichStop ? '正在停止…' :
-          '整理中… 已完 ' + state.enrichDone + ' 篇（点击停止）')
-        : 'AI 整理全部',
+      enrichButtonLabel(),
       'library-action primary', async function () {
         await runEnrichmentPass(false);
       });
+    enrich.id = 'libraryEnrichBtn';
     bar.appendChild(enrich);
 
     if (!state.enriching && number((state.stats || {}).by_status &&
@@ -603,6 +648,9 @@
       shell.appendChild(node('div', 'library-note warn',
         'AI 整理暂不可用：需要本机 Ollama 的 ' +
         String(state.enrichment.model || 'qwen3:8b') + '。搜索、向量检索和知识浏览不受影响。'));
+    } else {
+      shell.appendChild(node('div', 'library-note',
+        '点「AI 整理全部」会把当前待办一次做完；之后每半小时自动扫一遍未整理条目，慢慢补。失败项仍需点「重试失败项」。'));
     }
     if (relations.stale_relations) {
       shell.appendChild(node('div', 'library-note warn',

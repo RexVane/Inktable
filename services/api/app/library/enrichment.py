@@ -440,31 +440,16 @@ def cancel_enrichment_run(
     return enrichment_run(conn, run_id)
 
 
-def claim_items(
-    conn: sqlite3.Connection,
+def _claimable_query(
     *,
-    limit: int = DEFAULT_BATCH,
-    now: float | None = None,
-    lease_seconds: float = LEASE_SECONDS,
-    include_failed: bool = False,
-    run_id: str | None = None,
-) -> list[EnrichmentClaim]:
-    """Claim visible indexed items for a short-lived enrichment lease."""
-    ts = time.time() if now is None else float(now)
-    limit = max(1, min(int(limit), MAX_BATCH))
-
-    if run_id is not None:
-        run = enrichment_run(conn, run_id)
-        if run["status"] != "running" or run["cancel_requested"]:
-            return []
-        include_failed = bool(run["include_failed"])
-
-    # Make newly indexed contents visible to this worker and mark reindexed
-    # documents stale before claiming anything.
-    sync_library_items(conn, now=ts)
+    include_failed: bool,
+    now: float,
+    lease_seconds: float,
+    run_id: str | None,
+    limit: int | None,
+) -> tuple[str, tuple]:
     visible = visible_content_exists("li.content_id", "vf", "vs")
-    rows = conn.execute(
-        f"""SELECT li.id, li.content_id, li.title, li.input_hash
+    sql = f"""SELECT li.id, li.content_id, li.title, li.input_hash
             FROM library_items li
             JOIN contents c ON c.id = li.content_id
             WHERE {visible}
@@ -493,11 +478,61 @@ def claim_items(
                 WHEN 'ready' THEN 3
                 ELSE 4
               END,
-              li.updated_at, li.id
-            LIMIT ?""",
-        (int(include_failed), PROMPT_VERSION, ts - lease_seconds,
-         run_id, run_id, limit),
-    ).fetchall()
+              li.updated_at, li.id"""
+    params: list = [
+        int(include_failed), PROMPT_VERSION, now - lease_seconds, run_id, run_id,
+    ]
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
+    return sql, tuple(params)
+
+
+def count_claimable(
+    conn: sqlite3.Connection,
+    *,
+    include_failed: bool = False,
+    now: float | None = None,
+    lease_seconds: float = LEASE_SECONDS,
+) -> int:
+    """How many visible items the worker would pick up right now."""
+    ts = time.time() if now is None else float(now)
+    sync_library_items(conn, now=ts)
+    sql, params = _claimable_query(
+        include_failed=include_failed, now=ts, lease_seconds=lease_seconds,
+        run_id=None, limit=None,
+    )
+    row = conn.execute(f"SELECT COUNT(*) AS n FROM ({sql})", params).fetchone()
+    return int(row["n"] if row is not None else 0)
+
+
+def claim_items(
+    conn: sqlite3.Connection,
+    *,
+    limit: int = DEFAULT_BATCH,
+    now: float | None = None,
+    lease_seconds: float = LEASE_SECONDS,
+    include_failed: bool = False,
+    run_id: str | None = None,
+) -> list[EnrichmentClaim]:
+    """Claim visible indexed items for a short-lived enrichment lease."""
+    ts = time.time() if now is None else float(now)
+    limit = max(1, min(int(limit), MAX_BATCH))
+
+    if run_id is not None:
+        run = enrichment_run(conn, run_id)
+        if run["status"] != "running" or run["cancel_requested"]:
+            return []
+        include_failed = bool(run["include_failed"])
+
+    # Make newly indexed contents visible to this worker and mark reindexed
+    # documents stale before claiming anything.
+    sync_library_items(conn, now=ts)
+    sql, params = _claimable_query(
+        include_failed=include_failed, now=ts, lease_seconds=lease_seconds,
+        run_id=run_id, limit=limit,
+    )
+    rows = conn.execute(sql, params).fetchall()
 
     claims: list[EnrichmentClaim] = []
     for row in rows:

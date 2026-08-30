@@ -31,6 +31,8 @@ def test_entrypoint_reuses_existing_sidecar_app_and_mounts_library_routes_once()
     assert "/library/items/{item_id}" in paths
     assert "/library/stats" in paths
     assert "/library/enrichment/status" in paths
+    assert "/library/enrichment/drain" in paths
+    assert "/library/enrichment/drain/cancel" in paths
     assert "/library/relations/status" in paths
     assert "/library/sync" in paths
     assert "/library/enrich" in paths

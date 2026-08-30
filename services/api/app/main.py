@@ -99,9 +99,12 @@ async def _lifespan(_app: FastAPI):
     threading.Thread(
         target=_warm_vector_matrix, name="inktable-vec-warmup", daemon=True,
     ).start()
+    from app.library.worker import start_sidecar_worker, stop_sidecar_worker
+    start_sidecar_worker(db, _db_lock)
     try:
         yield
     finally:
+        stop_sidecar_worker()
         _shutdown()
 
 

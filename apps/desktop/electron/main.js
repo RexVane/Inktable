@@ -579,6 +579,8 @@ const API_ROUTE_RULES = [
   ['GET', /^\/files\/[0-9]+\/raw$/],
   ['POST', /^\/library\/sync$/],
   ['POST', /^\/library\/enrich(?:\?limit=[0-9]+)?$/],
+  ['POST', /^\/library\/enrichment\/drain(?:\?retry_failed=true)?$/],
+  ['POST', /^\/library\/enrichment\/drain\/cancel$/],
   ['POST', /^\/library\/enrichment\/runs(?:\?retry_failed=true)?$/],
   ['POST', /^\/library\/enrichment\/runs\/[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\/(?:cancel|step\?limit=[0-9]+)$/],
   ['POST', /^\/library\/relations\/rebuild(?:\?limit=[0-9]+&top_k=[0-9]+&min_score=-?[0-9]+(?:\.[0-9]+)?&chunks_per_item=[0-9]+)?$/],

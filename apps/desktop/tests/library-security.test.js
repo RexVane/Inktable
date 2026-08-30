@@ -70,6 +70,9 @@ test('Library routes used by the renderer are admitted by the exact proxy allowl
     ['GET', '/library/items/123'],
     ['POST', '/library/sync'],
     ['POST', '/library/enrich?limit=3'],
+    ['POST', '/library/enrichment/drain'],
+    ['POST', '/library/enrichment/drain?retry_failed=true'],
+    ['POST', '/library/enrichment/drain/cancel'],
     ['POST', '/library/enrichment/runs'],
     ['POST', '/library/enrichment/runs?retry_failed=true'],
     ['POST', '/library/enrichment/runs/123e4567-e89b-12d3-a456-426614174000/step?limit=20'],
@@ -96,8 +99,8 @@ test('Library routes used by the renderer are admitted by the exact proxy allowl
 
 test('Library maintenance actions remain explicit local UI actions', () => {
   assert.match(library, /AI 整理全部/);
-  assert.match(library, /\/library\/enrichment\/runs/);
-  assert.match(library, /step\?limit=20/);
+  assert.match(library, /\/library\/enrichment\/drain/);
+  assert.match(library, /\/library\/enrichment\/drain\/cancel/);
   assert.match(library, /重试失败项/);
   assert.match(library, /重建相关资料/);
   assert.match(library, /\/library\/relations\/rebuild/);

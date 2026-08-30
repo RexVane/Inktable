@@ -20,6 +20,7 @@ from app.library.enrichment import (
     run_enrichment_batch,
     status as enrichment_status,
 )
+from app.library.worker import sidecar_worker, worker_snapshot
 from app.library.query import (
     library_item_detail,
     library_page,
@@ -99,7 +100,28 @@ def create_library_router(
     @router.get("/enrichment/status")
     def get_enrichment_status() -> dict:
         """Local-only model capability; no document content is sent here."""
-        return enrichment_status()
+        body = enrichment_status()
+        body["worker"] = worker_snapshot()
+        return body
+
+    @router.post("/enrichment/drain")
+    def post_enrichment_drain(retry_failed: bool = Query(False)) -> dict:
+        """Ask the sidecar to drain pending items until none remain.
+
+        Failed items stay out unless ``retry_failed`` is set. The 30-minute
+        idle scan never retries failures.
+        """
+        worker = sidecar_worker()
+        if worker is None:
+            raise HTTPException(status_code=503, detail="整理调度尚未启动")
+        return worker.request_drain(include_failed=retry_failed)
+
+    @router.post("/enrichment/drain/cancel")
+    def post_enrichment_drain_cancel() -> dict:
+        worker = sidecar_worker()
+        if worker is None:
+            raise HTTPException(status_code=503, detail="整理调度尚未启动")
+        return worker.cancel()
 
     @router.post("/enrichment/runs")
     def post_enrichment_run(retry_failed: bool = Query(False)) -> dict:
