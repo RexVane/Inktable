@@ -197,7 +197,7 @@ def test_previous_prompt_version_is_reclaimed_after_boundary_change() -> None:
 
     claims = claim_items(conn, limit=1, now=200)
 
-    assert PROMPT_VERSION == "library-enrichment-v2"
+    assert PROMPT_VERSION == "library-enrichment-v3"
     assert len(claims) == 1
     assert claims[0].item_id == item_id
     assert conn.execute(
@@ -312,3 +312,35 @@ def test_enrichment_new_names_bounded_and_folded_into_existing() -> None:
     assert {"已有标签", "合法标签"} <= tag_names          # 新标签已创建
     assert "x" * 40 not in tag_names                     # 超长被拒
     assert len(tag_names) == len(list(conn.execute("SELECT name FROM tags")))
+
+
+def test_generic_and_duplicate_tags_are_not_minted() -> None:
+    """空泛词丢掉；与现有标签只差空白/大小写的折回已有 id，不灌水。"""
+    conn = _seed()
+
+    def fake_generate(_prompt: str) -> str:
+        return json.dumps({
+            "summary": "操作系统笔记。",
+            "language": "zh",
+            "category_id": 1,
+            "tag_ids": [1],
+            "new_tags": ["笔记", "资料", "操作系统", " 死锁 "],
+        }, ensure_ascii=False)
+
+    tag_count_before = conn.execute("SELECT COUNT(*) c FROM tags").fetchone()["c"]
+    run_enrichment_batch(
+        lambda: conn, threading.Lock(), limit=1, generate_fn=fake_generate,
+        model="fake-local-model",
+    )
+    tag_count_after = conn.execute("SELECT COUNT(*) c FROM tags").fetchone()["c"]
+    assert tag_count_after == tag_count_before
+    names = {
+        row["name"] for row in conn.execute(
+            """SELECT t.name FROM tags t
+               JOIN library_item_tags lit ON lit.tag_id = t.id
+               WHERE lit.library_item_id = (SELECT id FROM library_items
+                                            WHERE content_id = 1)""")
+    }
+    assert "笔记" not in names
+    assert "资料" not in names
+    assert names == {"操作系统", "死锁"}
