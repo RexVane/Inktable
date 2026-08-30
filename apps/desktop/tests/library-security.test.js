@@ -97,6 +97,16 @@ test('Library routes used by the renderer are admitted by the exact proxy allowl
   }
 });
 
+test('Library mode switch keeps the tree and does not block on a full refetch', () => {
+  assert.match(library, /function paintLibraryNavOn\(/);
+  assert.match(library, /function selectLibraryFilter\(/);
+  assert.match(library, /refreshLibrary\(true, \{ light: true \}\)/);
+  assert.match(library, /window\.restoreFileList/);
+  assert.match(library, /if \(state\.active\) return;/);
+  assert.doesNotMatch(library, /if \(state\.active \|\| state\.busy\) return;/);
+  assert.doesNotMatch(library, /if \(nav\) nav\.remove\(\)/);
+});
+
 test('Library maintenance actions remain explicit local UI actions', () => {
   assert.match(library, /AI 整理全部/);
   assert.match(library, /\/library\/enrichment\/drain/);

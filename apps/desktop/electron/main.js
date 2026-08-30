@@ -544,6 +544,9 @@ function createWindow() {
     // 系统深浅与应用内主题可以不一致，那样反而会挑错边。
     backgroundColor: '#faf9f7',
     show: false,
+    // 开发态不会自动用 build/icon.*；不设的话任务栏/窗口是 Electron 默认图标。
+    icon: path.join(__dirname, '..', 'build',
+      process.platform === 'win32' ? 'icon.ico' : 'icon-1024.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

@@ -21,6 +21,7 @@ extraResources:
       - ordo-sidecar.exe
 
 win:
+  icon: icon.ico
   target:
     - target: nsis
       arch: [x64]
@@ -36,6 +37,7 @@ nsis:
   runAfterFinish: false
 
 mac:
+  icon: icon.icns
   category: public.app-category.productivity
   target:
     - target: dmg

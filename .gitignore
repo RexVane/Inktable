@@ -1,7 +1,14 @@
 node_modules/
 dist/
-build/
+# 根级/各服务的构建产物。apps/desktop/build/ 是 electron-builder 的
+# buildResources（应用图标），必须入库，不能被这条规则吞掉。
+/build/
 output/
+apps/desktop/dist/
+services/api/dist/
+services/api/build/
+!apps/desktop/build/
+!apps/desktop/build/**
 .venv/
 __pycache__/
 *.pyc
