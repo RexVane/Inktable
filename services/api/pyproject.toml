@@ -1,7 +1,7 @@
 [project]
 name = "inktable-api"
 version = "0.3.0"
-description = "Local-first personal knowledge base sidecar for Inktable"
+description = "Local-first personal knowledge base sidecar for Inktable (indexes files in place; never moves originals)"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

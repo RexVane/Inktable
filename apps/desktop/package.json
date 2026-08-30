@@ -1,7 +1,7 @@
 {
   "name": "inktable-desktop",
   "version": "0.3.0",
-  "description": "Inktable — 本地文件索引与知识库",
+  "description": "Inktable — local-first personal knowledge base / 本地优先的个人知识库",
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",

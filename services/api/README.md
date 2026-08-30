@@ -1,5 +1,9 @@
 # Inktable Sidecar（FastAPI 后端）
 
+Local FastAPI sidecar spawned by the Electron main process: binds
+`127.0.0.1:0`, receives the session token on stdin, and requires Bearer
+auth on every business route. Design authority: `../../docs/PLAN.md`.
+
 Electron 主进程拉起的本地服务：绑定 `127.0.0.1:0`，令牌经 stdin 传入，
 所有业务接口要求 Bearer Token。权威设计见 `../../docs/PLAN.md`。
 
@@ -11,8 +15,8 @@ app/
 │                    search / ask / runs / classify / integrations / system …
 ├── db/              SQLite 连接、schema v2、备份与完整性检查；
 │                    数据目录可经 INKTABLE_DATA_DIR 迁移
-├── discovery/       微信 4.x / QQ NT / 飞书·钉钉·企业微信 /
-│                    浏览器下载目录（默认归"下载"，自定义才单列）
+├── discovery/       本地磁盘为顶层来源（Windows 固定盘 / macOS 卷）；
+│                    启用后按真实路径展开，可再手动添加目录
 ├── watcher/         预扫描、稳定性判据、FSEvents 实时监听
 ├── domain/          (volume_uuid, inode) 文件身份
 ├── parsing/         PDF / DOCX / Markdown / TXT → Blocks → Child 分片
