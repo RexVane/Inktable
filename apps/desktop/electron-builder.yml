@@ -59,8 +59,10 @@ linux:
   category: Office
   maintainer: RexVane
   synopsis: Local-first personal knowledge base
-  desktop:
-    StartupWMClass: ordo
+  # electron-builder derives StartupWMClass from package.json.desktopName.
+  # Keeping the generated desktop filename in sync lets Linux desktops attach
+  # the running Electron window to the installed launcher.
+  syncDesktopName: true
   target:
     - target: AppImage
       arch: [x64]

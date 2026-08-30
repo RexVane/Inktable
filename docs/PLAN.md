@@ -23,6 +23,7 @@ reset 或丢弃未提交改动。官方入库图标作为发布基准，本地�
 |---|---|---|
 | P0 | 远端 CI 在 Ubuntu 有 1 个路径策略失败，Windows 有 21 个中文语料编码失败 | `main` 实际为红灯，不能直接快进后发布 |
 | P0 | Linux 桌面默认落在 Electron 的 `~/.config/Ordo/data`，sidecar/文档使用 XDG data home | 同一安装可能打开两个资料库，必须统一并兼容早期目录 |
+| P0 | Linux 配置把 `StartupWMClass` 直接放在 `linux.desktop` 下 | electron-builder 26 schema 拒绝配置，导致所有平台打包在校验阶段失败 |
 | P0 | Linux 启用 `/` 后可能跨入 `/data`、bind mount 或伪文件系统；深扫同样会越过挂载边界 | 会扩大扫描范围、重复索引并破坏用户授权边界 |
 | P1 | 旧记录所属磁盘根通过 `/mnt`、`/media` 等固定形状推断 | `/data`、`/srv/archive` 等真实本地挂载会被错误归到 `/` |
 | P1 | 发布态主进程从未打入 app.asar 的 `build/` 读取窗口/托盘图标 | Linux/Windows 安装包可能丢图标或回退为 Electron 默认图标 |
@@ -43,6 +44,9 @@ reset 或丢弃未提交改动。官方入库图标作为发布基准，本地�
   `volume_roots()` 最长前缀解析，支持 `/data` 和 `/srv/archive`。
 - 官方品牌图标作为 electron-builder buildResources；运行时需要的 PNG 通过
   `extraResources/brand` 显式打包，开发态和发布态各用确定路径。
+- Linux 窗口关联改用 `package.json.desktopName=ordo.desktop` 与
+  `linux.syncDesktopName=true`，由 electron-builder 生成匹配的 `.desktop` 文件名和
+  `StartupWMClass`，并增加配置合同测试。
 - 知识馆刷新增加单调版本号与筛选快照，只允许最新请求落地；忙碌状态也按请求版本清理。
 - `workflow_dispatch` 增加 Ubuntu/Windows 的真实 sidecar、AppImage/deb/NSIS
   构建与冻结进程 `/health` 冒烟；普通 push 保留较快的全量单元测试矩阵。
@@ -55,8 +59,16 @@ reset 或丢弃未提交改动。官方入库图标作为发布基准，本地�
 两个 YAML 解析及 `git diff --check`。OCR 依赖仍有 5 条 SWIG 弃用 warning，
 不影响测试结论。
 
-`main` 更新仍需依次满足：macOS 本机冻结 sidecar 与 DMG 冒烟；集成分支推送后
-GitHub Ubuntu/Windows 全矩阵及手动 package-smoke 全绿；推送前再次 fetch，若
+macOS 本机冻结 sidecar 与 DMG 冒烟已通过：包内 arm64 sidecar 为
+**96,307,216 bytes**，SHA-256
+`8e949580c34297578b9bceb3d4988cf2bc98cbe65467405b27bed255614f05d4`；
+`Ordo-0.3.0-arm64.dmg` 为 **220,362,071 bytes**，SHA-256
+`48ae6353872a4acb21a31d413724bd4a370c766cc6f4a9e43ffd344071e15be4`。
+包内 sidecar 实际启动后 `/health`、中文检索、FTS5、sqlite-vec、OCR 与固定检索
+配置全部通过，`Resources/brand` 中的运行时图标也已核对。
+
+`main` 更新仍需满足：集成分支推送后 GitHub Ubuntu/Windows 全矩阵及手动
+package-smoke 全绿；推送前再次 fetch，若
 `origin/main` 又前进则重新普通 merge 并复验。任一打包或 CI 失败都不得把未经验证的
 融合结果推到 `main`。标签语义评测、macOS 公证/签名、Windows 签名继续作为正式公开
 发布门槛，不伪装为本轮代码同步已经完成。

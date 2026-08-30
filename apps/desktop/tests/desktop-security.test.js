@@ -62,6 +62,7 @@ test('non-macOS tray remains visible when optional brand assets are absent', () 
 
 test('Ordo release and tray icons are tracked and wired into packaging', () => {
   const builder = fs.readFileSync(builderPath, 'utf8');
+  const metadata = JSON.parse(fs.readFileSync(path.join(desktopRoot, 'package.json'), 'utf8'));
   const png = path.join(desktopRoot, 'build', 'brand-mark.png');
   const icns = path.join(desktopRoot, 'build', 'icon.icns');
   const ico = path.join(desktopRoot, 'build', 'icon.ico');
@@ -75,6 +76,9 @@ test('Ordo release and tray icons are tracked and wired into packaging', () => {
   assert.match(builder, /to: brand\/icon\.png/);
   assert.match(builder, /win:\s*\n\s*icon: icon\.ico/);
   assert.match(builder, /mac:\s*\n\s*icon: icon\.icns/);
+  assert.equal(metadata.desktopName, 'ordo.desktop');
+  assert.match(builder, /linux:[\s\S]*?syncDesktopName: true/);
+  assert.doesNotMatch(builder, /desktop:\s*\n\s*StartupWMClass:/);
 });
 
 test('core workbench controls expose keyboard and assistive semantics', () => {

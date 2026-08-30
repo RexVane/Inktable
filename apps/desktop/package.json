@@ -4,6 +4,7 @@
   "description": "Ordo — local-first personal knowledge base for macOS, Windows, and Linux / 本地优先的个人知识库（macOS / Windows / Linux）",
   "author": "RexVane",
   "repository": "https://github.com/RexVane/Ordo.git",
+  "desktopName": "ordo.desktop",
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
