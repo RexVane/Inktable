@@ -206,6 +206,30 @@ test('strict evidence mode refuses unsupported questions without calling a remot
   assert.equal(built.result.status, 'active');
 });
 
+test('web workbench api client request shapes are accepted alongside canonical ones', async t => {
+  const { request } = await fixture(t);
+  const kb = (await request('POST', '/api/v1/knowledge-bases', { name: '前端形状测试库' })).json().data;
+  const dataset = kb.datasets[0];
+  const source = (await request('POST', `/api/v1/datasets/${dataset.id}/sources`, { type: 'upload', name: '形状依据' })).json().data;
+  const upload = multipart('frontend-shape.md', '# 启动\n\n运行 npm start 启动服务。', { sourceId: source.id });
+  const registered = (await request('POST', `/api/v1/datasets/${dataset.id}/files`, upload.payload, upload.headers)).json().data;
+  await waitTask(request, registered.task.id);
+  await waitTask(request, (await request('POST', `/api/v1/datasets/${dataset.id}/releases`, { activate: true })).json().data.id);
+
+  // 工作台 api.createConversation 形状：{ title, knowledge_base_id }（snake_case，无模型连接）
+  const conversation = (await request('POST', '/api/v1/conversations', { title: '前端形状', knowledge_base_id: kb.id })).json().data;
+  assert.equal(conversation.knowledge_base_id, kb.id);
+  // 工作台 api.sendMessage 形状：{ query }，无外部模型时降级本地抽取回答
+  const answer = (await request('POST', `/api/v1/conversations/${conversation.id}/messages`, { query: '如何启动 Ordo？' })).json().data;
+  assert.equal(answer.assistantMessage.evidence_status, 'sufficient');
+  assert.ok(answer.assistantMessage.citations.length > 0);
+  assert.equal(answer.trace.stages.length, 8);
+  // 工作台 api.updateSetting 形状：{ value: {...} } 包装
+  await request('PUT', '/api/v1/settings/general', { value: { language: 'zh-CN' } });
+  const settings = (await request('GET', '/api/v1/settings')).json().data;
+  assert.equal(settings.general.language, 'zh-CN');
+});
+
 async function authHeaders(app) {
   const bootstrap = await app.inject({ method: 'GET', url: '/api/v1/session/bootstrap' });
   return { cookie: bootstrap.headers['set-cookie'].split(';')[0], 'x-ordo-csrf': bootstrap.json().data.csrfToken };

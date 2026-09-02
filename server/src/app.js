@@ -276,7 +276,12 @@ async function createApp(overrides = {}) {
 
   app.get('/api/v1/search', async request => data(product.globalSearch(request.query?.q, workspace(request), boundedInt(request.query?.limit, 30, 1, 100, 'limit'))));
   app.get('/api/v1/settings', async request => data(product.getSettings(workspace(request))));
-  app.put('/api/v1/settings/:key', async request => data(product.updateSetting(request.params.key, request.body || {}, workspace(request), request.id)));
+  app.put('/api/v1/settings/:key', async request => {
+    const body = request.body || {};
+    // 兼容 Web 工作台 api 客户端的 {value:{...}} 包装；裸分组对象同样接受
+    const value = body && typeof body === 'object' && !Array.isArray(body) && Object.keys(body).length === 1 && 'value' in body ? body.value : body;
+    return data(product.updateSetting(request.params.key, value, workspace(request), request.id));
+  });
   app.get('/api/v1/feature-flags', async request => data(product.featureFlags(workspace(request))));
   app.put('/api/v1/feature-flags/:key', async request => data(product.setFeatureFlag(request.params.key, request.body || {}, workspace(request), request.id)));
   app.get('/api/v1/wiki', async request => { product.requireFeature('wiki', workspace(request)); return data(product.listWiki(workspace(request), request.query?.knowledgeBaseId)); });

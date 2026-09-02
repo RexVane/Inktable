@@ -12,7 +12,10 @@ class QueryService {
     this.config = config;
   }
 
-  createConversation(input, workspaceId = this.config.localWorkspaceId, requestId) {
+  createConversation(rawInput, workspaceId = this.config.localWorkspaceId, requestId) {
+    const input = { ...(rawInput || {}) };
+    // 兼容 Web 工作台 api 客户端的 snake_case 形状
+    if (!input.knowledgeBaseId && input.knowledge_base_id) input.knowledgeBaseId = input.knowledge_base_id;
     const kb = this.knowledge.ensureKnowledgeBase(required(input.knowledgeBaseId, 'knowledgeBaseId'), workspaceId);
     const dataset = input.datasetId
       ? this.knowledge.ensureDataset(input.datasetId, workspaceId)
@@ -65,7 +68,7 @@ class QueryService {
   async ask(conversationId, input, workspaceId = this.config.localWorkspaceId, requestId) {
     const conversation = this.getConversation(conversationId, workspaceId);
     if (conversation.status !== 'active') throw new AppError(409, 'INVALID_STATE', '当前会话不可继续问答');
-    const question = required(input.question, 'question');
+    const question = required(input.question ?? input.query, 'question');
     const userMessageId = id('msg');
     const timestamp = now();
     this.db.run("INSERT INTO messages(id,workspace_id,conversation_id,role,content,metadata_json,created_at) VALUES(?,?,?,?,?,?,?)",
