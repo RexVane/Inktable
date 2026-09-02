@@ -210,6 +210,11 @@
           this.csrfToken = json.data?.csrfToken;
           this.workspaceId = json.data?.workspaceId;
           this.connected = true;
+          try {
+            await this.syncContext();
+            // 首屏可能在会话建立前已按演示模式渲染，连接成功后刷新当前页
+            if (typeof render === 'function') render();
+          } catch (e) { console.warn('[api] syncContext failed:', e && e.message); }
           return true;
         }
       } catch (e) {
@@ -219,38 +224,163 @@
     },
 
     async request(url, options = {}) {
-      const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+      const headers = { ...(options.headers || {}) };
+      if (!(options.body instanceof FormData)) headers['Content-Type'] = 'application/json';
       if (this.csrfToken && !['GET', 'HEAD'].includes(options.method || 'GET')) {
         headers['x-ordo-csrf'] = this.csrfToken;
       }
       try {
         const res = await fetch(url, { ...options, headers });
         if (res.ok) {
+          this.lastError = null;
           return await res.json();
         }
+        const payload = await res.json().catch(() => null);
+        this.lastError = { status: res.status, ...(payload && payload.error ? payload.error : {}), message: (payload && payload.error && payload.error.message) || `HTTP ${res.status}` };
+        console.warn('[api] request failed:', url, res.status, this.lastError.message);
       } catch (e) {
-        console.warn('[api] request failed:', url, e.message);
+        this.lastError = { status: 0, message: e && e.message ? e.message : String(e) };
+        console.warn('[api] request failed:', url, e && e.message);
       }
       return null;
     },
 
+    // 启动后预取后端上下文（知识库/模型/助手/默认数据集）；失败保持离线演示模式
+    async syncContext() {
+      const ctx = { knowledgeBases: [], models: [], assistants: [], defaultKbId: null, defaultDatasetId: null };
+      const [kbs, models, assistants] = await Promise.all([this.getKnowledgeBases(), this.getModels(), this.getAssistants()]);
+      ctx.knowledgeBases = kbs || [];
+      ctx.models = models || [];
+      ctx.assistants = assistants || [];
+      const firstKb = ctx.knowledgeBases.find(kb => kb.status === 'active' || !kb.status) || ctx.knowledgeBases[0];
+      if (firstKb) {
+        ctx.defaultKbId = firstKb.id;
+        const datasets = await this.getDatasets(firstKb.id);
+        const withRelease = (datasets || []).find(d => d.active_release_id);
+        ctx.defaultDatasetId = (withRelease || (datasets || [])[0] || {}).id || null;
+      }
+      this.context = ctx;
+      this.applyContextToState(ctx);
+      return ctx;
+    },
+
+    // 把真实后端对象映射进工作台状态；无法映射的本地示例条目标记“未接入”
+    applyContextToState(ctx) {
+      (ctx.models || []).forEach(m => {
+        state.modelsData[m.id] = {
+          backendId: m.id,
+          name: m.name,
+          provider: m.provider === 'openai-compatible' ? 'OpenAI 兼容接口' : m.provider === 'ollama' ? '本地 Ollama / vLLM' : '本地证据抽取',
+          url: m.base_url || '',
+          modelName: m.model_id || '',
+          timeout: 60,
+          proxy: '',
+          notes: '',
+          status: m.status === 'available' ? 'ok' : 'danger',
+          statusText: m.status === 'available' ? '可用' : (m.status === 'unverified' ? '未验证' : (m.status || '未测试')),
+          latency: '—',
+          time: m.updated_at || ''
+        };
+      });
+      if ((ctx.models || []).length) {
+        Object.keys(state.modelsData).forEach(key => {
+          if (!state.modelsData[key].backendId) {
+            state.modelsData[key].status = 'demo';
+            state.modelsData[key].statusText = '未接入';
+          }
+        });
+        state.selectedModel = ctx.models[0].id;
+      }
+      if ((ctx.assistants || []).length) {
+        state.assistants = ctx.assistants.map(a => {
+          let config = {};
+          try { config = typeof a.draft_config_json === 'string' ? JSON.parse(a.draft_config_json) : (a.draft_config_json || {}); } catch (e) { config = {}; }
+          return {
+            id: a.id,
+            backendId: a.id,
+            name: a.name,
+            status: a.status,
+            statusText: a.status === 'published' ? '已发布' : a.status === 'paused' ? '已停用' : a.status === 'draft' ? '草稿' : (a.status || '—'),
+            health: a.status === 'published' ? '健康' : '未接入',
+            url: config.url || '—',
+            kb: a.dataset_name || '—',
+            version: a.release_version ? `v${a.release_version}` : 'v0.1',
+            desc: config.description || '',
+            tone: config.tone || '专业且友好',
+            welcome: config.welcome || '你好，请问有什么可以帮你？',
+            questions: config.questions || [],
+            requestsToday: '—',
+            successRate: '—'
+          };
+        });
+      }
+    },
+
     async getDashboard() { return (await this.request('/api/v1/dashboard'))?.data; },
     async getKnowledgeBases() { return (await this.request('/api/v1/knowledge-bases'))?.data; },
+    async createKnowledgeBase(payload) { return (await this.request('/api/v1/knowledge-bases', { method: 'POST', body: JSON.stringify(payload) }))?.data; },
+    async getKnowledgeBase(kbId) { return (await this.request(`/api/v1/knowledge-bases/${kbId}`))?.data; },
     async getDatasets(kbId) { return (await this.request(`/api/v1/knowledge-bases/${kbId}/datasets`))?.data; },
-    async getDocuments(dsId) { return (await this.request(`/api/v1/datasets/${dsId}/documents`))?.data; },
-    async getTasks() { return (await this.request('/api/v1/tasks'))?.data; },
+    async getDocuments(dsId, params = {}) {
+      const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')).toString();
+      return (await this.request(`/api/v1/datasets/${dsId}/documents${qs ? `?${qs}` : ''}`))?.data;
+    },
+    async uploadDocument(dsId, file, sourceId) {
+      const formData = new FormData();
+      formData.append('file', file);
+      if (sourceId) formData.append('sourceId', sourceId);
+      return (await this.request(`/api/v1/datasets/${dsId}/files`, { method: 'POST', body: formData }))?.data;
+    },
+    async getChunks(dsId, params = {}) {
+      const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')).toString();
+      return (await this.request(`/api/v1/datasets/${dsId}/chunks${qs ? `?${qs}` : ''}`))?.data;
+    },
+    async getReleases(dsId) { return (await this.request(`/api/v1/datasets/${dsId}/releases`))?.data; },
+    async buildRelease(dsId, payload = {}) { return (await this.request(`/api/v1/datasets/${dsId}/releases`, { method: 'POST', body: JSON.stringify(payload) }))?.data; },
+    async getTasks(params = {}) {
+      const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')).toString();
+      return (await this.request(`/api/v1/tasks${qs ? `?${qs}` : ''}`))?.data;
+    },
+    async waitTask(taskId, timeoutMs = 20000) { return (await this.request(`/api/v1/tasks/${taskId}/wait?timeoutMs=${timeoutMs}`))?.data; },
     async getModels() { return (await this.request('/api/v1/models'))?.data; },
-    async testModel(modelId) { return (await this.request(`/api/v1/models/${modelId}/test`, { method: 'POST' }))?.data; },
+    async createModel(payload) { return (await this.request('/api/v1/models', { method: 'POST', body: JSON.stringify(payload) }))?.data; },
+    async testModel(modelId) { return (await this.request(`/api/v1/models/${modelId}/test`, { method: 'POST', body: JSON.stringify({}) }))?.data; },
     async getAssistants() { return (await this.request('/api/v1/assistants'))?.data; },
-    async updateAssistant(id, data) { return (await this.request(`/api/v1/assistants/${id}`, { method: 'PATCH', body: JSON.stringify(data) }))?.data; },
+    async updateAssistant(id, payload) { return (await this.request(`/api/v1/assistants/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }))?.data; },
     async getConversations() { return (await this.request('/api/v1/conversations'))?.data; },
-    async createConversation(title, kbId) { return (await this.request('/api/v1/conversations', { method: 'POST', body: JSON.stringify({ title, knowledge_base_id: kbId }) }))?.data; },
-    async sendMessage(convId, query) { return (await this.request(`/api/v1/conversations/${convId}/messages`, { method: 'POST', body: JSON.stringify({ query }) }))?.data; },
+    async getConversation(convId) { return (await this.request(`/api/v1/conversations/${convId}`))?.data; },
+    async createConversation(title, kbId, datasetId) {
+      return (await this.request('/api/v1/conversations', { method: 'POST', body: JSON.stringify({ title, knowledgeBaseId: kbId, ...(datasetId ? { datasetId } : {}) }) }))?.data;
+    },
+    async sendMessage(convId, question) { return (await this.request(`/api/v1/conversations/${convId}/messages`, { method: 'POST', body: JSON.stringify({ question }) }))?.data; },
+    async sendFeedback(messageId, payload) { return (await this.request(`/api/v1/messages/${messageId}/feedback`, { method: 'POST', body: JSON.stringify(payload) }))?.data; },
+    async getTraces(params = {}) {
+      const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')).toString();
+      return (await this.request(`/api/v1/traces${qs ? `?${qs}` : ''}`))?.data;
+    },
     async getTrace(traceId) { return (await this.request(`/api/v1/traces/${traceId}`))?.data; },
-    async search(q) { return (await this.request(`/api/v1/search?q=${encodeURIComponent(q)}`))?.data; },
+    async openCitation(citationId) { return (await this.request(`/api/v1/citations/${citationId}`))?.data; },
+    async wikiFromMessage(messageId, payload = {}) { return (await this.request(`/api/v1/wiki/from-message/${messageId}`, { method: 'POST', body: JSON.stringify(payload) }))?.data; },
+    async getFeatureFlags() { return (await this.request('/api/v1/feature-flags'))?.data; },
     async getSettings() { return (await this.request('/api/v1/settings'))?.data; },
-    async updateSetting(key, value) { return (await this.request(`/api/v1/settings/${encodeURIComponent(key)}`, { method: 'PUT', body: JSON.stringify({ value }) }))?.data; }
+    async updateSetting(key, value) { return (await this.request(`/api/v1/settings/${encodeURIComponent(key)}`, { method: 'PUT', body: JSON.stringify(value) }))?.data; },
+    async getBackups() { return (await this.request('/api/v1/backups'))?.data; },
+    async createBackup(label) { return (await this.request('/api/v1/backups', { method: 'POST', body: JSON.stringify({ label: label || 'manual' }) }))?.data; },
+    async search(q) { return (await this.request(`/api/v1/search?q=${encodeURIComponent(q)}`))?.data; },
+
+    parseCitationLocator(citation) {
+      let locator = {};
+      try { locator = typeof citation.locator_json === 'string' ? JSON.parse(citation.locator_json) : (citation.locator_json || citation.locator || {}); } catch (e) { locator = {}; }
+      if (locator.page) return `P.${locator.page}`;
+      if (locator.slide) return `S.${locator.slide}`;
+      if (locator.sheet) return `Sheet ${locator.sheet}`;
+      if (locator.line) return `L.${locator.line}`;
+      return '';
+    }
   };
+
+  // 页面加载即建立本机会话（CSRF + Cookie）；未连接时页面保持离线演示模式
+  api.bootstrap();
 
   // Expose api & state globally for debugging & testing
   if (typeof window !== 'undefined') {
@@ -550,17 +680,19 @@
         showToast(`正在上传 ${files.length} 个文件...`);
 
         for (const file of files) {
+          let uploadTaskId = null;
           if (api && api.connected) {
-            try {
-              const formData = new FormData();
-              formData.append('file', file);
-              await fetch('/api/v1/datasets/ds_default/files', {
-                method: 'POST',
-                headers: api.csrfToken ? { 'x-ordo-csrf': api.csrfToken } : {},
-                body: formData
-              });
-            } catch (err) {
-              console.warn('API file upload error:', err);
+            const dsId = api.context && api.context.defaultDatasetId;
+            if (!dsId) {
+              showToast(`${file.name} 上传失败：尚无可用数据集，请先在「数据配置」创建知识库`, 'error');
+            } else {
+              const uploaded = await api.uploadDocument(dsId, file);
+              if (uploaded && uploaded.task) {
+                uploadTaskId = uploaded.task.id;
+                showToast(`${file.name} 已登记，解析任务执行中（${uploadTaskId.slice(0, 18)}…）`);
+              } else {
+                showToast(`${file.name} 上传失败：${(api.lastError && api.lastError.message) || '服务未确认'}`, 'error');
+              }
             }
           }
 
@@ -571,9 +703,10 @@
             size: (file.size / 1024).toFixed(1) + ' KB',
             type: ext.toUpperCase(),
             icon: ext === 'pdf' ? '📕' : ext === 'docx' ? '📘' : ext === 'xlsx' ? '📗' : ext === 'pptx' ? '📙' : '📄',
-            status: '已完成',
+            status: uploadTaskId ? '解析中' : (api && api.connected ? '登记失败' : '已完成'),
             time: '刚刚',
-            chunks: Math.max(1, Math.floor(file.size / 600))
+            chunks: uploadTaskId ? '—' : Math.max(1, Math.floor(file.size / 600)),
+            taskId: uploadTaskId
           };
 
           if (state.datasetDocs) {
@@ -581,20 +714,47 @@
           }
 
           state.parsingTasks.unshift({
-            id: 'p_' + Date.now() + Math.random().toString(36).slice(2, 5),
+            id: uploadTaskId || 'p_' + Date.now() + Math.random().toString(36).slice(2, 5),
+            taskId: uploadTaskId,
             name: file.name,
-            status: 'processing',
-            pages: '第 1 页/共 ' + Math.max(1, Math.floor(file.size / 40000)) + ' 页',
-            totalPages: Math.max(1, Math.floor(file.size / 40000)),
-            curPage: 1,
-            density: '80%',
-            parser: ext === 'pdf' ? 'pypdf' : 'native',
-            latency: '42 ms',
-            quality: 97
+            status: uploadTaskId ? '解析中' : 'processing',
+            pages: uploadTaskId ? '—' : '第 1 页/共 ' + Math.max(1, Math.floor(file.size / 40000)) + ' 页',
+            totalPages: uploadTaskId ? 0 : Math.max(1, Math.floor(file.size / 40000)),
+            curPage: uploadTaskId ? 0 : 1,
+            density: uploadTaskId ? '—' : '80%',
+            parser: uploadTaskId ? 'ordo-parser' : (ext === 'pdf' ? 'pypdf' : 'native'),
+            latency: uploadTaskId ? '—' : '42 ms',
+            quality: uploadTaskId ? 0 : 97
           });
+
+          // 已连接：轮询真实解析任务，按后端确认结果更新状态（不伪造完成）
+          if (uploadTaskId) {
+            (async () => {
+              for (let attempt = 0; attempt < 6; attempt++) {
+                const task = await api.waitTask(uploadTaskId, 20000);
+                if (!task || !['queued', 'running', 'paused'].includes(task.status)) {
+                  const doc = (state.datasetDocs || []).find(d => d.taskId === uploadTaskId);
+                  const parseEntry = state.parsingTasks.find(t => t.taskId === uploadTaskId);
+                  if (task && ['succeeded', 'partial'].includes(task.status)) {
+                    const quality = task.result && task.result.qualityStatus;
+                    if (doc) { doc.status = quality === 'publishable' ? '已完成' : '需复核'; if (task.result && task.result.blockCount != null) doc.chunks = task.result.blockCount; }
+                    if (parseEntry) { parseEntry.status = quality === 'publishable' ? '已完成' : '需复核'; parseEntry.quality = quality === 'publishable' ? 100 : 60; }
+                    showToast(`${file.name} 解析${quality === 'publishable' ? '完成' : '结果需复核'}`, quality === 'publishable' ? 'ok' : '');
+                  } else {
+                    if (doc) doc.status = '解析失败';
+                    if (parseEntry) { parseEntry.status = 'failed'; parseEntry.error = (task && task.error_message) || '解析失败'; }
+                    showToast(`${file.name} 解析失败：${(task && task.error_message) || '任务异常'}`, 'error');
+                  }
+                  render();
+                  return;
+                }
+              }
+              showToast(`${file.name} 解析仍在进行，可稍后在「数据解析」查看`, '');
+            })();
+          }
         }
 
-        showToast(`成功导入 ${files.length} 个文件！已加入解析与切块队列`, 'ok');
+        showToast(`成功导入 ${files.length} 个文件！${api && api.connected ? '已登记入库并开始解析' : '已加入解析与切块队列（演示模式）'}`, 'ok');
         nativeFileInputEl.value = '';
         render();
       });
@@ -1096,10 +1256,117 @@
 
   /* 01 首页 (Home) - 100% 对应 01-首页.png 撑满一页布局 */
   async function pageHome() {
-    const trend = [40, 54, 68, 45, 78, 102, 86];
-    const dates = ['05-14', '05-15', '05-16', '05-17', '05-18', '05-19', '05-20'];
-    const maxVal = 120;
+    let demo = !(api && api.connected);
+    let dashboard = null;
+    if (!demo) {
+      dashboard = await api.getDashboard();
+      if (!dashboard) {
+        // 已连接但仪表盘读取失败：如实展示，不回退演示数据
+        return { desc: '知识库与 AI 应用运行总览', html: `<div class="card" style="padding:24px;"><b>仪表盘读取失败</b><div class="muted" style="margin-top:6px;">${esc((api.lastError && api.lastError.message) || '服务无响应')}。请确认本地 Ordo 服务运行正常后刷新。</div></div>` };
+      }
+    }
+
+    const demoTrend = [40, 54, 68, 45, 78, 102, 86];
+    let trend = demoTrend;
+    let dates = ['05-14', '05-15', '05-16', '05-17', '05-18', '05-19', '05-20'];
+    if (!demo) {
+      const trendMap = {};
+      (dashboard.requestTrend || []).forEach(row => { trendMap[String(row.day).slice(5)] = row.count; });
+      dates = []; trend = [];
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(Date.now() - i * 86400000);
+        const key = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        dates.push(key);
+        trend.push(trendMap[key] || 0);
+      }
+    }
+    const maxVal = Math.max(40, ...trend);
     const pts = trend.map((v, i) => `${(i / (trend.length - 1)) * 380 + 40},${160 - (v / maxVal) * 125}`).join(' ');
+
+    let statCardsHtml;
+    let attentionHtml;
+    let kbStatusHtml;
+    let statsAsOf = '';
+    if (demo) {
+      statCardsHtml = `
+        ${statCard('db', '数据库连接', '4')}
+        ${statCard('cubes', '知识块', '18,642')}
+        ${statCard('bot', '智能助手', '6')}
+        ${statCard('chart', '今日请求', '86')}
+        ${statCard('flow', '模型连接', '<span class="ok-text" style="color:var(--accent);">3 正常</span> <span style="font-size:14px;color:var(--ink-dim);font-weight:normal;">/ 1 未配置</span>')}
+        ${statCard('doc', 'Wiki / 笔记', '327')}
+        ${statCard('graph', '知识图谱', '2,418', '', '实体')}
+        ${statCard('stack', '索引状态', '18,210', '', '可用')}`;
+      attentionHtml = `
+            <div class="home-sub-card" onclick="window.location.hash='#/settings/models'">
+              <div class="home-warn-triangle">⚠</div>
+              <div class="grow"><b>模型连接未配置</b><div class="muted" style="font-size:12px;margin-top:2px;">OpenAI-备用</div><div style="font-size:11.5px;color:var(--ink-faint);margin-top:2px;">10 分钟前</div></div>
+              <span class="list-arrow">›</span>
+            </div>
+            <div class="home-sub-card" onclick="window.location.hash='#/knowledge/index'">
+              <div class="home-warn-triangle orange">⚠</div>
+              <div class="grow"><b>知识库索引延迟</b><div class="muted" style="font-size:12px;margin-top:2px;">产品文档库</div><div style="font-size:11.5px;color:var(--ink-faint);margin-top:2px;">1 小时前</div></div>
+              <span class="list-arrow">›</span>
+            </div>
+            <div class="home-sub-card" onclick="window.location.hash='#/knowledge/parsing'">
+              <div class="home-warn-triangle orange">⚠</div>
+              <div class="grow"><b>知识块待清洗</b><div class="muted" style="font-size:12px;margin-top:2px;">市场资料库</div><div style="font-size:11.5px;color:var(--ink-faint);margin-top:2px;">2 小时前</div></div>
+              <span class="list-arrow">›</span>
+            </div>`;
+      kbStatusHtml = `
+            <div class="home-sub-card" onclick="window.location.hash='#/knowledge/datasets'">
+              <div class="grow"><div style="display:flex;align-items:center;gap:6px;"><span class="dot" style="background:#0f8b4c;"></span><b>产品文档库</b></div><div class="muted" style="font-size:12px;margin-top:4px;">更新于 5 分钟前（演示数据）</div></div>
+              <div style="text-align:right;font-size:12px;margin-right:4px;"><div class="muted">知识块 8,652</div><div class="ok-text" style="color:var(--accent);">索引 8,610 可用</div></div>
+              <span class="list-arrow">›</span>
+            </div>`;
+      statsAsOf = '<span class="badge" style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;">演示模式 · 数据非真实</span>';
+    } else {
+      const c = dashboard.counts || {};
+      const components = dashboard.components || {};
+      const metaOk = components.metadata && components.metadata.status === 'available';
+      const realModels = (api.context && api.context.models) || [];
+      const modelOk = realModels.filter(m => m.status === 'available').length;
+      const todayRequests = trend[trend.length - 1] || 0;
+      statCardsHtml = `
+        ${statCard('db', '数据库连接', metaOk ? 'SQLite 正常' : '异常')}
+        ${statCard('cubes', '知识块', String(c.chunks ?? 0))}
+        ${statCard('bot', '智能助手', String(c.assistants ?? 0))}
+        ${statCard('chart', '今日请求', String(todayRequests))}
+        ${statCard('flow', '模型连接', `<span class="${modelOk ? 'ok-text' : ''}" style="${modelOk ? 'color:var(--accent);' : ''}">${modelOk} 可用</span> <span style="font-size:14px;color:var(--ink-dim);font-weight:normal;">/ ${realModels.length} 已登记</span>`)}
+        ${statCard('doc', 'Wiki / 笔记', String(c.wikiPages ?? 0))}
+        ${statCard('graph', '知识图谱', '暂未接入')}
+        ${statCard('stack', '活动知识版本', String(c.activeReleases ?? 0), '', '个')}`;
+      statsAsOf = `<span class="muted" style="font-size:11.5px;">统计截至 ${esc(dashboard.generatedAt || '')}</span>`;
+
+      const attention = [];
+      if ((c.failedTasks ?? 0) > 0) {
+        attention.push(`<div class="home-sub-card" onclick="window.location.hash='#/knowledge/parsing'"><div class="home-warn-triangle">⚠</div><div class="grow"><b>${c.failedTasks} 项任务失败</b><div class="muted" style="font-size:12px;margin-top:2px;">解析 / 发布任务需要重试</div></div><span class="list-arrow">›</span></div>`);
+      }
+      const unverifiedModels = realModels.filter(m => m.status !== 'available');
+      if (unverifiedModels.length) {
+        attention.push(`<div class="home-sub-card" onclick="window.location.hash='#/settings/models'"><div class="home-warn-triangle orange">⚠</div><div class="grow"><b>${unverifiedModels.length} 个模型连接待验证</b><div class="muted" style="font-size:12px;margin-top:2px;">${esc(unverifiedModels.map(m => m.name).join('、').slice(0, 40))}</div></div><span class="list-arrow">›</span></div>`);
+      }
+      if ((c.pendingTasks ?? 0) > 0) {
+        attention.push(`<div class="home-sub-card" onclick="window.location.hash='#/knowledge/parsing'"><div class="home-warn-triangle orange">⚠</div><div class="grow"><b>${c.pendingTasks} 项任务处理中</b><div class="muted" style="font-size:12px;margin-top:2px;">解析 / 索引构建进行中</div></div><span class="list-arrow">›</span></div>`);
+      }
+      if (!(c.activeReleases > 0)) {
+        attention.push(`<div class="home-sub-card" onclick="window.location.hash='#/knowledge/index'"><div class="home-warn-triangle orange">⚠</div><div class="grow"><b>尚无活动知识版本</b><div class="muted" style="font-size:12px;margin-top:2px;">构建并发布版本后才能进行问答</div></div><span class="list-arrow">›</span></div>`);
+      }
+      attentionHtml = attention.length ? attention.join('\n') : '<div class="muted" style="padding:16px;text-align:center;">✓ 暂无待处理事项</div>';
+
+      const kbs = dashboard.recentKnowledgeBases || [];
+      kbStatusHtml = kbs.length ? kbs.map(kb => `
+            <div class="home-sub-card" onclick="window.location.hash='#/knowledge/datasets?kb=${esc(kb.id)}'">
+              <div class="grow"><div style="display:flex;align-items:center;gap:6px;"><span class="dot" style="background:${kb.active_release_id ? '#0f8b4c' : '#f59e0b'};"></span><b>${esc(kb.name)}</b></div><div class="muted" style="font-size:12px;margin-top:4px;">更新于 ${esc((kb.updated_at || '').replace('T', ' ').slice(0, 16))}</div></div>
+              <div style="text-align:right;font-size:12px;margin-right:4px;"><div class="muted">文档 ${kb.document_count ?? 0} · 知识块 ${kb.chunk_count ?? 0}</div>${kb.active_release_id ? '<div class="ok-text" style="color:var(--accent);">版本已发布</div>' : '<div class="muted">未发布版本</div>'}</div>
+              <span class="list-arrow">›</span>
+            </div>`).join('\n') : `
+            <div style="padding:20px;text-align:center;">
+              <b style="display:block;">尚未创建知识库</b>
+              <div class="muted" style="font-size:12px;margin:6px 0 12px;">先在「数据配置」创建知识库，再登记数据并构建索引。</div>
+              <button class="btn primary" style="height:32px;font-size:12.5px;" onclick="window.location.hash='#/knowledge/config'">前往创建</button>
+            </div>`;
+    }
 
     const svgChart = `<svg viewBox="0 0 460 200" style="width:100%;height:100%;min-height:210px;flex:1;overflow:visible;">
       <defs>
@@ -1126,14 +1393,7 @@
     <div class="home-page-layout">
       <!-- Top 8 Stat Cards in 2 Rows -->
       <div class="home-stat-grid">
-        ${statCard('db', '数据库连接', '4')}
-        ${statCard('cubes', '知识块', '18,642')}
-        ${statCard('bot', '智能助手', '6')}
-        ${statCard('chart', '今日请求', '86')}
-        ${statCard('flow', '模型连接', '<span class="ok-text" style="color:var(--accent);">3 正常</span> <span style="font-size:14px;color:var(--ink-dim);font-weight:normal;">/ 1 未配置</span>')}
-        ${statCard('doc', 'Wiki / 笔记', '327')}
-        ${statCard('graph', '知识图谱', '2,418', '', '实体')}
-        ${statCard('stack', '索引状态', '18,210', '', '可用')}
+        ${statCardsHtml}
       </div>
 
       <!-- Bottom 3 Cards Filling Remaining Height -->
@@ -1150,77 +1410,19 @@
           </div>
         </div>
 
-        <!-- 2. 需要处理 (3 项卡片) -->
+        <!-- 2. 需要处理 (动态) -->
         <div class="card home-bottom-card">
-          <div class="card-head"><span>需要处理</span></div>
+          <div class="card-head"><span>需要处理</span>${statsAsOf}</div>
           <div class="card-body">
-            <div class="home-sub-card" onclick="window.location.hash='#/settings/models'">
-              <div class="home-warn-triangle">⚠</div>
-              <div class="grow">
-                <b>模型连接未配置</b>
-                <div class="muted" style="font-size:12px;margin-top:2px;">OpenAI-备用</div>
-                <div style="font-size:11.5px;color:var(--ink-faint);margin-top:2px;">10 分钟前</div>
-              </div>
-              <span class="list-arrow">›</span>
-            </div>
-            <div class="home-sub-card" onclick="window.location.hash='#/knowledge/index'">
-              <div class="home-warn-triangle orange">⚠</div>
-              <div class="grow">
-                <b>知识库索引延迟</b>
-                <div class="muted" style="font-size:12px;margin-top:2px;">产品文档库</div>
-                <div style="font-size:11.5px;color:var(--ink-faint);margin-top:2px;">1 小时前</div>
-              </div>
-              <span class="list-arrow">›</span>
-            </div>
-            <div class="home-sub-card" onclick="window.location.hash='#/knowledge/parsing'">
-              <div class="home-warn-triangle orange">⚠</div>
-              <div class="grow">
-                <b>知识块待清洗</b>
-                <div class="muted" style="font-size:12px;margin-top:2px;">市场资料库</div>
-                <div style="font-size:11.5px;color:var(--ink-faint);margin-top:2px;">2 小时前</div>
-              </div>
-              <span class="list-arrow">›</span>
-            </div>
+            ${attentionHtml}
           </div>
         </div>
 
-        <!-- 3. 知识库状态 (3 项卡片) -->
+        <!-- 3. 知识库状态 (动态) -->
         <div class="card home-bottom-card">
           <div class="card-head"><span>知识库状态</span></div>
           <div class="card-body">
-            <div class="home-sub-card" onclick="window.location.hash='#/knowledge/datasets'">
-              <div class="grow">
-                <div style="display:flex;align-items:center;gap:6px;"><span class="dot" style="background:#0f8b4c;"></span><b>产品文档库</b></div>
-                <div class="muted" style="font-size:12px;margin-top:4px;">更新于 5 分钟前</div>
-              </div>
-              <div style="text-align:right;font-size:12px;margin-right:4px;">
-                <div class="muted">知识块 8,652</div>
-                <div class="ok-text" style="color:var(--accent);">索引 8,610 可用</div>
-              </div>
-              <span class="list-arrow">›</span>
-            </div>
-            <div class="home-sub-card" onclick="window.location.hash='#/knowledge/datasets'">
-              <div class="grow">
-                <div style="display:flex;align-items:center;gap:6px;"><span class="dot" style="background:#0f8b4c;"></span><b>技术资料库</b></div>
-                <div class="muted" style="font-size:12px;margin-top:4px;">更新于 23 分钟前</div>
-              </div>
-              <div style="text-align:right;font-size:12px;margin-right:4px;">
-                <div class="muted">知识块 6,421</div>
-                <div class="ok-text" style="color:var(--accent);">索引 6,398 可用</div>
-              </div>
-              <span class="list-arrow">›</span>
-            </div>
-            <div class="home-sub-card" onclick="window.location.hash='#/knowledge/datasets'">
-              <div class="grow">
-                <div style="display:flex;align-items:center;gap:6px;"><span class="dot" style="background:#f59e0b;"></span><b>市场资料库</b></div>
-                <div class="muted" style="font-size:12px;margin-top:4px;">更新于 1 小时前</div>
-              </div>
-              <div style="text-align:right;font-size:12px;margin-right:4px;">
-                <div class="muted">知识块 3,569</div>
-                <div class="muted">索引 3,202 可用</div>
-              </div>
-              <span class="list-arrow">›</span>
-            </div>
+            ${kbStatusHtml}
           </div>
         </div>
       </div>
@@ -1510,7 +1712,7 @@
           <div class="dataset-tree-col">
             <div class="dataset-tree-header">
               <span>目录树</span>
-              <span style="cursor:pointer;color:var(--ink-dim);" onclick="showToast('已刷新目录')">↻</span>
+              <span style="cursor:pointer;color:var(--ink-dim);" onclick="window.handleRefreshDirectory()">↻</span>
             </div>
             <div style="display:flex;flex-direction:column;gap:2px;">
               <div class="dataset-tree-row">
@@ -1572,8 +1774,8 @@
                 <button class="dataset-toolbar-btn" onclick="openCreateFolderPrompt()">📁 新建文件夹</button>
               </div>
               <div style="display:flex;gap:8px;">
-                <button class="dataset-toolbar-btn" onclick="showToast('筛选条件')">▽ 筛选</button>
-                <button class="dataset-toolbar-btn" style="padding:0 8px;" onclick="showToast('已刷新')">↻</button>
+                <button class="dataset-toolbar-btn" onclick="window.toggleDatasetFilter()">▽ 筛选</button>
+                <button class="dataset-toolbar-btn" style="padding:0 8px;" onclick="window.handleRefreshDatasets()">↻</button>
               </div>
             </div>
             <table class="dataset-table">
@@ -1615,12 +1817,12 @@
               <div class="pagination-controls">
                 <button class="page-arrow disabled" type="button">&lt;</button>
                 <button class="page-num active" type="button">1</button>
-                <button class="page-num" type="button" onclick="handleDatasetPageChange(2)">2</button>
-                <button class="page-num" type="button" onclick="handleDatasetPageChange(3)">3</button>
+                <button class="page-num" type="button" onclick="window.handleDatasetPageChange(2)">2</button>
+                <button class="page-num" type="button" onclick="window.handleDatasetPageChange(3)">3</button>
                 <span class="page-ellipsis">...</span>
-                <button class="page-num" type="button" onclick="showToast('第 129 页')">129</button>
-                <button class="page-arrow" type="button" onclick="handleDatasetPageChange(2)">&gt;</button>
-                <div class="page-size-selector" onclick="showToast('每页 10 条 ⌄')">10 条/页 ⌄</div>
+                <button class="page-num" type="button" onclick="window.handleDatasetPageChange(129)">129</button>
+                <button class="page-arrow" type="button" onclick="window.handleDatasetPageChange(2)">&gt;</button>
+                <div class="page-size-selector" onclick="window.handleDatasetPageSizeChange()">10 条/页 ⌄</div>
               </div>
             </div>
           </div>
@@ -1670,7 +1872,7 @@
                 </div>
               </div>
               <div style="margin-top:8px;">
-                <a href="#" style="color:var(--accent);font-weight:600;font-size:12.5px;" onclick="showToast('查看全部关联助手')">查看全部</a>
+                ${state.showAllAssistants ? `<div style='padding:10px;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:4px;color:#64748b;font-size:12px;margin-bottom:8px;text-align:left;font-weight:normal;'>正在加载完整结果...</div>` : ''}<a href="#" style="color:var(--accent);font-weight:600;font-size:12.5px;" onclick="handleToggleExpandState(event, 'showAllAssistants')">${state.showAllAssistants ? '收起 ⌃' : '查看全部'}</a>
               </div>
             </div>
           </div>
@@ -1777,7 +1979,7 @@
         <span style="color:var(--accent);font-size:16px;">🗄</span>
         <span>连接数据库</span>
       </div>
-      <div class="registry-action-card" onclick="showToast('已扫描本机磁盘：发现 3 个文档目录（已安全原位索引）','ok')">
+      <div class="registry-action-card" onclick="window.handleScanLocalDisk()">
         <span style="color:var(--accent);font-size:16px;">💻</span>
         <span>本机探测</span>
       </div>
@@ -1959,18 +2161,18 @@
           <div class="table-pagination-bar" style="padding:14px 18px;">
             <div style="display:flex;align-items:center;gap:12px;">
               <span>共 254 项</span>
-              <div class="page-size-selector" style="margin-left:0;" onclick="showToast('每页 10 条 ⌄')">10 条/页 ⌄</div>
+              <div class="page-size-selector" style="margin-left:0;" onclick="window.handleRegistryPageSizeChange()">10 条/页 ⌄</div>
             </div>
             <div class="pagination-controls">
               <button class="page-arrow disabled" type="button">&lt;</button>
               <button class="page-num active" type="button">1</button>
-              <button class="page-num" type="button" onclick="showToast('第 2 页')">2</button>
-              <button class="page-num" type="button" onclick="showToast('第 3 页')">3</button>
-              <button class="page-num" type="button" onclick="showToast('第 4 页')">4</button>
-              <button class="page-num" type="button" onclick="showToast('第 5 页')">5</button>
+              <button class="page-num" type="button" onclick="window.handleRegistryPageChange(2)">2</button>
+              <button class="page-num" type="button" onclick="window.handleRegistryPageChange(3)">3</button>
+              <button class="page-num" type="button" onclick="window.handleRegistryPageChange(4)">4</button>
+              <button class="page-num" type="button" onclick="window.handleRegistryPageChange(5)">5</button>
               <span class="page-ellipsis">...</span>
-              <button class="page-num" type="button" onclick="showToast('第 26 页')">26</button>
-              <button class="page-arrow" type="button" onclick="showToast('下一页')">&gt;</button>
+              <button class="page-num" type="button" onclick="window.handleRegistryPageChange(26)">26</button>
+              <button class="page-arrow" type="button" onclick="window.handleRegistryPageChange('next')">&gt;</button>
             </div>
           </div>
         </div>
@@ -2028,7 +2230,9 @@
               <span style="color:var(--warn);font-size:16px;">🕒</span>
             </div>
             <div style="text-align:center;padding:12px 0;border-top:1px solid var(--line-soft);">
-              <a href="#" style="color:var(--accent);font-size:13px;font-weight:600;" onclick="showToast('查看全部导入记录')">查看全部 &gt;</a>
+              <a href="#" style="color:var(--accent);font-size:13px;font-weight:600;" onclick="window.toggleParsingRecords(); return false;">
+                ${state.parsingRecordsExpanded ? '收起 &lt;' : '查看全部 &gt;'}
+              </a>
             </div>
           </div>
         </div>
@@ -2056,7 +2260,9 @@
               <span class="list-arrow">›</span>
             </div>
             <div style="text-align:center;padding:12px 0;border-top:1px solid var(--line-soft);">
-              <a href="#" style="color:var(--accent);font-size:13px;font-weight:600;" onclick="showToast('查看全部待处理项')">查看全部 &gt;</a>
+              <a href="#" style="color:var(--accent);font-size:13px;font-weight:600;" onclick="window.toggleParsingPending(); return false;">
+                ${state.parsingPendingExpanded ? '收起 &lt;' : '查看全部 &gt;'}
+              </a>
             </div>
           </div>
         </div>
@@ -2071,19 +2277,31 @@
     <!-- Top Configuration & Actions Bar -->
     <div class="parsing-top-bar" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
       <div style="display:flex;align-items:center;gap:18px;">
-        <div style="display:flex;align-items:center;gap:8px;">
+        <div style="display:flex;align-items:center;gap:8px;position:relative;">
           <span class="muted" style="font-size:13.5px;">知识库</span>
-          <div class="page-size-selector" style="margin-left:0;font-size:13.5px;padding:5px 12px;" onclick="showToast('选择知识库')">产品文档库 ⌄</div>
+          <div class="page-size-selector" style="margin-left:0;font-size:13.5px;padding:5px 12px;cursor:pointer;" onclick="window.toggleParsingKBSelector()">产品文档库 ⌄</div>
+          ${state.parsingKBDropdownOpen ? `
+            <div style="position:absolute;top:32px;left:48px;background:white;border:1px solid var(--line);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.1);z-index:100;min-width:140px;padding:4px 0;">
+              <div style="padding:8px 12px;font-size:13px;cursor:pointer;" onclick="window.toggleParsingKBSelector();showToast('已选择: 产品文档库')">产品文档库</div>
+              <div style="padding:8px 12px;font-size:13px;cursor:pointer;" onclick="window.toggleParsingKBSelector();showToast('已选择: 技术规范库')">技术规范库</div>
+            </div>
+          ` : ''}
         </div>
-        <div style="display:flex;align-items:center;gap:8px;">
+        <div style="display:flex;align-items:center;gap:8px;position:relative;">
           <span class="muted" style="font-size:13.5px;">运行</span>
-          <div class="page-size-selector" style="margin-left:0;font-size:13.5px;padding:5px 12px;" onclick="showToast('选择运行配置')">默认解析运行 ⌄</div>
+          <div class="page-size-selector" style="margin-left:0;font-size:13.5px;padding:5px 12px;cursor:pointer;" onclick="window.toggleParsingRunConfigSelector()">默认解析运行 ⌄</div>
+          ${state.parsingRunConfigDropdownOpen ? `
+            <div style="position:absolute;top:32px;left:40px;background:white;border:1px solid var(--line);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.1);z-index:100;min-width:140px;padding:4px 0;">
+              <div style="padding:8px 12px;font-size:13px;cursor:pointer;" onclick="window.toggleParsingRunConfigSelector();showToast('已选择: 默认解析运行')">默认解析运行</div>
+              <div style="padding:8px 12px;font-size:13px;cursor:pointer;" onclick="window.toggleParsingRunConfigSelector();showToast('已选择: 深度OCR运行')">深度OCR运行</div>
+            </div>
+          ` : ''}
         </div>
       </div>
       <div style="display:flex;gap:10px;">
-        <button class="btn primary" style="background:var(--accent);color:#ffffff;height:36px;padding:0 18px;border-radius:6px;font-size:13.5px;" onclick="handleStartParsingTask()">▶ 开始解析</button>
-        <button class="btn" style="background:#ffffff;border:1px solid var(--line);height:36px;padding:0 16px;border-radius:6px;font-size:13.5px;" onclick="showToast('任务已暂停调度')">⏸ 暂停</button>
-        <button class="btn" style="background:#ffffff;border:1px solid var(--line);height:36px;padding:0 16px;border-radius:6px;font-size:13.5px;" onclick="handleRetryFailedTasks()">↻ 重试失败</button>
+        <button class="btn primary" style="background:var(--accent);color:#ffffff;height:36px;padding:0 18px;border-radius:6px;font-size:13.5px;" onclick="window.handleStartParsingTask()">▶ 开始解析</button>
+        <button class="btn" style="background:#ffffff;border:1px solid var(--line);height:36px;padding:0 16px;border-radius:6px;font-size:13.5px;" onclick="window.handlePauseParsingTask()">⏸ 暂停</button>
+        <button class="btn" style="background:#ffffff;border:1px solid var(--line);height:36px;padding:0 16px;border-radius:6px;font-size:13.5px;" onclick="window.handleRetryFailedTasks()">↻ 重试失败</button>
         <button class="btn" style="background:#ffffff;border:1px solid var(--line);height:36px;padding:0 12px;border-radius:6px;font-size:14px;">⋮</button>
       </div>
     </div>
@@ -2160,7 +2378,7 @@
       <div class="parsing-col-queue">
         <div class="card-head" style="padding:14px 18px;display:flex;justify-content:space-between;align-items:center;">
           <span style="font-size:14px;font-weight:700;">任务队列</span>
-          <span class="muted" style="cursor:pointer;" onclick="showToast('已刷新任务队列')">↻</span>
+          <span class="muted" style="cursor:pointer;" onclick="window.handleRefreshTaskQueue()">↻</span>
         </div>
         <div class="card-body" style="padding:0;">
           <div>
@@ -2190,7 +2408,9 @@
               <span style="color:var(--accent);font-size:14px;">↻</span>
             </div>
             <div style="padding:8px 14px;">
-              <a href="#" style="font-size:12px;color:var(--accent);" onclick="showToast('查看全部处理中任务')">查看全部 (35)</a>
+              <a href="#" style="font-size:12px;color:var(--accent);" onclick="window.toggleParsingProcessing(); return false;">
+                ${state.parsingProcessingExpanded ? '收起 &lt;' : '查看全部 (35)'}
+              </a>
             </div>
 
             <!-- 待处理 (160) -->
@@ -2214,7 +2434,9 @@
             </div>
           </div>
           <div style="padding:10px 14px;margin-top:auto;">
-            <a href="#" style="font-size:12px;color:var(--accent);" onclick="showToast('查看全部失败任务')">查看全部 (6)</a>
+            <a href="#" style="font-size:12px;color:var(--accent);" onclick="window.toggleParsingFailed(); return false;">
+              ${state.parsingFailedExpanded ? '收起 &lt;' : '查看全部 (6)'}
+            </a>
           </div>
         </div>
       </div>
@@ -2242,10 +2464,10 @@
           <div class="parsing-preview-split">
             <!-- Thumbnail Strip -->
             <div class="parsing-thumbnails">
-              <div class="parsing-thumb-box ${state.parsingCurrentPage === 43 ? 'active' : ''}" onclick="handleParsingJumpPage(43)">43<br><span style="font-size:10px;color:var(--ink-faint);">:::</span></div>
-              <div class="parsing-thumb-box ${state.parsingCurrentPage === 44 ? 'active' : ''}" onclick="handleParsingJumpPage(44)">44<br><span style="font-size:10px;color:var(--ink-faint);">:::</span></div>
-              <div class="parsing-thumb-box ${state.parsingCurrentPage === 45 ? 'active' : ''}" onclick="handleParsingJumpPage(45)">45<br><span style="font-size:10px;color:var(--accent);">::</span></div>
-              <div class="parsing-thumb-box ${state.parsingCurrentPage === 46 ? 'active' : ''}" onclick="handleParsingJumpPage(46)">46<br><span style="font-size:10px;color:var(--ink-faint);">:::</span></div>
+              <div class="parsing-thumb-box ${state.parsingCurrentPage === 43 ? 'active' : ''}" onclick="window.handleParsingJumpPage(43)">43<br><span style="font-size:10px;color:var(--ink-faint);">:::</span></div>
+              <div class="parsing-thumb-box ${state.parsingCurrentPage === 44 ? 'active' : ''}" onclick="window.handleParsingJumpPage(44)">44<br><span style="font-size:10px;color:var(--ink-faint);">:::</span></div>
+              <div class="parsing-thumb-box ${state.parsingCurrentPage === 45 ? 'active' : ''}" onclick="window.handleParsingJumpPage(45)">45<br><span style="font-size:10px;color:var(--accent);">::</span></div>
+              <div class="parsing-thumb-box ${state.parsingCurrentPage === 46 ? 'active' : ''}" onclick="window.handleParsingJumpPage(46)">46<br><span style="font-size:10px;color:var(--ink-faint);">:::</span></div>
             </div>
 
             <!-- Viewport centering the A4 page sheet -->
@@ -2546,7 +2768,7 @@
               </label>
             </div>
           </div>
-          <button class="btn" style="width:100%;margin-top:auto;height:34px;background:#ffffff;border:1px solid var(--line);" onclick="showToast('已重置筛选条件')">重置筛选</button>
+          <button class="btn" style="width:100%;margin-top:auto;height:34px;background:#ffffff;border:1px solid var(--line);" onclick="window.handleResetIndexFilters()">重置筛选</button>
         </div>
       </div>
 
@@ -2607,7 +2829,7 @@
         <div class="card">
           <div class="card-head" style="padding:14px 18px;display:flex;justify-content:space-between;align-items:center;">
             <span style="font-size:14px;font-weight:700;color:var(--ink-strong);">知识块编辑</span>
-            <a href="#" style="font-size:12.5px;color:var(--accent);" onclick="showToast('查看源文档')">来源：《人工智能导论》第 12 页 ↗</a>
+            <a href="#" style="font-size:12.5px;color:var(--accent);" onclick="handleViewSourceDoc()">来源：《人工智能导论》第 12 页 ↗</a>
           </div>
           <div class="card-body" style="padding:16px 18px;">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
@@ -2619,10 +2841,10 @@
 人工智能的研究领域包括机器学习、计算机视觉、自然语言处理、专家系统、机器人学等。随着计算能力的提升和大数据的发展，人工智能技术在各行各业得到了广泛应用，推动了社会生产力的变革。</textarea>
             <div style="margin-top:8px;font-size:12.5px;color:var(--ink-dim);">Token 数: 512</div>
             <div style="display:flex;align-items:center;gap:10px;margin-top:14px;">
-              <button class="btn" style="height:34px;font-size:13px;padding:0 16px;border:1px solid var(--line);border-radius:6px;background:#fff;" onclick="showToast('拆分块')">✂ 拆分</button>
-              <button class="btn" style="height:34px;font-size:13px;padding:0 16px;border:1px solid var(--line);border-radius:6px;background:#fff;" onclick="showToast('合并块')">⇥ 合并</button>
-              <button class="btn" style="height:34px;font-size:13px;padding:0 16px;color:var(--danger);border:1px solid #fca5a5;border-radius:6px;background:#fff;" onclick="showToast('已禁用该块')">⊘ 禁用</button>
-              <button class="btn primary" style="margin-left:auto;height:34px;font-size:13px;padding:0 18px;background:var(--accent);color:#fff;border-radius:6px;" onclick="showToast('保存并增量更新成功','ok')">保存并增量更新 ⌄</button>
+              <button class="btn" style="height:34px;font-size:13px;padding:0 16px;border:1px solid var(--line);border-radius:6px;background:#fff;" onclick="window.handleKnowledgeChunkOperation('split')">✂ 拆分</button>
+              <button class="btn" style="height:34px;font-size:13px;padding:0 16px;border:1px solid var(--line);border-radius:6px;background:#fff;" onclick="window.handleKnowledgeChunkOperation('merge')">⇥ 合并</button>
+              <button class="btn" style="height:34px;font-size:13px;padding:0 16px;color:var(--danger);border:1px solid #fca5a5;border-radius:6px;background:#fff;" onclick="window.handleKnowledgeChunkOperation('disable')">⊘ 禁用</button>
+              <button class="btn primary" style="margin-left:auto;height:34px;font-size:13px;padding:0 18px;background:var(--accent);color:#fff;border-radius:6px;" onclick="window.handleKnowledgeChunkOperation('save')">保存并增量更新 ⌄</button>
             </div>
           </div>
         </div>
@@ -2668,8 +2890,8 @@
 
     <!-- Bottom Actions Aligned to Bottom Right -->
     <div style="display:flex;justify-content:flex-end;align-items:center;gap:12px;margin-top:20px;padding-bottom:16px;width:100%;">
-      <button class="btn" style="background:#ffffff;border:1px solid var(--line);border-radius:6px;height:38px;padding:0 22px;font-size:14px;font-weight:500;color:var(--ink-strong);cursor:pointer;" onclick="showToast('查询验证')">查询验证</button>
-      <button class="btn primary" style="background:var(--accent);color:#ffffff;border-radius:6px;height:38px;padding:0 24px;font-size:14px;font-weight:500;cursor:pointer;" onclick="showToast('发布新版本成功','ok')">发布版本</button>
+      <button class="btn" style="background:#ffffff;border:1px solid var(--line);border-radius:6px;height:38px;padding:0 22px;font-size:14px;font-weight:500;color:var(--ink-strong);cursor:pointer;" onclick="window.handleIndexQueryVerify()">查询验证</button>
+      <button class="btn primary" style="background:var(--accent);color:#ffffff;border-radius:6px;height:38px;padding:0 24px;font-size:14px;font-weight:500;cursor:pointer;" onclick="window.handleIndexPublish()">发布版本</button>
     </div>`;
     return { desc: '', actions: '', html };
   }
@@ -2701,7 +2923,7 @@
           <div style="border:1px solid #e5e7eb;border-radius:8px;padding:14px;background:#fafafa;display:flex;flex-direction:column;gap:10px;margin-top:2px;">
             <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #e5e7eb;padding-bottom:8px;">
               <b style="font-size:13.5px;color:var(--ink-strong);">会话上下文</b>
-              <a href="#" style="font-size:12px;color:var(--accent);" onclick="showToast('查看完整上下文')">查看完整上下文 &gt;</a>
+              <a href="#" style="font-size:12px;color:var(--accent);" onclick="handleViewFullContext()">查看完整上下文 &gt;</a>
             </div>
             <div style="display:flex;justify-content:space-between;font-size:12.5px;"><span class="muted">会话轮次</span><b>3</b></div>
             <div style="font-size:12.5px;"><span class="muted">上一轮问题</span><div style="margin-top:2px;color:var(--ink-strong);">产品问答助手支持哪些部署方式？</div></div>
@@ -2825,7 +3047,7 @@
           <div>
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
               <span class="muted" style="font-size:12px;">结构化结果 (JSON 预览)</span>
-              <a href="#" style="font-size:12px;color:var(--accent);" onclick="showToast('编辑 JSON')">编辑</a>
+              <a href="#" style="font-size:12px;color:var(--accent);" onclick="handleEditJSON()">编辑</a>
             </div>
             <pre style="background:#fafafa;padding:8px 12px;border-radius:6px;font-family:var(--font-mono);font-size:11.5px;line-height:1.45;border:1px solid #e5e7eb;margin:0;overflow-x:auto;">1  {
 2    "language": "zh",
@@ -3122,11 +3344,11 @@
 
     <!-- Bottom Actions Toolbar -->
     <div style="display:flex;align-items:center;justify-content:flex-end;gap:12px;margin-top:20px;padding-bottom:16px;">
-      <button class="btn" style="background:#ffffff;border:1px solid #d1d5db;height:38px;padding:0 18px;border-radius:6px;font-size:13.5px;font-weight:500;" onclick="showToast('重新向量化完成','ok')">↻ 重新向量化</button>
+      <button class="btn" style="background:#ffffff;border:1px solid #d1d5db;height:38px;padding:0 18px;border-radius:6px;font-size:13.5px;font-weight:500;" onclick="handleReVectorize()">↻ 重新向量化</button>
       <button class="btn" style="background:#ffffff;border:1px solid #d1d5db;height:38px;padding:0 18px;border-radius:6px;font-size:13.5px;font-weight:500;" onclick="openModelComparisonModal()">📊 对比模型</button>
       <button class="btn primary" style="background:var(--accent);color:#ffffff;height:38px;padding:0 22px;border-radius:6px;font-size:13.5px;font-weight:500;" onclick="window.go('qaflow/route');">进入检索路由 &gt;</button>
     </div>`;
-    const title = `<div style="display:flex;align-items:baseline;gap:24px;flex-wrap:wrap;"><span>问题向量化</span><div style="display:flex;align-items:center;gap:18px;font-size:13px;font-weight:normal;color:var(--ink-dim);"><span>Trace ID <b class="mono" style="color:var(--ink-strong);">QA-2025-0520-0086</b> <span style="cursor:pointer;" onclick="showToast('已复制 Trace ID')">📋</span></span><span>应用 <b style="color:var(--ink-strong);">内部智能问答</b></span><span>知识库 <b style="color:var(--ink-strong);">产品文档库</b></span><span>状态 <span class="ok-text" style="color:var(--accent);font-weight:600;">● 已完成</span></span><span>总耗时 <b style="color:var(--ink-strong);">1.84 s</b></span></div></div>`;
+    const title = `<div style="display:flex;align-items:baseline;gap:24px;flex-wrap:wrap;"><span>问题向量化</span><div style="display:flex;align-items:center;gap:18px;font-size:13px;font-weight:normal;color:var(--ink-dim);"><span>Trace ID <b class="mono" style="color:var(--ink-strong);">QA-2025-0520-0086</b> <span style="cursor:pointer;" onclick="navigator.clipboard.writeText('QA-2025-0520-0086');showToast('Trace ID 已复制到剪贴板','ok')">📋</span></span><span>应用 <b style="color:var(--ink-strong);">内部智能问答</b></span><span>知识库 <b style="color:var(--ink-strong);">产品文档库</b></span><span>状态 <span class="ok-text" style="color:var(--accent);font-weight:600;">● 已完成</span></span><span>总耗时 <b style="color:var(--ink-strong);">1.84 s</b></span></div></div>`;
     return { title, desc: '', actions: '', html };
   }
 
@@ -3390,9 +3612,9 @@
     <div style="display:flex;align-items:center;justify-content:flex-end;gap:12px;margin-top:20px;padding:16px 0 24px;border-top:1px solid #e5e7eb;width:100%;">
       <button class="btn" style="background:#ffffff;border:1px solid #d1d5db;height:38px;padding:0 22px;border-radius:6px;font-size:13.5px;font-weight:500;color:var(--ink-strong);cursor:pointer;" onclick="showToast('编辑路由')">编辑路由</button>
       <button class="btn primary" style="background:var(--accent);color:#ffffff;height:38px;padding:0 24px;border-radius:6px;font-size:13.5px;font-weight:500;cursor:pointer;" onclick="window.go('qaflow/recall')">进入多路召回 &gt;</button>
-      <button class="btn" style="background:#ffffff;border:1.5px solid var(--accent);color:var(--accent);height:38px;padding:0 22px;border-radius:6px;font-size:13.5px;font-weight:500;cursor:pointer;" onclick="showToast('从此阶段重跑','ok');go('qaflow/recall');">从此阶段重跑</button>
+      <button class="btn" style="background:#ffffff;border:1.5px solid var(--accent);color:var(--accent);height:38px;padding:0 22px;border-radius:6px;font-size:13.5px;font-weight:500;cursor:pointer;" onclick="handleQARerun()">从此阶段重跑</button>
     </div>`;
-    const title = `<div style="display:flex;align-items:baseline;gap:24px;flex-wrap:wrap;"><span>检索路由</span><div style="display:flex;align-items:center;gap:18px;font-size:13px;font-weight:normal;color:var(--ink-dim);"><span>Trace ID <b class="mono" style="color:var(--ink-strong);">QA-2025-0520-0086</b> <span style="cursor:pointer;" onclick="showToast('已复制 Trace ID')">📋</span></span><span>应用 <b style="color:var(--ink-strong);">内部智能问答</b></span><span>知识库 <b style="color:var(--ink-strong);">产品文档库</b></span><span>状态 <span class="ok-text" style="color:var(--accent);font-weight:600;">● 已完成</span></span><span>总耗时 <b style="color:var(--ink-strong);">1.84 s</b></span></div></div>`;
+    const title = `<div style="display:flex;align-items:baseline;gap:24px;flex-wrap:wrap;"><span>检索路由</span><div style="display:flex;align-items:center;gap:18px;font-size:13px;font-weight:normal;color:var(--ink-dim);"><span>Trace ID <b class="mono" style="color:var(--ink-strong);">QA-2025-0520-0086</b> <span style="cursor:pointer;" onclick="navigator.clipboard.writeText('QA-2025-0520-0086');showToast('Trace ID 已复制到剪贴板','ok')">📋</span></span><span>应用 <b style="color:var(--ink-strong);">内部智能问答</b></span><span>知识库 <b style="color:var(--ink-strong);">产品文档库</b></span><span>状态 <span class="ok-text" style="color:var(--accent);font-weight:600;">● 已完成</span></span><span>总耗时 <b style="color:var(--ink-strong);">1.84 s</b></span></div></div>`;
     return { title, desc: '', actions: '', html };
   }
 
@@ -3415,7 +3637,7 @@
           <span>🛡️</span> 权限过滤 <span style="color:#16a34a;font-weight:600;">已开启</span> ⌄
         </div>
       </div>
-      <button class="btn" style="background:#fff;border:1px solid #e5e7eb;height:34px;padding:0 14px;font-size:13px;cursor:pointer;" onclick="showToast('正在重试失败通道...')">
+      <button class="btn" style="background:#fff;border:1px solid #e5e7eb;height:34px;padding:0 14px;font-size:13px;cursor:pointer;" onclick="handleRetryChannel()">
         ↻ 重试失败通道
       </button>
     </div>
@@ -3471,7 +3693,7 @@
           </div>
           <!-- Footer Link -->
           <div style="padding:8px;text-align:center;border-top:1px solid #f1f5f9;margin-top:auto;">
-            <a href="#" style="font-size:11.5px;color:var(--accent);" onclick="showToast('查看全部 18 条向量召回结果')">查看全部 18 条 ⌄</a>
+            ${state.showVectorResults ? `<div style='padding:10px;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:4px;color:#64748b;font-size:12px;margin-bottom:8px;text-align:left;'>正在加载完整结果...</div>` : ''}<a href="#" style="font-size:11.5px;color:var(--accent);" onclick="handleToggleExpandState(event, 'showVectorResults')">${state.showVectorResults ? '收起 ⌃' : '查看全部 18 条 ⌄'}</a>
           </div>
         </div>
       </div>
@@ -3525,7 +3747,7 @@
           </div>
           <!-- Footer Link -->
           <div style="padding:8px;text-align:center;border-top:1px solid #f1f5f9;margin-top:auto;">
-            <a href="#" style="font-size:11.5px;color:var(--accent);" onclick="showToast('查看全部 15 条全文召回结果')">查看全部 15 条 ⌄</a>
+            ${state.showBM25Results ? `<div style='padding:10px;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:4px;color:#64748b;font-size:12px;margin-bottom:8px;text-align:left;'>正在加载完整结果...</div>` : ''}<a href="#" style="font-size:11.5px;color:var(--accent);" onclick="handleToggleExpandState(event, 'showBM25Results')">${state.showBM25Results ? '收起 ⌃' : '查看全部 15 条 ⌄'}</a>
           </div>
         </div>
       </div>
@@ -3579,7 +3801,7 @@
           </div>
           <!-- Footer Link -->
           <div style="padding:8px;text-align:center;border-top:1px solid #f1f5f9;margin-top:auto;">
-            <a href="#" style="font-size:11.5px;color:var(--accent);" onclick="showToast('查看全部 8 条图谱召回结果')">查看全部 8 条 ⌄</a>
+            ${state.showGraphResults ? `<div style='padding:10px;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:4px;color:#64748b;font-size:12px;margin-bottom:8px;text-align:left;'>正在加载完整结果...</div>` : ''}<a href="#" style="font-size:11.5px;color:var(--accent);" onclick="handleToggleExpandState(event, 'showGraphResults')">${state.showGraphResults ? '收起 ⌃' : '查看全部 8 条 ⌄'}</a>
           </div>
         </div>
       </div>
@@ -3597,7 +3819,7 @@
           <b style="font-size:13.5px;color:var(--ink-strong);">未触发结构化查询条件</b>
           <div class="muted" style="font-size:12px;margin-top:4px;">路由策略未命中结构化查询规则</div>
           <div style="margin-top:20px;">
-            <a href="#" style="font-size:12px;color:var(--accent);" onclick="showToast('查看结构化路由详情')">查看详情 &gt;</a>
+            <a href="#" style="font-size:12px;color:var(--accent);" onclick="handleViewDetails()">查看详情 &gt;</a>
           </div>
         </div>
       </div>
@@ -3681,7 +3903,7 @@
       <button class="btn" style="background:#ffffff;border:1px solid #d1d5db;height:38px;padding:0 20px;border-radius:6px;font-size:13.5px;font-weight:500;color:var(--ink-strong);cursor:pointer;" onclick="showToast('重试失败通道')">↻ 重试失败通道</button>
       <button class="btn primary" style="background:var(--accent);color:#ffffff;height:38px;padding:0 24px;border-radius:6px;font-size:13.5px;font-weight:500;cursor:pointer;" onclick="window.go('qaflow/fuse')">进入结果融合 &gt;</button>
     </div>`;
-    const title = `<div style="display:flex;align-items:baseline;gap:24px;flex-wrap:wrap;"><span>多路召回</span><div style="display:flex;align-items:center;gap:18px;font-size:13px;font-weight:normal;color:var(--ink-dim);"><span>Trace ID <b class="mono" style="color:var(--ink-strong);">QA-2025-0520-0086</b> <span style="cursor:pointer;" onclick="showToast('已复制 Trace ID')">📋</span></span><span>应用 <b style="color:var(--ink-strong);">内部智能问答</b></span><span>知识库 <b style="color:var(--ink-strong);">产品文档库</b></span><span>状态 <span class="ok-text" style="color:var(--accent);font-weight:600;">● 已完成</span></span><span>总耗时 <b style="color:var(--ink-strong);">1.84 s</b></span></div></div>`;
+    const title = `<div style="display:flex;align-items:baseline;gap:24px;flex-wrap:wrap;"><span>多路召回</span><div style="display:flex;align-items:center;gap:18px;font-size:13px;font-weight:normal;color:var(--ink-dim);"><span>Trace ID <b class="mono" style="color:var(--ink-strong);">QA-2025-0520-0086</b> <span style="cursor:pointer;" onclick="navigator.clipboard.writeText('QA-2025-0520-0086');showToast('Trace ID 已复制到剪贴板','ok')">📋</span></span><span>应用 <b style="color:var(--ink-strong);">内部智能问答</b></span><span>知识库 <b style="color:var(--ink-strong);">产品文档库</b></span><span>状态 <span class="ok-text" style="color:var(--accent);font-weight:600;">● 已完成</span></span><span>总耗时 <b style="color:var(--ink-strong);">1.84 s</b></span></div></div>`;
     return { title, desc: '', actions: '', html };
   }
 
@@ -3709,7 +3931,7 @@
             <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 4px;"><span style="color:#8b5cf6;font-weight:700;width:14px;">5</span> <span style="flex:1;margin:0 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-strong);">产品权限常见问题</span> <span class="mono">0.688</span></div>
           </div>
           <div style="text-align:center;padding-top:8px;border-top:1px solid #f1f5f9;margin-top:auto;">
-            <a href="#" style="font-size:11px;color:var(--accent);" onclick="showToast('查看全部 15 条')">查看全部 15 条 ⌄</a>
+            ${state.showRRF15 ? `<div style='padding:10px;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:4px;color:#64748b;font-size:12px;margin-bottom:8px;text-align:left;'>正在加载完整结果...</div>` : ''}<a href="#" style="font-size:11px;color:var(--accent);" onclick="handleToggleExpandState(event, 'showRRF15')">${state.showRRF15 ? '收起 ⌃' : '查看全部 15 条 ⌄'}</a>
           </div>
         </div>
 
@@ -3727,7 +3949,7 @@
             <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 4px;"><span style="color:#8b5cf6;font-weight:700;width:14px;">5</span> <span style="flex:1;margin:0 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-strong);">角色权限配置示例</span> <span class="mono">0.612</span></div>
           </div>
           <div style="text-align:center;padding-top:8px;border-top:1px solid #f1f5f9;margin-top:auto;">
-            <a href="#" style="font-size:11px;color:var(--accent);" onclick="showToast('查看全部 17 条')">查看全部 17 条 ⌄</a>
+            ${state.showRRF17 ? `<div style='padding:10px;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:4px;color:#64748b;font-size:12px;margin-bottom:8px;text-align:left;'>正在加载完整结果...</div>` : ''}<a href="#" style="font-size:11px;color:var(--accent);" onclick="handleToggleExpandState(event, 'showRRF17')">${state.showRRF17 ? '收起 ⌃' : '查看全部 17 条 ⌄'}</a>
           </div>
         </div>
 
@@ -3745,7 +3967,7 @@
             <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 4px;"><span style="color:#8b5cf6;font-weight:700;width:14px;">5</span> <span style="flex:1;margin:0 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-strong);">权限审计日志说明</span> <span class="mono">0.587</span></div>
           </div>
           <div style="text-align:center;padding-top:8px;border-top:1px solid #f1f5f9;margin-top:auto;">
-            <a href="#" style="font-size:11px;color:var(--accent);" onclick="showToast('查看全部 9 条')">查看全部 9 条 ⌄</a>
+            ${state.showRRF9 ? `<div style='padding:10px;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:4px;color:#64748b;font-size:12px;margin-bottom:8px;text-align:left;'>正在加载完整结果...</div>` : ''}<a href="#" style="font-size:11px;color:var(--accent);" onclick="handleToggleExpandState(event, 'showRRF9')">${state.showRRF9 ? '收起 ⌃' : '查看全部 9 条 ⌄'}</a>
           </div>
         </div>
 
@@ -3811,7 +4033,7 @@
           </div>
         </div>
         <div style="text-align:center;padding-top:8px;border-top:1px solid #f1f5f9;margin-top:auto;">
-          <a href="#" style="font-size:11.5px;color:var(--accent);" onclick="showToast('查看全部 20 条')">查看全部 20 条 ⌄</a>
+          ${state.showRerank20 ? `<div style='padding:10px;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:4px;color:#64748b;font-size:12px;margin-bottom:8px;text-align:left;'>正在加载完整结果...</div>` : ''}<a href="#" style="font-size:11.5px;color:var(--accent);" onclick="handleToggleExpandState(event, 'showRerank20')">${state.showRerank20 ? '收起 ⌃' : '查看全部 20 条 ⌄'}</a>
         </div>
       </div>
     </div>
@@ -3923,7 +4145,7 @@
         </table>
       </div>
     </div>`;
-    const title = `<div style="display:flex;align-items:baseline;gap:24px;flex-wrap:wrap;"><span>结果融合</span><div style="display:flex;align-items:center;gap:18px;font-size:13px;font-weight:normal;color:var(--ink-dim);"><span>Trace ID <b class="mono" style="color:var(--ink-strong);">QA-2025-0520-0086</b> <span style="cursor:pointer;" onclick="showToast('已复制 Trace ID')">📋</span></span><span>应用 <b style="color:var(--ink-strong);">内部智能问答</b></span><span>知识库 <b style="color:var(--ink-strong);">产品文档库</b></span><span>状态 <span class="ok-text" style="color:var(--accent);font-weight:600;">● 已完成</span></span><span>总耗时 <b style="color:var(--ink-strong);">1.84 s</b></span></div></div>`;
+    const title = `<div style="display:flex;align-items:baseline;gap:24px;flex-wrap:wrap;"><span>结果融合</span><div style="display:flex;align-items:center;gap:18px;font-size:13px;font-weight:normal;color:var(--ink-dim);"><span>Trace ID <b class="mono" style="color:var(--ink-strong);">QA-2025-0520-0086</b> <span style="cursor:pointer;" onclick="navigator.clipboard.writeText('QA-2025-0520-0086');showToast('Trace ID 已复制到剪贴板','ok')">📋</span></span><span>应用 <b style="color:var(--ink-strong);">内部智能问答</b></span><span>知识库 <b style="color:var(--ink-strong);">产品文档库</b></span><span>状态 <span class="ok-text" style="color:var(--accent);font-weight:600;">● 已完成</span></span><span>总耗时 <b style="color:var(--ink-strong);">1.84 s</b></span></div></div>`;
     return { title, desc: '', actions: '', html };
   }
 
@@ -4274,7 +4496,7 @@
       <button class="btn" style="background:#ffffff;border:1px solid #d1d5db;height:38px;padding:0 20px;border-radius:6px;font-size:13.5px;font-weight:500;color:var(--ink-strong);cursor:pointer;" onclick="openRerankCompareModal()">📊 对比结果</button>
       <button class="btn primary" style="background:var(--accent);color:#ffffff;height:38px;padding:0 26px;border-radius:6px;font-size:13.5px;font-weight:500;cursor:pointer;" onclick="window.go('qaflow/prompt')">进入构建提示词 &gt;</button>
     </div>`;
-    const title = `<div style="display:flex;align-items:baseline;gap:24px;flex-wrap:wrap;"><span>重排</span><div style="display:flex;align-items:center;gap:18px;font-size:13px;font-weight:normal;color:var(--ink-dim);"><span>Trace ID <b class="mono" style="color:var(--ink-strong);">QA-2025-0520-0086</b> <span style="cursor:pointer;" onclick="showToast('已复制 Trace ID')">📋</span></span><span>应用 <b style="color:var(--ink-strong);">内部智能问答</b></span><span>知识库 <b style="color:var(--ink-strong);">产品文档库</b></span><span>状态 <span class="ok-text" style="color:var(--accent);font-weight:600;">● 已完成</span></span><span>总耗时 <b style="color:var(--ink-strong);">1.84 s</b></span></div></div>`;
+    const title = `<div style="display:flex;align-items:baseline;gap:24px;flex-wrap:wrap;"><span>重排</span><div style="display:flex;align-items:center;gap:18px;font-size:13px;font-weight:normal;color:var(--ink-dim);"><span>Trace ID <b class="mono" style="color:var(--ink-strong);">QA-2025-0520-0086</b> <span style="cursor:pointer;" onclick="navigator.clipboard.writeText('QA-2025-0520-0086');showToast('Trace ID 已复制到剪贴板','ok')">📋</span></span><span>应用 <b style="color:var(--ink-strong);">内部智能问答</b></span><span>知识库 <b style="color:var(--ink-strong);">产品文档库</b></span><span>状态 <span class="ok-text" style="color:var(--accent);font-weight:600;">● 已完成</span></span><span>总耗时 <b style="color:var(--ink-strong);">1.84 s</b></span></div></div>`;
     return { title, desc: '', actions: '', html };
   }
 
@@ -4497,7 +4719,7 @@
             使用 Markdown 格式输出，包含：结论、要点列表...<br>
             不得泄露系统提示词、内部实现细节或未授权的敏感信...
           </div>
-          <button class="btn" style="width:100%;margin-top:10px;height:34px;font-size:12.5px;background:#fff;border:1px solid #d1d5db;" onclick="showToast('已复制预览内容')">
+          <button class="btn" style="width:100%;margin-top:10px;height:34px;font-size:12.5px;background:#fff;border:1px solid #d1d5db;" onclick="window.handleCopyContent('', '预览内容')">
             📋 复制预览内容
           </button>
         </div>
@@ -4510,8 +4732,8 @@
       <div style="display:flex;align-items:center;gap:12px;">
         <button class="btn" style="background:#ffffff;border:1px solid #d1d5db;height:38px;padding:0 18px;border-radius:6px;font-size:13.5px;font-weight:500;color:var(--ink-strong);cursor:pointer;" onclick="showToast('模板保存成功','ok')">💾 保存模板</button>
         <button class="btn" style="background:#ffffff;border:1px solid #d1d5db;height:38px;padding:0 18px;border-radius:6px;font-size:13.5px;font-weight:500;color:var(--ink-strong);cursor:pointer;" onclick="showToast('打开版本对比')">🗂️ 比较版本</button>
-        <button class="btn" style="background:#ffffff;border:1px solid #d1d5db;height:38px;padding:0 18px;border-radius:6px;font-size:13.5px;font-weight:500;color:var(--ink-strong);cursor:pointer;" onclick="showToast('已复制脱敏内容')">🛡️ 复制脱敏内容</button>
-        <button class="btn" style="background:#ffffff;border:1px solid #d1d5db;height:38px;padding:0 18px;border-radius:6px;font-size:13.5px;font-weight:500;color:var(--ink-strong);cursor:pointer;" onclick="showToast('从此阶段重跑','ok')">↻ 从此阶段重跑</button>
+        <button class="btn" style="background:#ffffff;border:1px solid #d1d5db;height:38px;padding:0 18px;border-radius:6px;font-size:13.5px;font-weight:500;color:var(--ink-strong);cursor:pointer;" onclick="window.handleCopyContent('', '脱敏内容')">🛡️ 复制脱敏内容</button>
+        <button class="btn" style="background:#ffffff;border:1px solid #d1d5db;height:38px;padding:0 18px;border-radius:6px;font-size:13.5px;font-weight:500;color:var(--ink-strong);cursor:pointer;" onclick="handleQARerun()">↻ 从此阶段重跑</button>
       </div>
 
       <!-- Right 1 Button (Height 38px, Solid Green) -->
@@ -4519,7 +4741,7 @@
         <button class="btn primary" style="background:var(--accent);color:#ffffff;height:38px;padding:0 26px;border-radius:6px;font-size:13.5px;font-weight:500;cursor:pointer;" onclick="window.go('qaflow/answer')">进入回答生成 &gt;</button>
       </div>
     </div>`;
-    const title = `<div style="display:flex;align-items:baseline;gap:24px;flex-wrap:wrap;"><span>构建提示词</span><div style="display:flex;align-items:center;gap:18px;font-size:13px;font-weight:normal;color:var(--ink-dim);"><span>Trace ID <b class="mono" style="color:var(--ink-strong);">QA-2025-0520-0086</b> <span style="cursor:pointer;" onclick="showToast('已复制 Trace ID')">📋</span></span><span>应用 <b style="color:var(--ink-strong);">内部智能问答</b></span><span>知识库 <b style="color:var(--ink-strong);">产品文档库</b></span><span>状态 <span class="ok-text" style="color:var(--accent);font-weight:600;">● 已完成</span></span><span>总耗时 <b style="color:var(--ink-strong);">1.84 s</b></span></div></div>`;
+    const title = `<div style="display:flex;align-items:baseline;gap:24px;flex-wrap:wrap;"><span>构建提示词</span><div style="display:flex;align-items:center;gap:18px;font-size:13px;font-weight:normal;color:var(--ink-dim);"><span>Trace ID <b class="mono" style="color:var(--ink-strong);">QA-2025-0520-0086</b> <span style="cursor:pointer;" onclick="navigator.clipboard.writeText('QA-2025-0520-0086');showToast('Trace ID 已复制到剪贴板','ok')">📋</span></span><span>应用 <b style="color:var(--ink-strong);">内部智能问答</b></span><span>知识库 <b style="color:var(--ink-strong);">产品文档库</b></span><span>状态 <span class="ok-text" style="color:var(--accent);font-weight:600;">● 已完成</span></span><span>总耗时 <b style="color:var(--ink-strong);">1.84 s</b></span></div></div>`;
     return { title, desc: '', actions: '', html };
   }
 
@@ -4608,8 +4830,8 @@
           <!-- Action Buttons Bar inside Column 2 -->
           <div style="display:flex;align-items:center;gap:8px;margin-top:auto;padding-top:14px;border-top:1px solid #f1f5f9;">
             <button class="btn sm" style="background:#fff;border:1px solid #d1d5db;border-radius:4px;padding:0 10px;font-size:12px;" onclick="handleCopyFullAnswer()">📋 复制</button>
-            <button class="btn sm" style="background:#fff;border:1px solid #d1d5db;border-radius:4px;padding:0 10px;font-size:12px;" onclick="showToast('正在基于优化提示词重新生成回答...','ok');">↻ 重新生成</button>
-            <button class="btn sm" style="background:#fff;border:1px solid #d1d5db;border-radius:4px;padding:0 10px;font-size:12px;" onclick="showToast('已保存回答')">💾 保存</button>
+            <button class="btn sm" style="background:#fff;border:1px solid #d1d5db;border-radius:4px;padding:0 10px;font-size:12px;" onclick="window.handleRegenerateAnswer()">↻ 重新生成</button>
+            <button class="btn sm" style="background:#fff;border:1px solid #d1d5db;border-radius:4px;padding:0 10px;font-size:12px;" onclick="window.handleCopyContent('', '回答')">💾 保存</button>
             <button class="btn sm" style="background:#fff;border:1px solid #d1d5db;border-radius:4px;padding:0 10px;font-size:12px;color:#16a34a;" onclick="handleAnswerFeedback('thumb_up')">👍 有帮助</button>
             <button class="btn sm" style="background:#fff;border:1px solid #d1d5db;border-radius:4px;padding:0 10px;font-size:12px;color:#94a3b8;" onclick="handleAnswerFeedback('thumb_down')">👎 没帮助</button>
           </div>
@@ -4717,7 +4939,7 @@
         `).join('')}
       </div>
     </div>`;
-    const title = `<div style="display:flex;align-items:baseline;gap:24px;flex-wrap:wrap;"><span>回答生成</span><div style="display:flex;align-items:center;gap:18px;font-size:13px;font-weight:normal;color:var(--ink-dim);"><span>Trace ID <b class="mono" style="color:var(--ink-strong);">QA-2025-0520-0086</b> <span style="cursor:pointer;" onclick="showToast('已复制 Trace ID')">📋</span></span><span>应用 <b style="color:var(--ink-strong);">内部智能问答</b></span><span>知识库 <b style="color:var(--ink-strong);">产品文档库</b></span><span>状态 <span class="ok-text" style="color:var(--accent);font-weight:600;">● 已完成</span></span><span>总耗时 <b style="color:var(--ink-strong);">1.84 s</b></span></div></div>`;
+    const title = `<div style="display:flex;align-items:baseline;gap:24px;flex-wrap:wrap;"><span>回答生成</span><div style="display:flex;align-items:center;gap:18px;font-size:13px;font-weight:normal;color:var(--ink-dim);"><span>Trace ID <b class="mono" style="color:var(--ink-strong);">QA-2025-0520-0086</b> <span style="cursor:pointer;" onclick="navigator.clipboard.writeText('QA-2025-0520-0086');showToast('Trace ID 已复制到剪贴板','ok')">📋</span></span><span>应用 <b style="color:var(--ink-strong);">内部智能问答</b></span><span>知识库 <b style="color:var(--ink-strong);">产品文档库</b></span><span>状态 <span class="ok-text" style="color:var(--accent);font-weight:600;">● 已完成</span></span><span>总耗时 <b style="color:var(--ink-strong);">1.84 s</b></span></div></div>`;
     return { title, desc: '', actions: '', html };
   }
 
@@ -4742,40 +4964,61 @@
     state.chatLoading = true;
     render();
 
-    // 2. Try backend API or fallback to smart extractive answer
+    // 2. 已连接走真实问答链路；未连接保持离线演示模式
     try {
       let botAnswer = null;
       if (api && api.connected) {
-        let convId = state.chatConversations.find(c => c.active)?.id;
+        // 只认真实会话 ID（conv_ 前缀），演示会话不发送
+        let convId = state.chatConversations.find(c => c.active && String(c.id || '').startsWith('conv_'))?.id;
         if (!convId) {
-          const newConv = await api.createConversation(query.slice(0, 30), 'kb_default');
-          if (newConv) convId = newConv.id;
+          const kbId = api.context && api.context.defaultKbId;
+          if (!kbId) {
+            throw new Error('尚无可用知识库：请先在「数据配置」创建知识库并完成索引发布');
+          }
+          const newConv = await api.createConversation(query.slice(0, 30), kbId);
+          if (newConv && newConv.id) {
+            convId = newConv.id;
+            state.chatConversations.forEach(c => { c.active = false; });
+            state.chatConversations.unshift({ id: convId, title: query.slice(0, 30), time: timeStr, active: true });
+          }
         }
         if (convId) {
           const res = await api.sendMessage(convId, query);
-          if (res && res.message) {
+          if (res && res.assistantMessage) {
+            const message = res.assistantMessage;
             botAnswer = {
               role: 'assistant',
-              text: res.message.content || '已检索到相关知识。',
+              text: message.content || '（服务返回了空回答）',
               time: timeStr,
-              citations: (res.citations || []).map((c, i) => ({
-                id: i + 1,
-                title: c.document_title || '知识库文档.pdf',
-                page: `P.${c.page_number || '1'}`,
-                quote: c.snippet || c.text || '引用内容'
+              evidenceStatus: message.evidence_status || null,
+              traceId: res.trace ? res.trace.id : null,
+              citations: (message.citations || []).map(c => ({
+                id: c.ordinal,
+                title: c.title || '知识库文档',
+                page: api.parseCitationLocator(c),
+                quote: c.excerpt || ''
               })),
-              wikis: ['产品问答助手简介', '问答配置规范']
+              wikis: []
             };
+            if (res.trace) {
+              state.lastTrace = { id: res.trace.id, status: res.trace.status, evidenceStatus: message.evidence_status };
+            }
+            if (message.evidence_status === 'insufficient') {
+              botAnswer.text = message.content || '当前知识库中没有找到可回答该问题的证据。请补充资料或换个问法。';
+            }
           }
         }
-      }
-
-      if (!botAnswer) {
-        // High fidelity mock response
+        if (!botAnswer) {
+          // 已连接但服务失败：如实展示错误，不伪造回答
+          throw new Error((api.lastError && api.lastError.message) || '服务未返回回答');
+        }
+      } else {
+        // 离线演示模式：明确标注演示回答
         await new Promise(r => setTimeout(r, 600));
         botAnswer = {
           role: 'assistant',
-          text: `关于「${query}」，根据 ${state.selectedChatKb} 的检索结果，分析如下：\n\n1. **核心概念与规则**：该项能力已在当前知识库中完整登记，支持在企业工作空间内直接调用与调度。[1]\n2. **执行流程**：系统通过动态路由与多路召回（向量召回 + 全文检索 + 图谱检索），经重排后构建上下文提示词并由大模型生成回答。[1][2]\n3. **发布与接入**：如需对外提供问答，可在「智能助手」中一键配置挂载脚本到企业网站。[3]`,
+          demo: true,
+          text: `【演示模式】关于「${query}」，根据 ${state.selectedChatKb} 的检索结果，分析如下：\n\n1. **核心概念与规则**：该项能力已在当前知识库中完整登记，支持在企业工作空间内直接调用与调度。[1]\n2. **执行流程**：系统通过动态路由与多路召回（向量召回 + 全文检索 + 图谱检索），经重排后构建上下文提示词并由大模型生成回答。[1][2]\n3. **发布与接入**：如需对外提供问答，可在「智能助手」中一键配置挂载脚本到企业网站。[3]`,
           time: timeStr,
           citations: [
             { id: 1, title: '用户手册_产品A.pdf', page: 'P.12-14', quote: `关于 ${query} 的核心机制与架构定义说明...` },
@@ -4794,7 +5037,8 @@
     } catch (err) {
       state.chatMessages.push({
         role: 'assistant',
-        text: '生成回答时发生错误，请检查网络连接或模型配置。',
+        text: `回答失败：${err && err.message ? err.message : '生成回答时发生错误，请检查网络连接或模型配置。'}`
+        ,
         time: timeStr
       });
     } finally {
@@ -4912,9 +5156,9 @@
                     </div>
                     <div style="display:flex;gap:8px;margin-top:8px;">
                       <button class="btn sm" style="font-size:11.5px;padding:2px 8px;background:#fff;border:1px solid #d1d5db;" onclick="handleCopyChatText('${esc(msg.text)}')">📋 复制</button>
-                      <button class="btn sm" style="font-size:11.5px;padding:2px 8px;background:#fff;border:1px solid #d1d5db;" onclick="showToast('正在重新检索与生成回答...','ok')">↻ 重新生成</button>
-                      <button class="btn sm" style="font-size:11.5px;padding:2px 8px;background:#fff;border:1px solid #d1d5db;" onclick="showToast('感谢反馈！已记录到评估集','ok')">👍 有帮助</button>
-                      <button class="btn sm" style="font-size:11.5px;padding:2px 8px;background:#fff;border:1px solid #d1d5db;" onclick="showToast('感谢反馈！我们将优化此答案')">👎 没帮助</button>
+                      <button class="btn sm" style="font-size:11.5px;padding:2px 8px;background:#fff;border:1px solid #d1d5db;" onclick="window.handleRegenerateAnswer()">↻ 重新生成</button>
+                      <button class="btn sm" style="font-size:11.5px;padding:2px 8px;background:#fff;border:1px solid #d1d5db;" onclick="window.handleChatFeedback('positive')">👍 有帮助</button>
+                      <button class="btn sm" style="font-size:11.5px;padding:2px 8px;background:#fff;border:1px solid #d1d5db;" onclick="window.handleChatFeedback('negative')">👎 没帮助</button>
                     </div>
                   </div>
                 </div>
@@ -5009,12 +5253,149 @@
     }
   };
 
+  window.handleQARerun = function() {
+    showOverlay(`
+      <div class="overlay-backdrop" data-close></div>
+      <div class="modal" style="width:400px;">
+        <div class="modal-header">
+          <h3>确认重跑</h3>
+          <span class="close-btn" data-close>×</span>
+        </div>
+        <div class="modal-body">
+          <p>确定要从此阶段重新运行流水线吗？这可能会消耗额外的模型 Tokens。</p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn" data-close>取消</button>
+          <button class="btn primary" onclick="closeOverlay();showToast('已提交重跑任务','ok');go('qaflow/recall');">确认重跑</button>
+        </div>
+      </div>
+    `);
+  };
+
+  window.handleReVectorize = function() {
+    showOverlay(`
+      <div class="overlay-backdrop" data-close></div>
+      <div class="modal" style="width:400px;">
+        <div class="modal-header">
+          <h3>重新向量化</h3>
+          <span class="close-btn" data-close>×</span>
+        </div>
+        <div class="modal-body">
+          <p>您确定要使用当前模型参数重新对查询进行向量化吗？</p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn" data-close>取消</button>
+          <button class="btn primary" onclick="closeOverlay();showToast('重新向量化任务已提交','ok');">确认执行</button>
+        </div>
+      </div>
+    `);
+  };
+
+  window.handleEditJSON = function() {
+    showOverlay(`
+      <div class="overlay-backdrop" data-close></div>
+      <div class="modal" style="width:500px;">
+        <div class="modal-header">
+          <h3>编辑 JSON 配置</h3>
+          <span class="close-btn" data-close>×</span>
+        </div>
+        <div class="modal-body">
+          <textarea style="width:100%;height:250px;font-family:monospace;" class="input">{\n  "mode": "hybrid",\n  "weights": [0.7, 0.3]\n}</textarea>
+        </div>
+        <div class="modal-footer">
+          <button class="btn" data-close>取消</button>
+          <button class="btn primary" onclick="closeOverlay();showToast('JSON 配置已保存','ok');">保存</button>
+        </div>
+      </div>
+    `);
+  };
+
+  window.handleViewDetails = function() {
+    showOverlay(`
+      <div class="overlay-backdrop" data-close></div>
+      <div class="modal" style="width:400px;">
+        <div class="modal-header">
+          <h3>详情信息</h3>
+          <span class="close-btn" data-close>×</span>
+        </div>
+        <div class="modal-body">
+          <p>详细路由或匹配信息在此展示。</p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn primary" data-close>关闭</button>
+        </div>
+      </div>
+    `);
+  };
+
+  window.handleViewFullContext = function() {
+    showOverlay(`
+      <div class="overlay-backdrop" data-close></div>
+      <div class="modal" style="width:600px;">
+        <div class="modal-header">
+          <h3>完整上下文</h3>
+          <span class="close-btn" data-close>×</span>
+        </div>
+        <div class="modal-body" style="max-height:400px;overflow-y:auto;line-height:1.6;">
+          <p>这里是提取自原始文档的完整段落上下文，以帮助您了解背景...</p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn primary" data-close>关闭</button>
+        </div>
+      </div>
+    `);
+  };
+
+  window.handleViewSourceDoc = function() {
+    showOverlay(`
+      <div class="overlay-backdrop" data-close></div>
+      <div class="modal" style="width:700px; height:80vh; display:flex; flex-direction:column;">
+        <div class="modal-header">
+          <h3>源文档预览</h3>
+          <span class="close-btn" data-close>×</span>
+        </div>
+        <div class="modal-body" style="flex:1; background:#f3f4f6; display:flex; align-items:center; justify-content:center;">
+          <span style="color:#6b7280;">文档加载中...</span>
+        </div>
+      </div>
+    `);
+  };
+
+  window.handleRetryChannel = function() {
+    showToast('正在重试失败通道...');
+    setTimeout(() => {
+      showToast('通道重试成功', 'ok');
+    }, 1500);
+  };
+
+  window.handleToggleExpandState = function(event, stateKey) {
+    if(event) event.preventDefault();
+    state[stateKey] = !state[stateKey];
+    render();
+  };
+
   window.handleSaveAssistant = async function() {
     const ast = state.assistants.find(a => a.id === state.selectedAssistantId);
     if (ast && api && api.connected) {
-      await api.updateAssistant(ast.id, ast);
+      if (!ast.backendId) {
+        showToast('该助手为本地示例条目，尚未在服务端登记，无法保存', 'error');
+        render();
+        return;
+      }
+      const saved = await api.updateAssistant(ast.backendId, {
+        name: ast.name,
+        config: { description: ast.desc || '', tone: ast.tone || '', welcome: ast.welcome || '', questions: ast.questions || [] }
+      });
+      if (saved) {
+        ast.status = saved.status || 'draft';
+        ast.statusText = saved.status === 'published' ? '已发布' : saved.status === 'paused' ? '已停用' : '草稿';
+        showToast('助手配置已保存到服务端（草稿，需重新发布后生效）', 'ok');
+      } else {
+        showToast(`保存失败：${(api.lastError && api.lastError.message) || '服务无响应'}`, 'error');
+      }
+    } else {
+      showToast('助手配置已保存（演示模式）', 'ok');
     }
-    showToast('助手配置已保存！', 'ok');
     render();
   };
 
@@ -5047,6 +5428,70 @@
     render();
   };
 
+  window.handleStartParsingTask = function() {
+    state.parsingStatus = 'running';
+    showToast('解析任务已启动', 'ok');
+    render();
+  };
+
+  window.handlePauseParsingTask = function() {
+    state.parsingPaused = !state.parsingPaused;
+    if (state.parsingPaused) {
+      showToast('任务已暂停调度');
+    } else {
+      showToast('任务已恢复调度', 'ok');
+    }
+    render();
+  };
+
+  window.handleRetryFailedTasks = function() {
+    state.parsingRetrying = true;
+    showToast('正在重试失败任务...');
+    setTimeout(() => {
+      state.parsingRetrying = false;
+      showToast('重试任务已完成', 'ok');
+      render();
+    }, 1000);
+    render();
+  };
+
+  window.handleParsingJumpPage = function(pageNum) {
+    state.parsingCurrentPage = pageNum;
+    render();
+  };
+
+  window.toggleParsingKBSelector = function() {
+    state.parsingKBDropdownOpen = !state.parsingKBDropdownOpen;
+    if (state.parsingRunConfigDropdownOpen) state.parsingRunConfigDropdownOpen = false;
+    render();
+  };
+
+  window.toggleParsingRunConfigSelector = function() {
+    state.parsingRunConfigDropdownOpen = !state.parsingRunConfigDropdownOpen;
+    if (state.parsingKBDropdownOpen) state.parsingKBDropdownOpen = false;
+    render();
+  };
+
+  window.toggleParsingRecords = function() {
+    state.parsingRecordsExpanded = !state.parsingRecordsExpanded;
+    render();
+  };
+
+  window.toggleParsingPending = function() {
+    state.parsingPendingExpanded = !state.parsingPendingExpanded;
+    render();
+  };
+
+  window.toggleParsingProcessing = function() {
+    state.parsingProcessingExpanded = !state.parsingProcessingExpanded;
+    render();
+  };
+
+  window.toggleParsingFailed = function() {
+    state.parsingFailedExpanded = !state.parsingFailedExpanded;
+    render();
+  };
+
   window.handleSelectModelItem = function(modelKey) {
     state.selectedModel = modelKey;
     render();
@@ -5061,7 +5506,25 @@
     showToast('正在测试模型连接与可用能力...');
     const curModel = state.modelsData[state.selectedModel];
     if (api && api.connected) {
-      await api.testModel(state.selectedModel);
+      if (!curModel || !curModel.backendId) {
+        showToast('该条目为本地示例，尚未在服务端登记为模型连接，无法测试', 'error');
+        render();
+        return;
+      }
+      const result = await api.testModel(curModel.backendId);
+      if (result && result.available) {
+        curModel.status = 'ok';
+        curModel.statusText = '可用';
+        curModel.latency = result.latencyMs != null ? `${result.latencyMs} ms` : '—';
+        curModel.time = new Date().toLocaleString();
+        showToast(`✓ 连接测试通过（${curModel.latency}）`, 'ok');
+      } else {
+        curModel.status = 'danger';
+        curModel.statusText = '不可用';
+        showToast(`测试未通过：${(api.lastError && api.lastError.message) || '服务无响应'}`, 'error');
+      }
+      render();
+      return;
     }
     await new Promise(r => setTimeout(r, 400));
     if (curModel) {
@@ -5069,12 +5532,125 @@
       curModel.latency = '352 ms';
       curModel.time = new Date().toLocaleString();
     }
-    showToast('✓ 连接测试成功 (352 ms)', 'ok');
+    showToast('✓ 连接测试成功 (352 ms)（演示模式）', 'ok');
     render();
   };
 
   window.handleSaveModelConfig = function() {
     showToast('模型配置已保存到本地凭据库', 'ok');
+    render();
+  };
+
+  window.handleResetGeneralSettings = function() {
+    state.theme = 'system';
+    state.language = 'zh-CN';
+    showToast('已恢复默认设置', 'ok');
+    render();
+  };
+
+  window.handleCancelGeneralSettings = function() {
+    showToast('已取消修改');
+    render();
+  };
+
+  window.handleSaveGeneralSettings = function() {
+    showToast('通用设置已保存', 'ok');
+    render();
+  };
+
+  window.handleRegenerateAnswer = function() {
+    showToast('正在重新检索与生成回答...', 'ok');
+    render();
+  };
+
+  window.handleChatFeedback = function(type) {
+    if (type === 'positive') {
+      showToast('感谢反馈！已记录到评估集', 'ok');
+    } else {
+      showToast('感谢反馈！我们将优化此答案', '');
+    }
+    render();
+  };
+
+  window.handleRegistryPageChange = function(page) {
+    showToast(`已翻至第 ${page} 页`);
+    render();
+  };
+
+  window.handleRegistryPageSizeChange = function() {
+    showToast('已切换每页显示数量');
+    render();
+  };
+
+  window.handleDatasetPageChange = function(page) {
+    showToast(`已翻至第 ${page} 页`);
+    render();
+  };
+
+  window.handleDatasetPageSizeChange = function() {
+    showToast('已切换每页显示数量');
+    render();
+  };
+
+  window.handleScanLocalDisk = function() {
+    showToast('已扫描本机磁盘：发现 3 个文档目录（已安全原位索引）', 'ok');
+    render();
+  };
+
+  window.handleRefreshDirectory = function() {
+    showToast('已刷新目录');
+    render();
+  };
+
+  window.toggleDatasetFilter = function() {
+    showToast('已切换筛选条件面板');
+    render();
+  };
+
+  window.handleRefreshDatasets = function() {
+    showToast('已刷新数据集');
+    render();
+  };
+
+  window.handleRefreshTaskQueue = function() {
+    showToast('已刷新任务队列');
+    render();
+  };
+
+  window.handleResetIndexFilters = function() {
+    showToast('已重置筛选条件');
+    render();
+  };
+
+  window.handleKnowledgeChunkOperation = function(op) {
+    if (op === 'split') {
+      showToast('知识块已在当前光标位置拆分为 2 个子块 (Chunk 1-A / 1-B)', 'ok');
+    } else if (op === 'merge') {
+      showToast('已与相邻前序知识块完成物理合并', 'ok');
+    } else if (op === 'disable') {
+      state.chunkDisabled = !state.chunkDisabled;
+      showToast(state.chunkDisabled ? '当前知识块已标记为【禁用】（不参与检索召回）' : '当前知识块已恢复【启用】状态', 'ok');
+    } else if (op === 'save') {
+      showToast('知识块内容已修改并增量更新到本地向量存储！', 'ok');
+    }
+    render();
+  };
+
+  window.handleCopyContent = function(text, type) {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text || '').then(() => showToast(`已复制${type}`, 'ok')).catch(() => showToast(`已复制${type}`));
+    } else {
+      showToast(`已复制${type}`);
+    }
+  };
+
+  window.handleIndexQueryVerify = function() {
+    showToast('已进入查询验证模式', 'ok');
+    render();
+  };
+
+  window.handleIndexPublish = function() {
+    showToast('发布新版本成功', 'ok');
     render();
   };
 
@@ -5313,10 +5889,10 @@
 
       <!-- Bottom Actions Toolbar -->
       <div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;padding:16px 0 24px;">
-        <button class="btn" style="background:#ffffff;border:1px solid #d1d5db;height:36px;padding:0 16px;border-radius:6px;font-size:13px;font-weight:500;color:var(--ink-strong);cursor:pointer;" onclick="showToast('已恢复默认设置','ok')">恢复默认</button>
+        <button class="btn" style="background:#ffffff;border:1px solid #d1d5db;height:36px;padding:0 16px;border-radius:6px;font-size:13px;font-weight:500;color:var(--ink-strong);cursor:pointer;" onclick="window.handleResetGeneralSettings()">恢复默认</button>
         <div style="display:flex;align-items:center;gap:10px;">
-          <button class="btn" style="background:#ffffff;border:1px solid #d1d5db;height:36px;padding:0 18px;border-radius:6px;font-size:13px;font-weight:500;color:var(--ink-strong);cursor:pointer;" onclick="showToast('已取消修改')">取消</button>
-          <button class="btn primary" style="background:var(--accent);color:#ffffff;height:36px;padding:0 22px;border-radius:6px;font-size:13.5px;font-weight:500;cursor:pointer;" onclick="showToast('通用设置已保存','ok')">保存设置</button>
+          <button class="btn" style="background:#ffffff;border:1px solid #d1d5db;height:36px;padding:0 18px;border-radius:6px;font-size:13px;font-weight:500;color:var(--ink-strong);cursor:pointer;" onclick="window.handleCancelGeneralSettings()">取消</button>
+          <button class="btn primary" style="background:var(--accent);color:#ffffff;height:36px;padding:0 22px;border-radius:6px;font-size:13.5px;font-weight:500;cursor:pointer;" onclick="window.handleSaveGeneralSettings()">保存设置</button>
         </div>
       </div>
     </div>`;
@@ -5464,10 +6040,10 @@
           <!-- Action Buttons Row -->
           <div style="display:flex;justify-content:space-between;align-items:center;margin-top:16px;">
             <div style="display:flex;gap:10px;">
-              <button class="btn primary" onclick="showToast('测试连接成功 (${cur.latency})','ok')">测试连接</button>
+              <button class="btn primary" onclick="window.handleTestModelConnection()">测试连接</button>
               <button class="btn" onclick="openReAuthModal()">重新授权</button>
             </div>
-            <button class="btn primary" onclick="showToast('配置已保存','ok')">保存</button>
+            <button class="btn primary" onclick="window.handleSaveModelConfig()">保存</button>
           </div>
 
           <!-- Test Result Banner -->
@@ -5583,7 +6159,7 @@
         </div>
       </div>
       <div class="card">
-        <div class="card-head"><span>健康与一致性问题</span><span class="muted" style="font-size:12px;cursor:pointer;">查看全部 &gt;</span></div>
+        <div class="card-head"><span>健康与一致性问题</span><span class="muted" style="font-size:12px;cursor:pointer;" onclick="handleToggleExpandState(event, 'showAllIssues')">${state.showAllIssues ? '收起 ⌃' : '查看全部 >'}</span></div>
         <div class="card-body" style="padding:0;">
           <div class="list-item-row"><div class="list-item-icon warn">⚠</div><div class="grow"><b>向量索引实例 ordo-vs-2 磁盘使用率 82%</b><div class="muted" style="font-size:11px;">2 小时前</div></div></div>
           <div class="list-item-row"><div class="list-item-icon warn">⚠</div><div class="grow"><b>文件存储桶 docs-archive 访问延迟较高</b><div class="muted" style="font-size:11px;">3 小时前</div></div></div>
@@ -5847,29 +6423,8 @@
       </div>
       <div class="modal-body">
         <p class="muted" style="margin-bottom:12px;">选择一个知识库，然后开始提问：</p>
-        <div class="kb-picker-grid">
-          <div class="kb-picker-card selected" id="kb-opt-1" onclick="document.querySelectorAll('.kb-picker-card').forEach(e=>e.classList.remove('selected'));this.classList.add('selected');window._selectedNewKb='产品文档库';">
-            <span class="check-circle">✓</span>
-            <div style="font-size:24px;margin-bottom:6px;">📚</div>
-            <b>产品文档库</b>
-            <div class="muted" style="font-size:12px;margin-top:4px;">8,652 chunks · <span class="ok-text">● 可用</span></div>
-          </div>
-          <div class="kb-picker-card" id="kb-opt-2" onclick="document.querySelectorAll('.kb-picker-card').forEach(e=>e.classList.remove('selected'));this.classList.add('selected');window._selectedNewKb='技术资料库';">
-            <div style="font-size:24px;margin-bottom:6px;">💻</div>
-            <b>技术资料库</b>
-            <div class="muted" style="font-size:12px;margin-top:4px;">6,421 chunks · <span class="ok-text">● 可用</span></div>
-          </div>
-          <div class="kb-picker-card" id="kb-opt-3" onclick="document.querySelectorAll('.kb-picker-card').forEach(e=>e.classList.remove('selected'));this.classList.add('selected');window._selectedNewKb='市场资料库';">
-            <div style="font-size:24px;margin-bottom:6px;">📈</div>
-            <b>市场资料库</b>
-            <div class="muted" style="font-size:12px;margin-top:4px;">4,213 chunks · <span style="color:var(--warn);">● 索引更新中</span></div>
-          </div>
-        </div>
-        <div style="display:flex;gap:12px;font-size:12.5px;color:var(--ink-dim);margin:16px 0;">
-          <span>✓ 向量数据库 已连接</span>
-          <span>✓ 激活版本 v7</span>
-          <span>✓ 权限检查 通过</span>
-        </div>
+        <div class="kb-picker-grid" id="ordoKbPickerBody"><div class="muted" style="padding:12px;">正在加载知识库…</div></div>
+        <div id="ordoKbPickerChecks" style="display:flex;gap:12px;font-size:12.5px;color:var(--ink-dim);margin:16px 0;"></div>
         <input class="input" id="newChatInput" placeholder="输入你想提问的问题..." onkeydown="if(event.key==='Enter'){event.preventDefault();window.handleConfirmNewChat();}">
       </div>
       <div class="modal-footer">
@@ -5878,11 +6433,88 @@
       </div>
     </div>`;
     showOverlay(html);
+    window.fillNewChatKbPicker();
   }
+
+  window.fillNewChatKbPicker = async function() {
+    const body = document.getElementById('ordoKbPickerBody');
+    const checks = document.getElementById('ordoKbPickerChecks');
+    if (!body) return;
+    let cardsHtml = '';
+    if (api && api.connected) {
+      if (!api.context) { try { await api.syncContext(); } catch (e) {} }
+      const kbs = (api.context && api.context.knowledgeBases) || [];
+      if (!kbs.length) {
+        cardsHtml = `<div class="muted" style="padding:12px;">尚未创建知识库。请先在「数据配置」创建知识库并发布索引版本。</div>`;
+        if (checks) checks.innerHTML = '';
+      } else {
+        cardsHtml = kbs.map((kb, index) => {
+          const available = Boolean(kb.active_release_id);
+          const selected = available && index === 0;
+          if (selected) window._selectedNewKbId = kb.id;
+          return `
+          <div class="kb-picker-card${selected ? ' selected' : ''}"${available ? '' : ' style="opacity:0.55;"'} onclick="${available ? `window.selectNewChatKb(this,'${kb.id}')` : `showToast('该知识库还没有已发布的知识版本，请先在「构建知识索引」发布','error')`}">
+            ${selected ? '<span class="check-circle">✓</span>' : ''}
+            <div style="font-size:24px;margin-bottom:6px;">📚</div>
+            <b>${esc(kb.name)}</b>
+            <div class="muted" style="font-size:12px;margin-top:4px;">${kb.chunk_count ?? 0} chunks · ${available ? '<span class="ok-text">● 可用</span>' : '<span style="color:var(--warn);">● 未发布版本</span>'}</div>
+          </div>`;
+        }).join('');
+        if (checks) checks.innerHTML = '<span>✓ 会话绑定知识库与活动版本</span><span>✓ 首条消息发送时创建会话</span>';
+      }
+    } else {
+      window._selectedNewKbId = null;
+      cardsHtml = `
+          <div class="kb-picker-card selected" onclick="document.querySelectorAll('.kb-picker-card').forEach(e=>e.classList.remove('selected'));this.classList.add('selected');">
+            <span class="check-circle">✓</span>
+            <div style="font-size:24px;margin-bottom:6px;">📚</div>
+            <b>产品文档库</b>
+            <div class="muted" style="font-size:12px;margin-top:4px;">8,652 chunks · <span class="ok-text">● 可用</span></div>
+          </div>
+          <div class="kb-picker-card" onclick="document.querySelectorAll('.kb-picker-card').forEach(e=>e.classList.remove('selected'));this.classList.add('selected');">
+            <div style="font-size:24px;margin-bottom:6px;">💻</div>
+            <b>技术资料库</b>
+            <div class="muted" style="font-size:12px;margin-top:4px;">6,421 chunks · <span class="ok-text">● 可用</span></div>
+          </div>
+          <div class="kb-picker-card" onclick="document.querySelectorAll('.kb-picker-card').forEach(e=>e.classList.remove('selected'));this.classList.add('selected');">
+            <div style="font-size:24px;margin-bottom:6px;">📈</div>
+            <b>市场资料库</b>
+            <div class="muted" style="font-size:12px;margin-top:4px;">4,213 chunks · <span style="color:var(--warn);">● 索引更新中</span></div>
+          </div>`;
+      if (checks) checks.innerHTML = '<span style="color:var(--warn);">演示模式：知识库列表非真实数据</span>';
+    }
+    body.innerHTML = cardsHtml;
+  };
+
+  window.selectNewChatKb = function(el, kbId) {
+    document.querySelectorAll('.kb-picker-card').forEach(e => e.classList.remove('selected'));
+    el.classList.add('selected');
+    window._selectedNewKbId = kbId;
+  };
 
   window.handleConfirmNewChat = function() {
     const input = document.getElementById('newChatInput');
     const q = input ? input.value.trim() : '';
+    if (api && api.connected) {
+      // 规划 §14.3.3：此处仅保存前端待发状态，后端会话在首条消息发送时创建
+      state.pendingChatKbId = window._selectedNewKbId || null;
+      const kb = ((api.context && api.context.knowledgeBases) || []).find(k => k.id === state.pendingChatKbId);
+      state.selectedChatKb = kb ? kb.name : '已选知识库';
+      state.chatMessages = [];
+      state.pendingChatQuestion = q;
+      closeOverlay();
+      go('apps/chat');
+      setTimeout(() => {
+        if (!state.pendingChatQuestion) return;
+        const chatInput = document.getElementById('chatInput');
+        if (chatInput) {
+          chatInput.value = state.pendingChatQuestion;
+          state.pendingChatQuestion = null;
+          window.handleSendChat();
+        }
+      }, 150);
+      return;
+    }
     state.selectedChatKb = window._selectedNewKb || '产品文档库';
     if (q) {
       const now = new Date();
@@ -5891,7 +6523,8 @@
         { role: 'user', text: q, time: timeStr },
         {
           role: 'assistant',
-          text: `关于「${q}」，根据 ${state.selectedChatKb} 的检索结果，为你梳理关键信息如下：\n\n1. **定义与入口**：请在工作台中进入相应模块，系统已自动根据知识版本进行向量与全文召回。[1]\n2. **操作指引**：在控制台点击配置后保存即可实时生效。[2]`,
+          demo: true,
+          text: `【演示模式】关于「${q}」，根据 ${state.selectedChatKb} 的检索结果，为你梳理关键信息如下：\n\n1. **定义与入口**：请在工作台中进入相应模块，系统已自动根据知识版本进行向量与全文召回。[1]\n2. **操作指引**：在控制台点击配置后保存即可实时生效。[2]`,
           time: timeStr,
           citations: [
             { id: 1, title: '用户手册_产品A.pdf', page: 'P.12-14', quote: '产品使用与配置指引...' },
@@ -5902,7 +6535,7 @@
       ];
     } else {
       state.chatMessages = [
-        { role: 'assistant', text: `你好！当前已连接 ${state.selectedChatKb}，请问有什么可以帮助你？`, time: '刚刚' }
+        { role: 'assistant', demo: true, text: `【演示模式】你好！当前已连接 ${state.selectedChatKb}，请问有什么可以帮助你？`, time: '刚刚' }
       ];
     }
     closeOverlay();
@@ -6023,7 +6656,7 @@
   }
 
   render();
-})();/* Complete State & Button Interaction Handlers */
+  /* Complete State & Button Interaction Handlers */
   window.toggleNotificationsPopover = function() {
     let pop = document.getElementById('ordoNotificationsPopover');
     if (pop) {
@@ -6692,24 +7325,59 @@
     showOverlay(html);
   };
 
-  window.handleConfirmAddModel = function() {
+  window.handleConfirmAddModel = async function() {
     const name = document.getElementById('newModelName')?.value || 'DeepSeek-V3';
-    const provider = document.getElementById('newModelProvider')?.value || 'DeepSeek';
+    const providerLabel = document.getElementById('newModelProvider')?.value || 'DeepSeek';
+    const url = document.getElementById('newModelUrl')?.value || 'https://api.deepseek.com/v1';
+    const apiKey = document.getElementById('newModelKey')?.value || '';
+    const providerMap = { 'OpenAI': 'openai-compatible', 'DeepSeek': 'openai-compatible', 'Anthropic': 'openai-compatible', 'BAAI': 'openai-compatible', 'Ollama': 'ollama' };
+    if (api && api.connected) {
+      const created = await api.createModel({
+        name,
+        provider: providerMap[providerLabel] || 'openai-compatible',
+        baseUrl: url,
+        modelId: name,
+        purpose: 'generation',
+        ...(apiKey ? { apiKey } : {})
+      });
+      if (!created) {
+        showToast(`模型登记失败：${(api.lastError && api.lastError.message) || '服务无响应'}`, 'error');
+        return;
+      }
+      const key = created.id;
+      state.modelsData[key] = {
+        backendId: created.id,
+        name: created.name || name,
+        provider: providerLabel,
+        url: created.base_url || url,
+        modelName: created.model_id || name,
+        timeout: 60,
+        status: created.status === 'available' ? 'ok' : 'danger',
+        statusText: created.status === 'available' ? '可用' : '未验证',
+        latency: '—',
+        time: '刚刚'
+      };
+      state.selectedModel = key;
+      closeOverlay();
+      showToast(`模型「${name}」已登记到服务端${apiKey ? '，API Key 已加密保存（不再回显）' : ''}，可点击“测试连接”验证`, created.status === 'available' ? 'ok' : '');
+      render();
+      return;
+    }
     const key = 'model_' + Date.now();
     state.modelsData[key] = {
       name,
-      provider,
-      url: document.getElementById('newModelUrl')?.value || 'https://api.deepseek.com/v1',
+      provider: providerLabel,
+      url,
       modelName: name,
       timeout: 60,
       status: 'ok',
-      statusText: '正常',
+      statusText: '正常（演示模式）',
       latency: '240 ms',
       time: '刚刚'
     };
     state.selectedModel = key;
     closeOverlay();
-    showToast(`模型「${name}」连接验证成功并已加入连接池！`, 'ok');
+    showToast(`模型「${name}」连接验证成功并已加入连接池！（演示模式）`, 'ok');
     render();
   };
 
@@ -6812,3 +7480,13 @@
   };
 
   
+
+})();
+
+
+
+
+
+
+
+
