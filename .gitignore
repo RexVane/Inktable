@@ -1,0 +1,19 @@
+# 运行时数据：SQLite 元数据、内容寻址 Blob、备份、运行密钥（含 master.key，敏感）
+.ordo-data/
+
+# 依赖
+node_modules/
+
+# 日志
+*.log
+
+# 浏览器调试产物（可随时重新生成）
+runtime-browser-*.png
+runtime-browser-*.json
+
+# 本地代理会话状态
+.zcode/
+
+# 系统文件
+Thumbs.db
+.DS_Store
