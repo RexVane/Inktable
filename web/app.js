@@ -448,6 +448,9 @@
     async deleteConversation(id) { return (await this.request(`/api/v1/conversations/${id}`, { method: 'DELETE' }))?.data; },
     async putFeatureFlag(key, enabled) { return (await this.request(`/api/v1/feature-flags/${encodeURIComponent(key)}`, { method: 'PUT', body: JSON.stringify({ enabled: Boolean(enabled) }) }))?.data; },
     async retryTask(taskId) { return (await this.request(`/api/v1/tasks/${taskId}/retry`, { method: 'POST', body: JSON.stringify({}) }))?.data; },
+    async pauseTask(taskId) { return (await this.request(`/api/v1/tasks/${taskId}/pause`, { method: 'POST', body: JSON.stringify({}) }))?.data; },
+    async resumeTask(taskId) { return (await this.request(`/api/v1/tasks/${taskId}/resume`, { method: 'POST', body: JSON.stringify({}) }))?.data; },
+    async cancelTask(taskId) { return (await this.request(`/api/v1/tasks/${taskId}/cancel`, { method: 'POST', body: JSON.stringify({}) }))?.data; },
     async restoreBackup(backupId) { return (await this.request(`/api/v1/backups/${backupId}/restore`, { method: 'POST', body: JSON.stringify({}) }))?.data; },
     async patchModel(modelId, payload) { return (await this.request(`/api/v1/models/${modelId}`, { method: 'PATCH', body: JSON.stringify(payload) }))?.data; },
     async deleteModel(modelId) { return (await this.request(`/api/v1/models/${modelId}`, { method: 'DELETE' }))?.data; },
@@ -2200,8 +2203,32 @@
     closeOverlay();
   };
 
+  async function renderLiveRegistry() {
+    const kbs = await api.getKnowledgeBases();
+    const kb = (kbs || []).find(item => item.id === state.registrySelectedKbId) || kbs?.[0];
+    if (!kb) return { desc: '文件、目录、压缩包、网盘、业务数据库和本机资料登记', actions: '', html: emptyState('暂无知识库', '请先创建知识库后再登记数据。', '<button class="btn primary" onclick="go(\'knowledge/config\')">前往知识库配置</button>') };
+    state.registrySelectedKbId = kb.id;
+    const datasets = await api.getDatasets(kb.id) || [];
+    const dataset = datasets.find(item => item.id === (state.registrySelectedDatasetId || state.selectedDatasetId)) || datasets[0];
+    if (!dataset) return { desc: '文件、目录、压缩包、网盘、业务数据库和本机资料登记', actions: '', html: emptyState('暂无数据集', '请先为当前知识库创建数据集。', '<button class="btn primary" onclick="go(\'knowledge/datasets\')">前往数据集</button>') };
+    state.selectedDatasetId = dataset.id;
+    state.registrySelectedDatasetId = dataset.id;
+    const [sources, docs] = await Promise.all([api.getSources(dataset.id), api.getDocuments(dataset.id, { limit: state.registryPageSize, offset: (state.registryPage - 1) * state.registryPageSize })]);
+    const meta = docs.meta || { total: docs.length, limit: state.registryPageSize, offset: 0, hasMore: false };
+    const sourceById = new Map(sources.map(item => [item.id, item]));
+    const rows = docs.length ? docs.map(doc => {
+      const source = sourceById.get(doc.source_id);
+      const status = doc.status || 'queued';
+      return `<tr><td style="padding-left:16px;"><b>${esc(doc.title || doc.logical_path || doc.id)}</b><div class="muted" style="font-size:11px;">${esc(doc.media_type || '未知类型')}</div></td><td>${esc(source?.name || source?.type || '—')}</td><td><span class="badge">${esc(source?.status || 'registered')}</span></td><td><span class="badge ${status === 'succeeded' || status === 'ready' ? 'ok' : status === 'failed' ? 'danger' : 'warn'}">${esc(status)}</span></td><td>${esc(dataset.name || dataset.id)}</td><td>${esc((doc.updated_at || doc.created_at || '—').replace('T', ' ').slice(0, 16))}</td><td><button class="btn sm" onclick="window.handleDeleteSingleDoc('${esc(doc.id)}')">删除</button></td></tr>`;
+    }).join('') : `<tr><td colspan="7">${emptyState('暂无登记文档', '当前在线数据集没有文档；上传、目录和压缩包导入会在服务端确认后显示。')}</td></tr>`;
+    const pageCount = Math.max(1, Math.ceil(Number(meta.total || 0) / Number(meta.limit || state.registryPageSize)));
+    const pageButtons = Array.from({ length: Math.min(pageCount, 7) }, (_, index) => index + 1).map(page => `<button class="page-num ${page === state.registryPage ? 'active' : ''}" onclick="window.handleRegistryPageChange(${page})">${page}</button>`).join('');
+    return { desc: '文件、目录、压缩包、网盘、业务数据库和本机资料登记', actions: '', html: `<div class="registry-action-row"><div class="registry-action-card" onclick="triggerNativeFileUpload()">⇪ 上传文件</div><div class="registry-action-card" onclick="window.handleDirectoryImportPrompt()">📁 导入目录</div><div class="registry-action-card" onclick="window.handleUploadArchivePrompt()">🗜 导入压缩包</div><div class="registry-action-card" style="opacity:.55;cursor:not-allowed">☁ 外部连接器（未启用）</div></div><div class="card" style="margin-bottom:16px;"><div class="card-head" style="display:flex;justify-content:space-between;align-items:center;"><span>数据来源 · ${esc(kb.name)} / ${esc(dataset.name)}</span><span class="muted">${Number(meta.total || 0)} 项</span></div><div class="card-body" style="padding:0;"><table class="data-table"><thead><tr><th style="padding-left:16px;">名称</th><th>来源</th><th>同步状态</th><th>处理状态</th><th>所属数据集</th><th>最近更新</th><th></th></tr></thead><tbody>${rows}</tbody></table><div class="table-pagination-bar" style="padding:14px 18px;"><span>第 ${state.registryPage} / ${pageCount} 页</span><div class="pagination-controls"><button class="page-arrow" onclick="window.handleRegistryPageChange('prev')" ${state.registryPage <= 1 ? 'disabled' : ''}>&lt;</button>${pageButtons}<button class="page-arrow" onclick="window.handleRegistryPageChange('next')" ${!meta.hasMore ? 'disabled' : ''}>&gt;</button></div></div></div></div><div class="card"><div class="card-head">已登记来源</div><div class="card-body">${sources.length ? sources.map(source => `<div class="list-item-row"><b>${esc(source.name)}</b><span class="muted" style="margin-left:auto;">${esc(source.type)} · ${source.document_count ?? 0} 文档</span></div>`).join('') : '<div class="muted">暂无来源记录</div>'}</div></div>` };
+  }
+
   /* 04 知识库 > 数据登记 - 100% 对应 04-知识库-数据登记.png */
   async function pageRegistry() {
+    if (api && api.connected) return renderLiveRegistry();
     let regKbs = [];
     let regDocs = [];
     if (api && api.connected) {
@@ -3034,10 +3061,10 @@
     if (api && api.connected) {
       try { traces = await api.getTraces({ limit: 20 }) || []; } catch (e) {}
     }
-    if (!traces.length) {
+    if (!traces.length && (!api || !api.connected)) {
       if (state.lastTrace?.id) {
-        traces = [{ id: state.lastTrace.id, query: '用户提问', status: state.lastTrace.status || 'succeeded', metrics: { totalMs: 1840 }, created_at: new Date().toISOString() }];
-      } else if (!api || !api.connected) {
+        traces = [{ id: state.lastTrace.id, query: '用户提问', status: state.lastTrace.status || 'succeeded', metrics: state.lastTrace.metrics || {}, created_at: new Date().toISOString() }];
+      } else {
         traces = [{ id: 'QA-DEMO-001', query: '如何为企业网站安装产品问答助手？', status: 'succeeded', metrics: { totalMs: 1840 }, created_at: '2025-05-20 10:25:00' }];
       }
     }
@@ -4742,6 +4769,7 @@
 
   /* 13 问答流程 > 构建提示词 - 100% 对应 13-问答流程-构建提示词.png */
   async function pageQA13_Prompt() {
+    if (api && api.connected) return renderLiveQAStage(6, '构建提示词');
     const traceHeader = renderQATraceHeader(6);
     const html = `
     ${traceHeader}
@@ -4988,6 +5016,7 @@
 
   /* 14 问答流程 > 回答生成 - 100% 对应 14-问答流程-回答生成.png */
   async function pageQA14_Answer() {
+    if (api && api.connected) return renderLiveQAStage(7, '回答生成');
     const traceHeader = `
     <!-- Top 8-Step Stepper Bar -->
     <div style="position:relative;margin:0 0 20px;padding-bottom:14px;border-bottom:1.5px solid #e5e7eb;width:100%;">
