@@ -46,7 +46,10 @@ function assertNoSymlinkComponents(target) {
     current = path.join(current, component);
     let stat;
     try { stat = fs.lstatSync(current); }
-    catch (error) { if (error.code === 'ENOENT') throwDirectorySecurity('DIRECTORY_CHANGED', '授权目录或目录项在检查期间消失'); throw error; }
+    catch (error) {
+      if (['ENOENT', 'ENOTDIR', 'ELOOP'].includes(error.code)) throwDirectorySecurity('DIRECTORY_CHANGED', '授权目录或目录项在检查期间消失');
+      throw error;
+    }
     if (stat.isSymbolicLink()) throwDirectorySecurity('DIRECTORY_SYMLINK_REJECTED', '授权目录不允许包含符号链接');
   }
 }
@@ -80,7 +83,11 @@ function secureDirectoryPath(root, relativePath, { directory = false } = {}) {
   }
   assertNoSymlinkComponents(lexical);
   let canonical;
-  try { canonical = fs.realpathSync(lexical); }
+  try {
+    const currentRoot = fs.realpathSync(root.requested);
+    if (!samePath(root.canonical, currentRoot)) throwDirectorySecurity('DIRECTORY_CHANGED', '授权目录在检查期间被替换');
+    canonical = fs.realpathSync(lexical);
+  }
   catch (error) {
     if (['ENOENT', 'ENOTDIR', 'ELOOP'].includes(error.code)) throwDirectorySecurity('DIRECTORY_CHANGED', '目录项在检查期间发生变化');
     throw error;
@@ -98,9 +105,15 @@ function sameFile(left, right) {
   return left.dev === right.dev && left.ino === right.ino;
 }
 
-function readAuthorizedFile(root, relativePath, expectedSize, maxBytes) {
+function sameSnapshot(stat, snapshot) {
+  if (!snapshot) return true;
+  return stat.dev === snapshot.dev && stat.ino === snapshot.ino && stat.size === snapshot.size
+    && Number(stat.mtimeMs) === Number(snapshot.mtimeMs) && Number(stat.ctimeMs) === Number(snapshot.ctimeMs);
+}
+
+function readAuthorizedFile(root, relativePath, expectedSize, maxBytes, snapshot) {
   const checked = secureDirectoryPath(root, relativePath);
-  if (checked.stat.size !== expectedSize || checked.stat.size > maxBytes) throwDirectorySecurity('DIRECTORY_CHANGED', '文件在导入期间发生变化');
+  if (checked.stat.size !== expectedSize || checked.stat.size > maxBytes || !sameSnapshot(checked.stat, snapshot)) throwDirectorySecurity('DIRECTORY_CHANGED', '文件在导入期间发生变化');
   const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0);
   let fd;
   try {
@@ -114,7 +127,7 @@ function readAuthorizedFile(root, relativePath, expectedSize, maxBytes) {
     const after = fs.fstatSync(fd);
     const afterPath = fs.realpathSync(checked.lexical);
     const current = fs.lstatSync(checked.lexical);
-    if (!isWithin(root.canonical, afterPath) || current.isSymbolicLink() || !sameFile(opened, after) || !sameFile(opened, current) || after.size !== data.length || data.length > maxBytes) {
+    if (!isWithin(root.canonical, afterPath) || current.isSymbolicLink() || !sameFile(opened, after) || !sameFile(opened, current) || !sameSnapshot(after, snapshot) || after.size !== data.length || data.length > maxBytes) {
       throwDirectorySecurity('DIRECTORY_CHANGED', '文件在导入期间被替换或修改');
     }
     return data;
@@ -271,7 +284,7 @@ class IngestService {
     return { duplicate: false, source, task };
   }
 
-  directoryPreview(directory, rules = {}) {
+  _directoryScan(directory, rules = {}) {
     const authorized = resolveAuthorizedRoot(directory);
     const root = authorized.requested;
     const excluded = (rules.exclude || []).map(item => String(item).toLowerCase());
@@ -285,23 +298,47 @@ class IngestService {
         if (candidates.length >= maxFiles) return;
         const absolute = path.join(current, entry.name);
         const relative = path.relative(root, absolute).replaceAll('\\', '/');
+        if (entry.isSymbolicLink()) throwDirectorySecurity('DIRECTORY_SYMLINK_REJECTED', '目录导入不允许符号链接');
         if (excluded.some(pattern => relative.toLowerCase().includes(pattern))) continue;
-        if (entry.isSymbolicLink()) continue;
         if (entry.isDirectory()) walk(absolute);
         else if (entry.isFile()) {
           const checkedFile = secureDirectoryPath(authorized, relative);
           const extension = extensionOf(entry.name);
-          candidates.push({ relativePath: relative, sizeBytes: checkedFile.stat.size, supported: ALLOWED_EXTENSIONS.has(extension) && !ARCHIVE_EXTENSIONS.has(extension), extension });
+          candidates.push({
+            relativePath: relative,
+            sizeBytes: checkedFile.stat.size,
+            supported: ALLOWED_EXTENSIONS.has(extension) && !ARCHIVE_EXTENSIONS.has(extension),
+            extension,
+            snapshot: {
+              dev: checkedFile.stat.dev,
+              ino: checkedFile.stat.ino,
+              size: checkedFile.stat.size,
+              mtimeMs: checkedFile.stat.mtimeMs,
+              ctimeMs: checkedFile.stat.ctimeMs
+            }
+          });
         }
       }
     };
     walk(root);
-    return { root, count: candidates.length, totalBytes: candidates.reduce((sum, item) => sum + item.sizeBytes, 0), truncated: candidates.length >= maxFiles, candidates };
+    const confirmedRoot = resolveAuthorizedRoot(root);
+    if (!samePath(authorized.canonical, confirmedRoot.canonical)) throwDirectorySecurity('DIRECTORY_CHANGED', '授权目录在检查期间发生变化');
+    return { authorized, root, count: candidates.length, totalBytes: candidates.reduce((sum, item) => sum + item.sizeBytes, 0), truncated: candidates.length >= maxFiles, candidates };
+  }
+
+  directoryPreview(directory, rules = {}) {
+    const scan = this._directoryScan(directory, rules);
+    // Keep the existing API shape; internal inode/timestamp snapshots never
+    // leave the service boundary.
+    return { root: scan.root, count: scan.count, totalBytes: scan.totalBytes, truncated: scan.truncated,
+      candidates: scan.candidates.map(({ snapshot, ...candidate }) => candidate) };
   }
 
   directoryImport(datasetId, input, workspaceId = this.config.localWorkspaceId, requestId) {
     this.knowledge.ensureDataset(datasetId, workspaceId);
-    const preview = this.directoryPreview(input.directory, input.rules || {});
+    const scan = this._directoryScan(input.directory, input.rules || {});
+    const preview = { root: scan.root, count: scan.count, totalBytes: scan.totalBytes, truncated: scan.truncated,
+      candidates: scan.candidates.map(({ snapshot, ...candidate }) => candidate) };
     const idempotencyKey = input.idempotencyKey || `directory:${datasetId}:${hash(stableJson({ root: preview.root, rules: input.rules || {} }))}`;
     const existing = this.db.one('SELECT * FROM tasks WHERE workspace_id=? AND idempotency_key=?', workspaceId, idempotencyKey);
     if (existing) {
@@ -309,10 +346,11 @@ class IngestService {
       const task = this.tasks.create({ workspaceId, type: 'directory.import', objectType: 'source', objectId: existing.object_id, idempotencyKey, input: existing.input || {} });
       return { duplicate: true, source, preview, task };
     }
-    const authorized = resolveAuthorizedRoot(preview.root);
+    const authorized = scan.authorized;
     const source = this.knowledge.createSource(datasetId, { type: 'directory', name: path.basename(preview.root), locationHint: preview.root, config: { rules: input.rules || {}, authorizedAt: now() } }, workspaceId, requestId);
     const task = this.tasks.create({ workspaceId, type: 'directory.import', objectType: 'source', objectId: source.id,
-      idempotencyKey, input: { datasetId, sourceId: source.id, root: preview.root, rootRealpath: authorized.canonical, candidates: preview.candidates, rules: input.rules || {} } });
+      idempotencyKey, input: { datasetId, sourceId: source.id, root: preview.root, rootRealpath: authorized.canonical,
+        candidates: scan.candidates, rules: input.rules || {} } });
     return { duplicate: false, source, preview, task };
   }
 
@@ -353,7 +391,7 @@ class IngestService {
     // here would turn a queued import into a new authorization decision.
     const candidates = Array.isArray(input.candidates)
       ? input.candidates
-      : this.directoryPreview(authorized.requested, input.rules || {}).candidates;
+      : this._directoryScan(authorized.requested, input.rules || {}).candidates;
     const preview = { candidates };
     const manifest = [];
     for (let index = 0; index < preview.candidates.length; index += 1) {
@@ -362,7 +400,7 @@ class IngestService {
       else if (item.sizeBytes > this.config.maxFileBytes) manifest.push({ path: item.relativePath, status: 'resource_limit', sizeBytes: item.sizeBytes });
       else {
         try {
-          const buffer = readAuthorizedFile(authorized, item.relativePath, item.sizeBytes, this.config.maxFileBytes);
+          const buffer = readAuthorizedFile(authorized, item.relativePath, item.sizeBytes, this.config.maxFileBytes, item.snapshot);
           const registered = await this.knowledge.registerUpload(input.datasetId, input.sourceId, item.relativePath, buffer, null, workspaceId);
           manifest.push({ path: item.relativePath, status: registered.duplicate ? 'duplicate' : 'queued', documentId: registered.document.id, taskId: registered.task?.id });
         } catch (error) { manifest.push({ path: item.relativePath, status: 'failed', code: error.code || 'IMPORT_FAILED', message: error.message }); }

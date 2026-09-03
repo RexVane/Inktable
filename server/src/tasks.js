@@ -23,7 +23,7 @@ class TaskService {
     if (existing) {
       const existingInput = parseJson(existing.input_json, {});
       if (stableJson(existingInput) !== inputFingerprint) throw new AppError(409, 'IDEMPOTENCY_CONFLICT', '相同幂等键对应了不同的任务输入');
-      if (['queued','running','succeeded','partial'].includes(existing.status)) return existing;
+      if (['queued','running','paused','succeeded','partial'].includes(existing.status)) return existing;
       this.db.run("UPDATE tasks SET status='queued',progress=0,result_json='{}',error_code=NULL,error_message=NULL,cancel_requested=0,pause_requested=0,finished_at=NULL,updated_at=? WHERE id=?", now(), existing.id);
       setImmediate(() => this.execute(existing.id));
       return this.get(existing.id, workspaceId);

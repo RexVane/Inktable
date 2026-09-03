@@ -370,8 +370,17 @@ class ProductService {
   }
 
   requestBackup(input = {}, workspaceId = this.workspaceId(), requestId) {
+    const explicitKey = input.idempotencyKey ? String(input.idempotencyKey) : null;
+    const idempotencyKey = explicitKey || `backup:${workspaceId}:${new Date().toISOString().slice(0,13)}`;
+    // The automatically generated hourly key is itself the deduplication
+    // contract: labels must not turn a second request in that hour into a
+    // conflicting task.
+    if (!explicitKey) {
+      const existing = this.db.one('SELECT * FROM tasks WHERE workspace_id=? AND idempotency_key=?', workspaceId, idempotencyKey);
+      if (existing) return this.tasks.get(existing.id, workspaceId);
+    }
     const task = this.tasks.create({ workspaceId, type: 'backup.create', objectType: 'workspace', objectId: workspaceId,
-      idempotencyKey: input.idempotencyKey || `backup:${workspaceId}:${new Date().toISOString().slice(0,13)}`, input: { label: input.label || 'manual' } });
+      idempotencyKey, input: { label: input.label || 'manual' } });
     this.audit.append({ workspaceId, action: 'backup.request', objectType: 'workspace', objectId: workspaceId, requestId, details: { taskId: task.id } });
     return task;
   }
@@ -464,8 +473,9 @@ class ProductService {
     const backup = this.db.one('SELECT * FROM backup_manifests WHERE id=? AND workspace_id=?', backupId, workspaceId);
     if (!backup) throw new AppError(404, 'NOT_FOUND', '备份不存在或不可访问');
     const targetRoot = validateRestoreTarget(input.targetRoot || path.join(path.dirname(this.config.dataRoot), `${path.basename(this.config.dataRoot)}-restore-${backupId}`), this.config.dataRoot);
+    const idempotencyKey = input.idempotencyKey || `restore:${backupId}:${hash(targetRoot)}`;
     const task = this.tasks.create({ workspaceId, type: 'backup.restore', objectType: 'backup', objectId: backupId,
-      idempotencyKey: input.idempotencyKey || `restore:${backupId}:${hash(targetRoot)}`, input: { backupId, targetRoot } });
+      idempotencyKey, input: { backupId, targetRoot } });
     this.audit.append({ workspaceId, action: 'backup.restore_request', objectType: 'backup', objectId: backupId, requestId, details: { taskId: task.id, targetRoot } });
     return task;
   }

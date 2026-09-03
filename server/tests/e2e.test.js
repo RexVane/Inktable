@@ -117,6 +117,41 @@ test('security boundaries reject unauthenticated writes, CSRF bypass and unsuppo
   assert.equal(rejected.json().error.code, 'UNSUPPORTED_FORMAT');
 });
 
+test('directory ingest authorizes real paths and rejects symlinks and changed files', async t => {
+  const { app, request } = await fixture(t);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ordo-directory-'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'ordo-outside-'));
+  t.after(() => { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(outside, { recursive: true, force: true }); });
+  fs.writeFileSync(path.join(root, 'safe.md'), '# 安全文档\n\n授权目录中的内容。');
+  fs.writeFileSync(path.join(outside, 'secret.md'), '# 不应导入');
+  try {
+    fs.symlinkSync(path.join(outside, 'secret.md'), path.join(root, 'link.md'), 'file');
+    fs.symlinkSync(outside, path.join(root, 'linked-directory'), 'junction');
+  } catch (error) {
+    if (['EPERM', 'EACCES'].includes(error.code)) return;
+    throw error;
+  }
+
+  const kb = (await request('POST', '/api/v1/knowledge-bases', { name: '目录导入安全测试' })).json().data;
+  const dataset = kb.datasets[0];
+  const preview = await app.inject({ method: 'POST', url: `/api/v1/datasets/${dataset.id}/directory/preview`,
+    payload: { directory: root }, headers: await authHeaders(app) });
+  assert.equal(preview.statusCode, 400);
+  assert.equal(preview.json().error.code, 'DIRECTORY_SYMLINK_REJECTED');
+
+  fs.rmSync(path.join(root, 'link.md'), { force: true });
+  fs.rmSync(path.join(root, 'linked-directory'), { recursive: true, force: true });
+  const cleanPreview = await request('POST', `/api/v1/datasets/${dataset.id}/directory/preview`, { directory: root });
+  assert.deepEqual(cleanPreview.json().data.candidates.map(item => item.relativePath), ['safe.md']);
+
+  const source = (await request('POST', `/api/v1/datasets/${dataset.id}/directory/import`, { directory: root })).json().data;
+  fs.writeFileSync(path.join(root, 'safe.md'), '# 被替换\n\n内容已发生变化。');
+  const task = await waitTask(request, source.task.id);
+  assert.equal(task.result.status, 'partial');
+  assert.equal(task.result.manifest[0].status, 'failed');
+  assert.equal(task.result.manifest[0].code, 'DIRECTORY_CHANGED');
+});
+
 test('connector, graph and signed website assistant APIs enforce their product boundaries', async t => {
   const { app, dataRoot, request } = await fixture(t);
   const kb = (await request('POST', '/api/v1/knowledge-bases', { name: '扩展能力测试库' })).json().data;

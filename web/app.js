@@ -239,6 +239,9 @@
           this.workspaceId = json.data?.workspaceId;
           this.connected = true;
           try {
+            const version = await this.getVersion();
+            this.context = { ...(this.context || {}), version: version || null };
+            await refreshNotifications();
             await this.syncContext();
             // 首屏可能在会话建立前已按演示模式渲染，连接成功后刷新当前页
             if (typeof render === 'function') render();
@@ -281,7 +284,7 @@
 
     // 启动后预取后端上下文（知识库/模型/助手/默认数据集）；失败保持离线演示模式
     async syncContext() {
-      const ctx = { knowledgeBases: [], models: [], assistants: [], defaultKbId: null, defaultDatasetId: null };
+      const ctx = { knowledgeBases: [], models: [], assistants: [], defaultKbId: null, defaultDatasetId: null, version: this.context?.version || null };
       const [kbs, models, assistants] = await Promise.all([this.getKnowledgeBases(), this.getModels(), this.getAssistants()]);
       ctx.knowledgeBases = kbs || [];
       ctx.models = models || [];
@@ -391,12 +394,32 @@
     },
     async getReleases(dsId) { return (await this.request(`/api/v1/datasets/${dsId}/releases`))?.data; },
     async buildRelease(dsId, payload = {}) { return (await this.request(`/api/v1/datasets/${dsId}/releases`, { method: 'POST', body: JSON.stringify(payload) }))?.data; },
+    async getWiki(knowledgeBaseId) {
+      const qs = knowledgeBaseId ? `?knowledgeBaseId=${encodeURIComponent(knowledgeBaseId)}` : '';
+      return (await this.request(`/api/v1/wiki${qs}`))?.data;
+    },
+    async getWikiPage(pageId) { return (await this.request(`/api/v1/wiki/${pageId}`))?.data; },
+    async getGraph(dsId) { return (await this.request(`/api/v1/datasets/${dsId}/graph`))?.data; },
     async getTasks(params = {}) {
       const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')).toString();
       const response = await this.request(`/api/v1/tasks${qs ? `?${qs}` : ''}`);
       return this.collection(response?.data, response?.meta);
     },
+    async getTask(taskId) { return (await this.request(`/api/v1/tasks/${taskId}`))?.data; },
     async waitTask(taskId, timeoutMs = 20000) { return (await this.request(`/api/v1/tasks/${taskId}/wait?timeoutMs=${timeoutMs}`))?.data; },
+    async waitTaskTerminal(taskId, timeoutMs = 120000) {
+      const deadline = Date.now() + timeoutMs;
+      let task = null;
+      while (Date.now() < deadline) {
+        task = await this.waitTask(taskId, Math.min(10000, Math.max(1000, deadline - Date.now())));
+        if (task && taskTerminalStatuses.has(task.status) && task.status !== 'paused') return task;
+        if (task?.status === 'paused') return task;
+        task = await this.getTask(taskId);
+        if (task && taskTerminalStatuses.has(task.status) && task.status !== 'paused') return task;
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
+      return task;
+    },
     async getModels() { return (await this.request('/api/v1/models'))?.data; },
     async createModel(payload) { return (await this.request('/api/v1/models', { method: 'POST', body: JSON.stringify(payload) }))?.data; },
     async testModel(modelId) { return (await this.request(`/api/v1/models/${modelId}/test`, { method: 'POST', body: JSON.stringify({}) }))?.data; },
@@ -556,6 +579,32 @@
   const taskTerminalStatuses = new Set(['succeeded', 'partial', 'failed', 'cancelled', 'paused']);
   const taskStatusLabel = status => ({ queued: '待处理', running: '处理中', paused: '已暂停', succeeded: '已完成', partial: '部分完成', failed: '失败', cancelled: '已取消' }[status] || status || '未知');
   const formatDateTime = value => value ? String(value).replace('T', ' ').slice(0, 19) : '—';
+  function getReadNotificationIds() {
+    try { return new Set(JSON.parse(localStorage.getItem('ordo.notificationRead') || '[]')); } catch (e) { return new Set(); }
+  }
+  function updateNotificationBadge() {
+    const badge = document.querySelector('.unread-dot');
+    if (badge) {
+      const count = Number(state.notificationUnreadCount || 0);
+      badge.style.display = count > 0 ? '' : 'none';
+      badge.title = count > 0 ? `${count} 条未读任务通知` : '没有未读通知';
+    }
+  }
+  async function refreshNotifications() {
+    if (!api || !api.connected) {
+      state.notificationTasks = [];
+      state.notificationUnreadCount = null;
+      updateNotificationBadge();
+      return [];
+    }
+    const tasks = await api.getTasks({ limit: 20 }) || [];
+    state.notificationTasks = tasks;
+    const read = getReadNotificationIds();
+    state.notificationUnreadCount = tasks.filter(task => taskTerminalStatuses.has(task.status) && !read.has(task.id)).length;
+    state.notificationInitialized = true;
+    updateNotificationBadge();
+    return tasks;
+  }
 
   function emptyState(title, detail, actionHtml = '') {
     return `<div class="card"><div class="card-body" style="padding:48px 24px;text-align:center;">
@@ -783,7 +832,7 @@
         <div class="footer-row">
           <span class="dot"></span>
           <span class="label">Ordo 企业版</span>
-          <span class="version" style="margin-left:auto;color:var(--ink-faint);">v1.8.0</span>
+          <span class="version" style="margin-left:auto;color:var(--ink-faint);">${esc(api?.context?.version?.appVersion || '—')}</span>
         </div>
       </div>
     </aside>
@@ -799,7 +848,7 @@
         <div class="topbar-actions">
           <button class="bell-btn" type="button" title="通知" onclick="toggleNotificationsPopover()">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-            <span class="unread-dot"></span>
+            <span class="unread-dot" style="display:${Number(state.notificationUnreadCount || 0) > 0 ? '' : 'none'}" title="${Number(state.notificationUnreadCount || 0)} 条未读任务通知"></span>
           </button>
           <div class="user-avatar" title="当前用户">
             <span>Ordo</span>
@@ -1665,7 +1714,8 @@
     if (api && api.connected && (!kbs || !kbs.length)) {
       try { kbs = await api.getKnowledgeBases() || []; } catch (e) {}
     }
-    const currentKbId = state.selectedKbId || (kbs[0] && kbs[0].id);
+    const currentKbId = state.routeParams?.kb || state.selectedKbId || (kbs[0] && kbs[0].id);
+    if (state.routeParams?.kb) state.selectedKbId = state.routeParams.kb;
 
     const kbsListHtml = kbs.length ? kbs.map(kb => {
       const isSelected = kb.id === currentKbId;
@@ -1858,7 +1908,10 @@
 
   async function pageDatasetsTarget() {
     let datasets = [];
-    const kbId = state.selectedKbId || (api?.context?.defaultKbId) || (api?.context?.knowledgeBases?.[0]?.id);
+    const routeKbId = state.routeParams?.kb;
+    const routeDatasetId = state.routeParams?.dataset;
+    const kbId = routeKbId || state.selectedKbId || (api?.context?.defaultKbId) || (api?.context?.knowledgeBases?.[0]?.id);
+    if (routeKbId) state.selectedKbId = routeKbId;
     if (api && api.connected && kbId) {
       try { datasets = await api.getDatasets(kbId) || []; } catch (e) {}
     }
@@ -1872,7 +1925,7 @@
       }
     }
     state.currentDatasets = datasets;
-    const activeDs = datasets.find(d => d.id === state.selectedDatasetId) || datasets[0] || null;
+    const activeDs = datasets.find(d => d.id === (routeDatasetId || state.selectedDatasetId)) || datasets[0] || null;
     if (!activeDs) {
       return {
         desc: '知识库、数据源、文档和目录树的统一管理',
@@ -1881,6 +1934,12 @@
       };
     }
     state.selectedDatasetId = activeDs.id;
+    if (api && api.connected && activeDs.id && !String(activeDs.id).startsWith('ds-demo-')) {
+      try {
+        const latestDataset = await api.getDataset(activeDs.id);
+        if (latestDataset) Object.assign(activeDs, latestDataset);
+      } catch (e) {}
+    }
 
     let docs = [];
     const limit = 10;
@@ -1896,12 +1955,40 @@
     if (!docs.length && (!api || !api.connected || activeDs.id.startsWith('ds-demo-'))) {
       docs = state.datasetDocs || [];
     }
+    if (api && api.connected && !activeDs.id.startsWith('ds-demo-') && !docs.length) {
+      docs = [];
+    }
 
     const currentTab = state.datasetTab || 'data';
+    // 进入真实数据集后，页签所需的数据全部来自对应 API；演示数据只在离线模式下使用。
+    let sources = Array.isArray(activeDs.sources) ? activeDs.sources : [];
+    let wikiPages = [];
+    let graphData = null;
+    let releases = Array.isArray(activeDs.releases) ? activeDs.releases : [];
+    let datasetAssistants = [];
+    if (api && api.connected && !String(activeDs.id).startsWith('ds-demo-')) {
+      const [sourceResult, wikiResult, graphResult, releaseResult, assistantResult] = await Promise.all([
+        sources.length ? Promise.resolve(sources) : api.getSources(activeDs.id).catch(() => []),
+        api.getWiki(kbId).catch(() => []),
+        api.getGraph(activeDs.id).catch(() => null),
+        releases.length ? Promise.resolve(releases) : api.getReleases(activeDs.id).catch(() => []),
+        api.getAssistants().catch(() => [])
+      ]);
+      sources = Array.isArray(sourceResult) ? sourceResult : [];
+      wikiPages = Array.isArray(wikiResult) ? wikiResult.filter(p => !p.dataset_id || p.dataset_id === activeDs.id) : [];
+      graphData = graphResult;
+      releases = Array.isArray(releaseResult) ? releaseResult : [];
+      datasetAssistants = Array.isArray(assistantResult) ? assistantResult.filter(a => a.dataset_id === activeDs.id) : [];
+    }
 
     // Build Tab content
     let tabContentHtml = '';
     if (currentTab === 'data') {
+      const sourceRows = sources.length ? sources : (api && api.connected ? [] : [{ id: 'demo-source', name: '离线示例来源', type: 'upload', document_count: docs.length }]);
+      const documentRows = docs.filter(doc => {
+        const q = String(state.datasetSearchQuery || '').trim().toLowerCase();
+        return !q || String(doc.title || doc.name || '').toLowerCase().includes(q);
+      });
       tabContentHtml = `
         <!-- 3-Column Split -->
         <div class="dataset-content-grid">
@@ -1916,26 +2003,10 @@
                 <span>∨</span> 📁 <span>${esc(activeDs.name)}</span>
                 <span class="count">${activeDs.document_count ?? activeDs.counts?.documents ?? 0}</span>
               </div>
-              <div class="dataset-tree-row" style="padding-left:14px;">
-                <span>›</span> 📁 <span>01 快速入门</span>
-                <span class="count">128</span>
-              </div>
-              <div class="dataset-tree-row" style="padding-left:14px;">
-                <span>›</span> 📁 <span>02 安装部署</span>
-                <span class="count">162</span>
-              </div>
-              <div class="dataset-tree-row" style="padding-left:14px;">
-                <span>∨</span> 📁 <span>03 功能说明</span>
-                <span class="count">512</span>
-              </div>
-              <div class="dataset-tree-row" style="padding-left:28px;">
-                <span>📄</span> <span>3.1 用户管理</span>
-                <span class="count">68</span>
-              </div>
-              <div class="dataset-tree-row active" style="padding-left:28px;">
-                <span>📄</span> <b>3.4 报表与分析</b>
-                <span class="count">72</span>
-              </div>
+              ${sourceRows.map(source => `<div class="dataset-tree-row" style="padding-left:14px;" title="${esc(source.type || '')}">
+                <span>›</span> 📁 <span>${esc(source.name || source.id || '未命名来源')}</span>
+                <span class="count">${source.document_count ?? (docs.filter(d => d.source_id === source.id).length || '—')}</span>
+              </div>`).join('')}
             </div>
           </div>
 
@@ -1947,6 +2018,7 @@
                 <button class="dataset-toolbar-btn" onclick="openCreateFolderPrompt()">📁 新建文件夹</button>
               </div>
               <div style="display:flex;gap:8px;">
+                <input class="input" value="${esc(state.datasetSearchQuery || '')}" placeholder="搜索当前数据集文档" style="height:32px;width:170px;font-size:12px;" oninput="state.datasetSearchQuery=this.value;window.renderDatasetPage()">
                 <button class="dataset-toolbar-btn" onclick="window.toggleDatasetFilter()">▽ 筛选</button>
                 <button class="dataset-toolbar-btn" style="padding:0 8px;" onclick="window.handleRefreshDatasets()">↻</button>
               </div>
@@ -1963,7 +2035,7 @@
                 </tr>
               </thead>
               <tbody>
-                ${docs.length === 0 ? `
+                ${documentRows.length === 0 ? `
                   <tr>
                     <td colspan="6" style="text-align:center;padding:40px 16px;color:var(--ink-dim);">
                       <div style="font-size:32px;margin-bottom:8px;">📂</div>
@@ -1971,16 +2043,17 @@
                       <div style="font-size:12px;margin-top:4px;">请通过上方「上传文件」或在「数据登记」中导入资料</div>
                     </td>
                   </tr>
-                ` : docs.map((doc, idx) => {
+                ` : documentRows.map((doc, idx) => {
                   const docTitle = doc.title || doc.name;
                   const docId = doc.id;
                   const docType = doc.media_type ? doc.media_type.split('/').pop().toUpperCase() : (doc.type || 'PDF');
                   const docChunks = doc.chunk_count ?? doc.chunks ?? 0;
-                  const docStatus = doc.status || '已完成';
+                  const docStatus = doc.status || '未记录';
+                  const docIcon = doc.media_type?.includes('pdf') ? '📕' : doc.media_type?.includes('word') ? '📘' : '📄';
                   return `
                     <tr class="${idx === 0 ? 'selected' : ''}" style="cursor:pointer;" onclick="showToast('已选中：' + '${esc(docTitle)}');">
                       <td><input type="checkbox" ${idx === 0 ? 'checked' : ''} onclick="event.stopPropagation();"></td>
-                      <td><span style="margin-right:4px;">${doc.icon || '📕'}</span> ${idx === 0 ? `<b>${esc(docTitle)}</b>` : esc(docTitle)}</td>
+                      <td><span style="margin-right:4px;">${doc.icon || docIcon}</span> ${idx === 0 ? `<b>${esc(docTitle)}</b>` : esc(docTitle)}</td>
                       <td>${esc(docType)}</td>
                       <td><span class="ok-text" style="font-size:12px;">● ${esc(docStatus)}</span></td>
                       <td>${docChunks}</td>
@@ -2003,7 +2076,7 @@
               </div>
             ` : ''}
             <div class="table-pagination-bar">
-              <span>共 ${totalDocs} 条文档</span>
+              <span>共 ${totalDocs} 条文档${state.datasetSearchQuery ? ` · 当前显示 ${documentRows.length} 条` : ''}</span>
               <div class="pagination-controls">
                 <button class="page-arrow ${page <= 1 ? 'disabled' : ''}" type="button" onclick="if(${page}>1)window.handleDatasetPageChange(${page - 1})">&lt;</button>
                 <button class="page-num ${page === 1 ? 'active' : ''}" type="button" onclick="window.handleDatasetPageChange(1)">1</button>
@@ -2018,16 +2091,16 @@
           <div class="dataset-inspector-col">
             <div style="display:flex;align-items:center;gap:6px;font-weight:700;font-size:14px;color:var(--ink-strong);margin-bottom:14px;">
               <span style="color:#ef4444;">📕</span>
-              <span>${esc(docs[0]?.title || docs[0]?.name || 'Ordo 核心文档.pdf')}</span>
+              <span>${esc(docs[0]?.title || docs[0]?.name || '未选择文档')}</span>
             </div>
             <div style="display:flex;flex-direction:column;gap:12px;">
               <div>
                 <div class="muted" style="font-size:12px;">所属目录</div>
-                <div style="display:flex;align-items:center;gap:4px;font-size:13px;margin-top:2px;">📁 03 功能说明 / 3.4 报表与分析 📋</div>
+                <div style="display:flex;align-items:center;gap:4px;font-size:13px;margin-top:2px;">${docs[0]?.source_id ? `来源 ${esc(sources.find(s => s.id === docs[0].source_id)?.name || docs[0].source_id)}` : '未记录'}</div>
               </div>
               <div>
                 <div class="muted" style="font-size:12px;">来源</div>
-                <div style="font-size:13px;margin-top:2px;">本地原位安全存储</div>
+                <div style="font-size:13px;margin-top:2px;">${esc(docs[0]?.source_type || sources.find(s => s.id === docs[0]?.source_id)?.type || '未记录')}</div>
               </div>
               <div>
                 <div class="muted" style="font-size:12px;">知识块</div>
@@ -2038,16 +2111,12 @@
         </div>
       `;
     } else if (currentTab === 'versions') {
-      let releases = [];
-      if (api && api.connected && activeDs?.id && !activeDs.id.startsWith('ds-demo-')) {
-        try { releases = await api.getReleases(activeDs.id) || []; } catch (e) {}
-      }
       const relRows = releases.length ? releases.map(r => `
         <tr>
           <td><b>v${esc(r.version)}</b></td>
           <td><span class="badge ${r.status === 'active' ? 'ok' : ''}">${r.status === 'active' ? '✓ 活动发布中' : '历史版本'}</span></td>
-          <td>${r.manifest?.chunkCount || r.chunkCount || '—'} 块</td>
-          <td class="mono" style="font-size:12px;">${esc((r.manifest?.contentHash || r.content_hash || '').slice(0, 16))}...</td>
+          <td>${r.manifest?.chunkCount ?? r.chunkCount ?? '—'} 块</td>
+          <td class="mono" style="font-size:12px;">${esc((r.manifest?.contentHash || r.content_hash || r.content_hash_sha256 || '未记录').slice(0, 16))}</td>
           <td>${esc((r.activated_at || r.created_at || '').replace('T', ' ').slice(0, 16))}</td>
           <td>
             ${r.status !== 'active' ? `<button class="btn sm primary" onclick="window.handleActivateRelease('${esc(r.id)}')">激活指针</button>` : '<span class="muted" style="font-size:12px;">当前生效</span>'}
@@ -2918,7 +2987,8 @@
   }
 
   async function renderLiveIndex() {
-    const dsId = state.selectedDatasetId || api?.context?.defaultDatasetId;
+    const dsId = state.routeParams?.dataset || state.selectedDatasetId || api?.context?.defaultDatasetId;
+    if (state.routeParams?.dataset) state.selectedDatasetId = state.routeParams.dataset;
     if (!dsId || String(dsId).startsWith('ds-demo-')) return { desc: '知识块清洗、向量化计算与不可变版本构建发布', actions: '', html: emptyState('暂无可用数据集', '请先选择服务端数据集。', '<button class="btn primary" onclick="go(\\\'knowledge/datasets\\\')">前往数据集</button>') };
     const [chunks, releases] = await Promise.all([api.getChunks(dsId, { limit: 50 }), api.getReleases(dsId)]);
     state.currentChunks = chunks;
@@ -6473,6 +6543,8 @@
       assistantDetail = await api.getAssistant(cur.backendId);
       if (assistantDetail) {
         const activeRelease = (assistantDetail.releases || []).find(r => r.id === assistantDetail.active_release_id) || null;
+        let dataset = null;
+        if (assistantDetail.dataset_id) dataset = await api.getDataset(assistantDetail.dataset_id);
         cur = { ...cur,
           datasetId: assistantDetail.dataset_id,
           releaseId: assistantDetail.active_release_id || null,
@@ -6480,15 +6552,18 @@
           version: activeRelease ? `v${activeRelease.version}` : '未发布',
           status: assistantDetail.status,
           statusText: assistantDetail.status === 'published' ? '已发布' : assistantDetail.status === 'paused' ? '已停用' : assistantDetail.status === 'draft' ? '草稿' : (assistantDetail.status || '—'),
-          kb: cur.kb || assistantDetail.dataset_id || '—',
-          releaseStatus: activeRelease?.status || null
+          kb: dataset?.name || cur.kb || '—',
+          datasetName: dataset?.name || cur.kb || '—',
+          releaseStatus: activeRelease?.status || null,
+          releaseCreatedAt: activeRelease?.created_at || null
         };
         state.assistants = state.assistants.map(item => item.id === cur.id ? { ...item, ...cur } : item);
       }
     }
 
     const totalPub = asts.filter(a => a.status === 'published').length;
-    const totalReq = asts.reduce((sum, a) => sum + (Number(a.requestsToday) || 0), 0) || (api?.connected ? 0 : 86);
+    const totalReqValue = asts.reduce((sum, a) => sum + (Number(a.requestsToday) || 0), 0);
+    const totalReq = api?.connected ? totalReqValue : (totalReqValue || 86);
 
     const currentTab = state.assistantTab || 'basic';
 
@@ -6520,9 +6595,12 @@
       `;
     } else if (currentTab === 'web') {
       let widgetClients = [];
+      let widgetBundle = { available: false, status: 0 };
       if (api && api.connected && cur.backendId) {
         try { widgetClients = await api.getAssistantClients(cur.backendId) || []; } catch (e) {}
+        widgetBundle = await api.getWidgetBundleStatus();
       }
+      const widgetReady = Boolean(widgetBundle.available);
       tabBody = `
         <div style="margin-top:16px;background:var(--inset);border:1px solid var(--line);border-radius:8px;padding:20px;">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
@@ -6530,7 +6608,7 @@
               <b style="font-size:14px;color:var(--ink-strong);">接入端点与密钥管理 (Widget Clients)</b>
               <div class="muted" style="font-size:12px;margin-top:2px;">管理网站嵌入授权凭据与允许跨域来源（规划 §14.5.3）。</div>
             </div>
-            <button class="btn sm primary" onclick="window.openCreateWidgetClientModal('${esc(cur.backendId || cur.id)}')">+ 注册新接入端点</button>
+            <button class="btn sm primary" onclick="window.openCreateWidgetClientModal('${esc(cur.backendId || cur.id)}')" ${api?.connected && cur.backendId && cur.status === 'published' ? '' : 'disabled'}>+ 注册新接入端点</button>
           </div>
 
           <table class="data-table" style="font-size:12.5px;width:100%;background:var(--card-bg);border:1px solid var(--line);border-radius:6px;margin-bottom:16px;">
@@ -6566,8 +6644,10 @@
           </table>
 
           <b style="font-size:13.5px;color:var(--ink-strong);display:block;margin-bottom:6px;">企业网站挂载嵌入代码</b>
-          <pre style="background:#1e293b;color:#f8fafc;padding:12px;border-radius:6px;font-size:12px;overflow-x:auto;">&lt;script src="http://127.0.0.1:8790/widget.js" data-assistant-id="${esc(cur.backendId || cur.id)}" defer&gt;&lt;/script&gt;</pre>
-          <button class="btn primary" style="margin-top:10px;" onclick="navigator.clipboard.writeText('&lt;script src=\'http://127.0.0.1:8790/widget.js\' data-assistant-id=\'${esc(cur.backendId || cur.id)}\' defer&gt;&lt;/script&gt;');showToast('✓ 嵌入代码已复制到剪贴板！','ok');">📋 复制代码</button>
+          ${widgetReady ? `
+            <pre style="background:#1e293b;color:#f8fafc;padding:12px;border-radius:6px;font-size:12px;overflow-x:auto;">&lt;script src="${esc(window.location.origin)}/widget.js" data-assistant-id="${esc(cur.backendId || cur.id)}" defer&gt;&lt;/script&gt;</pre>
+            <button class="btn primary" style="margin-top:10px;" onclick="navigator.clipboard.writeText('&lt;script src=\\'${esc(window.location.origin)}/widget.js\\' data-assistant-id=\\'${esc(cur.backendId || cur.id)}\\' defer&gt;&lt;/script&gt;');showToast('✓ 嵌入代码已复制到剪贴板！','ok');">📋 复制代码</button>
+          ` : `<div style="padding:14px;background:var(--card-bg);border:1px dashed var(--line);border-radius:6px;color:var(--ink-dim);">暂未接入：当前部署未提供 Widget bundle（widget.js），无法生成嵌入代码。</div>`}
         </div>
       `;
     } else if (currentTab === 'scope') {
@@ -6626,13 +6706,13 @@
             <div class="stat-icon" style="width:40px;height:40px;flex:0 0 40px;font-size:22px;">🤖</div>
             <div>
               <h3 style="font-size:16px;margin:0;">${esc(cur.name)} <span class="badge ${cur.status === 'published' ? 'ok' : ''}">${esc(cur.statusText || '已就绪')}</span> <span class="badge">${esc(cur.version || 'v1.0')} ⌄</span></h3>
-              <div class="muted" style="font-size:12px;margin-top:2px;">所属数据集: ${esc(cur.kb || '企业核心知识库')}</div>
+              <div class="muted" style="font-size:12px;margin-top:2px;">所属数据集: ${esc(cur.datasetName || cur.kb || '—')} · Release: ${esc(cur.releaseId ? (cur.version || '已发布') : '未发布')}</div>
             </div>
           </div>
           <div style="display:flex;gap:8px;">
             <button class="btn sm" onclick="openAssistantPreviewModal()">📱 手机预览</button>
-            <button class="btn sm" onclick="window.handleToggleAssistantStatus()">${cur.status === 'published' ? '⏸ 停用' : '▶ 启用发布'}</button>
-            <button class="btn sm primary" onclick="handlePublishAssistantVersion()">发布新版本</button>
+            <button class="btn sm" onclick="window.handleToggleAssistantStatus()" ${api?.connected && cur.backendId ? '' : 'disabled'}>${cur.status === 'published' ? '⏸ 停用' : '▶ 启用发布'}</button>
+            <button class="btn sm primary" onclick="window.handlePublishAssistantVersion()" ${api?.connected && cur.backendId && cur.datasetId && cur.releaseId ? '' : 'disabled'}>发布新版本</button>
           </div>
         </div>
         <div class="card-body">
@@ -7257,16 +7337,25 @@
 
   /* 20 设置 > 版本信息 (Version) - 100% 对应 20-设置-版本信息.png */
   async function pageVersion() {
-    let ver = { appVersion: '1.0.0', schemaVersion: 'v10', platform: 'windows', node: (typeof process !== 'undefined' && process.version) ? process.version : 'v22.18.0', deploymentProfile: 'standalone' };
-    let health = { status: 'healthy', components: { database: { status: 'healthy' }, vector: { status: 'healthy' } } };
+    let ver = { appVersion: '—', schemaVersion: '—', platform: '—', node: '—', deploymentProfile: '—', build: '—', channel: '—', indexVersion: '—', apiVersion: '—' };
+    let health = null;
+    let diagnostics = null;
     if (api && api.connected) {
-      try {
-        const v = await api.getVersion();
-        if (v) ver = { ...ver, ...v };
-        const h = await api.getHealth();
-        if (h) health = { ...health, ...h };
-      } catch (e) {}
+      const [versionResponse, healthResponse, diagnosticsResponse] = await Promise.all([
+        api.getVersion(), api.getHealth(), api.getDiagnostics()
+      ]);
+      if (versionResponse) ver = { ...ver, ...versionResponse };
+      health = healthResponse || null;
+      diagnostics = diagnosticsResponse || null;
+      if (diagnostics) ver = { ...ver, ...diagnostics };
     }
+    const componentStatus = key => health?.components?.[key]?.status || '—';
+    const healthLabel = health ? (health.status === 'ready' ? '正常' : health.status === 'degraded' ? '降级' : health.status) : '未获取';
+    const schemaLabel = ver.schemaVersion != null && ver.schemaVersion !== '—' ? `v${String(ver.schemaVersion).replace(/^v/, '')}` : '—';
+    const buildLabel = ver.build || ver.buildNumber || ver.build_id || '—';
+    const channelLabel = ver.channel || ver.releaseChannel || '—';
+    const indexLabel = ver.indexVersion || diagnostics?.capabilities?.indexVersion || '—';
+    const apiLabel = ver.apiVersion || '—';
 
     const html = `
     <div style="display:flex;flex-direction:column;gap:16px;width:100%;">
@@ -7283,8 +7372,8 @@
           <div style="height:32px;width:1px;background:var(--line);margin:0 4px;"></div>
           <div>
             <div style="display:flex;align-items:center;gap:12px;">
-              <b style="font-size:22px;color:var(--ink-strong);">Ordo ${ver.appVersion || "1.0.0"}</b>
-              <span style="color:#16a34a;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:4px;">✓ 当前为最新版本</span>
+              <b style="font-size:22px;color:var(--ink-strong);">Ordo ${esc(ver.appVersion)}</b>
+              <span class="badge ${health?.status === 'ready' ? 'ok' : ''}" style="font-size:12px;">服务状态：${esc(healthLabel)}</span>
             </div>
             <div class="muted" style="font-size:12.5px;margin-top:2px;">企业级智能知识库与问答引擎平台</div>
           </div>
@@ -7299,15 +7388,15 @@
       <div style="display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:16px;">
         <div class="card" style="padding:14px 18px;">
           <div class="muted" style="font-size:11.5px;">构建编号 ⓘ</div>
-          <b style="font-size:15px;color:var(--ink-strong);display:block;margin-top:4px;">2026.09.01.1842</b>
+          <b style="font-size:15px;color:var(--ink-strong);display:block;margin-top:4px;">${esc(buildLabel)}</b>
         </div>
         <div class="card" style="padding:14px 18px;">
           <div class="muted" style="font-size:11.5px;">发行标识</div>
-          <b style="font-size:15px;color:var(--ink-strong);display:block;margin-top:4px;">stable</b>
+          <b style="font-size:15px;color:var(--ink-strong);display:block;margin-top:4px;">${esc(channelLabel)}</b>
         </div>
         <div class="card" style="padding:14px 18px;">
-          <div class="muted" style="font-size:11.5px;">桌面端</div>
-          <b style="font-size:15px;color:var(--ink-strong);display:block;margin-top:4px;">Windows x64</b>
+          <div class="muted" style="font-size:11.5px;">运行平台</div>
+          <b style="font-size:15px;color:var(--ink-strong);display:block;margin-top:4px;">${esc(ver.platform)}</b>
         </div>
       </div>
 
@@ -7315,19 +7404,19 @@
       <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:16px;">
         <div class="card" style="padding:14px 18px;">
           <div class="muted" style="font-size:11.5px;">数据库 Schema ⓘ</div>
-          <b style="font-size:15px;color:var(--ink-strong);display:block;margin-top:4px;">v10</b>
+          <b style="font-size:15px;color:var(--ink-strong);display:block;margin-top:4px;">${esc(schemaLabel)}</b>
         </div>
         <div class="card" style="padding:14px 18px;">
           <div class="muted" style="font-size:11.5px;">知识索引格式 ⓘ</div>
-          <b style="font-size:15px;color:var(--ink-strong);display:block;margin-top:4px;">v7</b>
+          <b style="font-size:15px;color:var(--ink-strong);display:block;margin-top:4px;">${esc(indexLabel)}</b>
         </div>
         <div class="card" style="padding:14px 18px;">
-          <div class="muted" style="font-size:11.5px;">Electron 版本</div>
-          <b style="font-size:15px;color:var(--ink-strong);display:block;margin-top:4px;">28.3.3</b>
+          <div class="muted" style="font-size:11.5px;">Node.js 版本</div>
+          <b style="font-size:15px;color:var(--ink-strong);display:block;margin-top:4px;">${esc(ver.node)}</b>
         </div>
         <div class="card" style="padding:14px 18px;">
-          <div class="muted" style="font-size:11.5px;">API 版本</div>
-          <b style="font-size:15px;color:var(--ink-strong);display:block;margin-top:4px;">v1.8.0</b>
+          <div class="muted" style="font-size:11.5px;">部署配置</div>
+          <b style="font-size:15px;color:var(--ink-strong);display:block;margin-top:4px;">${esc(ver.deploymentProfile)}</b>
         </div>
       </div>
 
@@ -7397,24 +7486,24 @@
           <b style="font-size:14px;color:var(--ink-strong);margin-bottom:14px;">兼容与迁移</b>
           <div style="display:flex;flex-direction:column;gap:10px;font-size:12.5px;flex:1;">
             <div style="display:flex;justify-content:space-between;padding-bottom:8px;border-bottom:1px solid var(--line-soft);">
-              <span style="display:flex;align-items:center;gap:6px;"><span style="color:#16a34a;">✓</span> 数据库兼容性</span>
-              <b style="color:var(--ink-strong);">兼容 (Schema v10)</b>
+              <span style="display:flex;align-items:center;gap:6px;"><span style="color:${componentStatus('metadata') === 'available' ? '#16a34a' : '#f59e0b'};">${componentStatus('metadata') === 'available' ? '✓' : '!'}</span> 数据库状态</span>
+              <b style="color:var(--ink-strong);">${esc(componentStatus('metadata'))} (${esc(schemaLabel)})</b>
             </div>
             <div style="display:flex;justify-content:space-between;padding-bottom:8px;border-bottom:1px solid var(--line-soft);">
-              <span style="display:flex;align-items:center;gap:6px;"><span style="color:#16a34a;">✓</span> 知识索引兼容性</span>
-              <b style="color:var(--ink-strong);">兼容 (索引格式 v7)</b>
+              <span style="display:flex;align-items:center;gap:6px;"><span style="color:${componentStatus('vector') === 'available' ? '#16a34a' : '#f59e0b'};">${componentStatus('vector') === 'available' ? '✓' : '!'}</span> 向量索引状态</span>
+              <b style="color:var(--ink-strong);">${esc(componentStatus('vector'))} (${esc(indexLabel)})</b>
             </div>
             <div style="display:flex;justify-content:space-between;padding-bottom:8px;border-bottom:1px solid var(--line-soft);">
-              <span style="display:flex;align-items:center;gap:6px;"><span style="color:#16a34a;">✓</span> 配置文件兼容性</span>
-              <b style="color:var(--ink-strong);">兼容</b>
+              <span style="display:flex;align-items:center;gap:6px;"><span style="color:#64748b;">·</span> 配置文件兼容性</span>
+              <b style="color:var(--ink-strong);">${api?.connected ? '服务端未提供字段' : '—'}</b>
             </div>
             <div style="display:flex;justify-content:space-between;padding-bottom:8px;border-bottom:1px solid var(--line-soft);">
-              <span style="display:flex;align-items:center;gap:6px;"><span style="color:#16a34a;">✓</span> 最新迁移时间</span>
-              <span style="color:var(--ink-strong);">2026-09-01 18:42</span>
+              <span style="display:flex;align-items:center;gap:6px;"><span style="color:#64748b;">·</span> 最近检查时间</span>
+              <span style="color:var(--ink-strong);">${esc(health?.checkedAt || diagnostics?.generatedAt || '—')}</span>
             </div>
             <div style="display:flex;justify-content:space-between;padding-bottom:8px;border-bottom:1px solid var(--line-soft);">
-              <span style="display:flex;align-items:center;gap:6px;"><span style="color:#16a34a;">✓</span> 迁移状态</span>
-              <span style="color:var(--ink-strong);">已完成</span>
+              <span style="display:flex;align-items:center;gap:6px;"><span style="color:${health ? '#16a34a' : '#f59e0b'};">${health ? '✓' : '!'}</span> 迁移/服务状态</span>
+              <span style="color:var(--ink-strong);">${esc(healthLabel)}</span>
             </div>
             <div style="display:flex;justify-content:space-between;padding-bottom:8px;">
               <span style="display:flex;align-items:center;gap:6px;"><span style="color:#16a34a;">✓</span> 备份要求</span>
@@ -7446,7 +7535,7 @@
           </div>
         </div>
 
-        <div class="card" style="padding:16px 18px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;" onclick="triggerDownloadFile('ordo-diagnostics-sanitized.json', JSON.stringify({ version:'1.8.0', timestamp:new Date().toISOString(), system:{ schema:'v10', index:'v7', electron:'28.3.3', platform:navigator.platform }, health:{ database:'ok', vectorStore:'ok', models:'ok' } }, null, 2))">
+        <div class="card" style="padding:16px 18px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;" onclick="window.handleExportDiagnostics()">
           <div style="display:flex;align-items:center;gap:12px;">
             <div style="font-size:24px;color:#16a34a;">📤</div>
             <div>
@@ -7735,21 +7824,31 @@
     let taskItems = [];
     if (api && api.connected) {
       try {
-        const tasks = await api.getTasks({ limit: 5 }) || [];
-        taskItems = tasks.map(t => ({
-          title: t.type === 'document.parse' ? '文档解析任务' : (t.type === 'release.build' ? '版本构建发布' : t.type),
-          status: t.status === 'succeeded' ? '✓ 成功' : (t.status === 'failed' ? '✕ 失败' : '● 处理中'),
-          time: (t.created_at || '').replace('T', ' ').slice(0, 16),
-          tone: t.status === 'succeeded' ? 'ok' : (t.status === 'failed' ? 'danger' : 'warn')
+        const tasks = await refreshNotifications();
+        const read = getReadNotificationIds();
+        taskItems = tasks.slice(0, 5).map(t => ({
+          id: t.id,
+          title: t.type === 'document.parse' ? '文档解析任务' : (t.type === 'release.build' ? '版本构建发布' : (t.type === 'backup.restore' ? '备份还原任务' : (t.type === 'backup.create' ? '备份任务' : t.type))),
+          status: `${t.status === 'succeeded' ? '✓ ' : t.status === 'failed' ? '✕ ' : t.status === 'partial' ? '⚠ ' : '● '}${taskStatusLabel(t.status)}`,
+          time: formatDateTime(t.created_at),
+          tone: t.status === 'succeeded' ? 'ok' : t.status === 'failed' ? 'danger' : t.status === 'partial' ? 'warn' : 'warn',
+          unread: taskTerminalStatuses.has(t.status) && !read.has(t.id)
         }));
-      } catch (e) {}
-    }
-    if (!taskItems.length) {
-      if (!api || !api.connected) {
-        taskItems = [
-          { title: '演示模式：本地向量引擎就绪', status: '✓ 就绪', time: '刚刚', tone: 'ok' }
-        ];
+        const ids = new Set(tasks.map(t => t.id));
+        [...read].filter(id => !ids.has(id)).forEach(id => read.delete(id));
+        localStorage.setItem('ordo.notificationRead', JSON.stringify([...read]));
+      } catch (e) {
+        taskItems = [];
       }
+    }
+    if (!taskItems.length && (!api || !api.connected)) {
+      taskItems = [{ title: '通知仅在线可用', status: '— 未连接服务端', time: '—', tone: 'warn' }];
+    }
+    if (api && api.connected) {
+      const ids = state.notificationTasks.map(task => task.id);
+      try { localStorage.setItem('ordo.notificationRead', JSON.stringify(ids)); } catch (e) {}
+      state.notificationUnreadCount = 0;
+      updateNotificationBadge();
     }
 
     const pop = document.createElement('div');
@@ -8620,7 +8719,7 @@
       const task = await api.buildRelease(dsId, { activate: true });
       if (task && task.id) {
         showToast('发布任务已提交，正在等待构建完成...');
-        const result = await api.waitTask(task.id);
+        const result = await api.waitTaskTerminal(task.id, 120000);
         if (result && result.status === 'succeeded') {
           const rel = result.result || {};
           showToast(`✓ 版本 v${rel.version || '1.0'} 构建并激活成功！共 ${rel.chunkCount || '多'} 块`, 'ok');
@@ -8666,7 +8765,7 @@
       const task = await api.createBackup(label || 'manual-backup');
       if (task && task.id) {
         showToast('备份任务已提交，正在校验...');
-        const result = await api.waitTask(task.id);
+        const result = await api.waitTaskTerminal(task.id);
         if (result && result.status === 'succeeded') {
           showToast(`✓ 备份成功！已固化至独立归档`, 'ok');
           render();
@@ -8685,12 +8784,19 @@
     if (!confirm('警告：数据恢复将在独立安全目录中释放，不覆盖当前运行实例。确定执行恢复吗？')) return;
     showToast('正在初始化数据还原流程...');
     if (api && api.connected) {
-      const res = await api.restoreBackup(backupId);
-      if (res) {
-        showToast('✓ 备份已成功恢复至隔离安全目录！', 'ok');
-        render();
+      const task = await api.restoreBackup(backupId);
+      if (task?.id) {
+        showToast('还原任务已提交，正在等待校验与释放...');
+        const result = await api.waitTaskTerminal(task.id, 120000);
+        if (result?.status === 'succeeded') {
+          const report = result.result || {};
+          showToast(`✓ 备份已恢复至隔离目录${report.targetRoot ? `：${report.targetRoot}` : ''}`, 'ok');
+          render();
+        } else {
+          showToast(result?.error_message || api.lastError?.message || '恢复备份失败', 'error');
+        }
       } else {
-        showToast(api.lastError?.message || '恢复备份失败', 'error');
+        showToast(api.lastError?.message || '恢复任务提交失败', 'error');
       }
     } else {
       showToast('演示模式：已模拟恢复数据备份', 'ok');
@@ -8713,18 +8819,18 @@
 
   // 4. Version & Diagnostics Export Handlers
   window.handleExportDiagnostics = async function() {
-    showToast('正在生成诊断报告 JSON...');
-    if (api && api.connected) {
-      const diag = await api.getDiagnostics();
-      if (diag) {
-        triggerDownloadFile('ordo_diagnostics_' + Date.now() + '.json', JSON.stringify(diag, null, 2));
-        showToast('✓ 诊断报告已导出下载！', 'ok');
-        return;
-      }
+    if (!api || !api.connected) {
+      showToast('诊断导出需要连接服务端；当前未生成演示文件', 'warn');
+      return;
     }
-    const mockDiag = { timestamp: new Date().toISOString(), status: 'healthy', version: '1.0.0', platform: 'windows', node: (typeof process !== 'undefined' && process.version) ? process.version : 'v22.18.0' };
-    triggerDownloadFile('ordo_diagnostics_demo.json', JSON.stringify(mockDiag, null, 2));
-    showToast('✓ 诊断报告已导出（演示数据）', 'ok');
+    showToast('正在生成诊断报告 JSON...');
+    const diag = await api.getDiagnostics();
+    if (!diag) {
+      showToast(api.lastError?.message || '诊断信息读取失败', 'error');
+      return;
+    }
+    triggerDownloadFile('ordo_diagnostics_' + Date.now() + '.json', JSON.stringify(diag, null, 2));
+    showToast('✓ 诊断报告已导出下载！', 'ok');
   };
 
   // 5. Real Assistant Creation Handler (wired to api.createAssistant)
@@ -8993,13 +9099,21 @@
 
   // [removed: old handleToggleAssistantStatus stub - replaced by async version]
 
-  window.handlePublishAssistantVersion = function() {
+  window.handlePublishAssistantVersion = async function() {
     const curAst = state.assistants.find(a => a.id === state.selectedAssistantId) || state.assistants[0];
-    const parts = (curAst.version || 'v1.0.0').replace('v', '').split('.').map(Number);
-    parts[parts.length - 1] = (parts[parts.length - 1] || 0) + 1;
-    curAst.version = 'v' + parts.join('.');
-    showToast(`智能助手新版本 ${curAst.version} 已成功发布并同步至线上网站！`, 'ok');
-    render();
+    if (!curAst) return showToast('暂无可发布的助手', 'warn');
+    if (api && api.connected && curAst.backendId) {
+      if (!curAst.releaseId) return showToast('助手绑定的数据集没有活动 Release，暂不能发布', 'warn');
+      showToast('正在发布助手新版本...');
+      const res = await api.publishAssistant(curAst.backendId);
+      if (res) {
+        showToast('助手新版本已发布并绑定当前活动 Release', 'ok');
+        await api.syncContext();
+        render();
+      } else showToast(api.lastError?.message || '助手版本发布失败', 'error');
+      return;
+    }
+    showToast('离线模式不支持发布助手版本；请连接服务端后重试', 'warn');
   };
 
   // 2. Models Add & Re-auth Modals
