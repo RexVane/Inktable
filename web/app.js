@@ -428,6 +428,14 @@
     async createModel(payload) { return (await this.request('/api/v1/models', { method: 'POST', body: JSON.stringify(payload) }))?.data; },
     async testModel(modelId) { return (await this.request(`/api/v1/models/${modelId}/test`, { method: 'POST', body: JSON.stringify({}) }))?.data; },
     async probeLocalModel() { return (await this.request('/api/v1/models/probe-local'))?.data; },
+    async getConnectors() {
+      const response = await this.request('/api/v1/connectors');
+      return response ? this.collection(response.data, response.meta) : null;
+    },
+    async createConnector(payload) { return (await this.request('/api/v1/connectors', { method: 'POST', body: JSON.stringify(payload) }))?.data; },
+    async getConnector(connectorId) { return (await this.request(`/api/v1/connectors/${encodeURIComponent(connectorId)}`))?.data; },
+    async testConnector(connectorId) { return (await this.request(`/api/v1/connectors/${encodeURIComponent(connectorId)}/test`, { method: 'POST', body: JSON.stringify({}) }))?.data; },
+    async getConnectorSchema(connectorId) { return (await this.request(`/api/v1/connectors/${encodeURIComponent(connectorId)}/schema`))?.data; },
     async getAssistants() { return (await this.request('/api/v1/assistants'))?.data; },
     async updateAssistant(id, payload) { return (await this.request(`/api/v1/assistants/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }))?.data; },
     async getConversations() {
@@ -1718,9 +1726,16 @@
   /* 02 知识库 > 数据配置 - 100% 对应 02-知识库-数据配置.png (真实可交互下拉与高级设置) */
   async function pageConfig() {
     let kbs = (api && api.context && api.context.knowledgeBases) || [];
+    let health = null;
     if (api && api.connected && (!kbs || !kbs.length)) {
       try { kbs = await api.getKnowledgeBases() || []; } catch (e) {}
     }
+    if (api && api.connected) {
+      try { health = await api.getHealth(); } catch (e) {}
+    }
+    const vectorHealth = health?.components?.vector || null;
+    const vectorReady = vectorHealth?.status === 'available' || vectorHealth?.status === 'ready';
+    const vectorStatusLabel = vectorHealth ? `${vectorHealth.provider || '向量引擎'} · ${vectorHealth.status || '未记录'}` : '服务端未返回向量状态';
     const currentKbId = state.routeParams?.kb || state.selectedKbId || (kbs[0] && kbs[0].id);
     if (state.routeParams?.kb) state.selectedKbId = state.routeParams.kb;
 
@@ -1794,7 +1809,7 @@
       <div class="card" style="background:var(--card-bg);border:1px solid var(--line);border-radius:var(--radius-card);">
         <div class="card-head" style="padding:16px 24px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);">
           <span style="font-size:15px;font-weight:700;color:var(--ink-strong);">配置向量数据库</span>
-          <span id="kbTestStatusBadge" class="badge ok" style="background:var(--accent-soft);color:#16a34a;border:1px solid var(--accent);font-size:12.5px;padding:3px 10px;border-radius:12px;">✓ SQLite 向量引擎就绪</span>
+          <span id="kbTestStatusBadge" class="badge ${vectorReady ? 'ok' : 'warn'}" style="background:${vectorReady ? 'var(--accent-soft)' : 'var(--warn-soft)'};color:${vectorReady ? '#16a34a' : '#92400e'};border:1px solid ${vectorReady ? 'var(--accent)' : 'var(--warn)'};font-size:12.5px;padding:3px 10px;border-radius:12px;">${vectorReady ? '✓' : '!' } ${esc(vectorStatusLabel)}</span>
         </div>
         <div class="card-body" style="padding:24px;">
           <form id="kbConfigForm" onsubmit="window.handleCreateKbSubmit(event);">
@@ -1806,7 +1821,7 @@
                 </label>
                 <div style="position:relative;">
                   <div id="kbEngineSelectBox" style="display:flex;align-items:center;justify-content:space-between;border:1.5px solid var(--accent);border-radius:6px;padding:8px 12px;background:var(--card-bg);cursor:pointer;user-select:none;" onclick="toggleEngineDropdown(event)">
-                    <span id="kbEngineSelectedText" style="color:var(--ink-strong);font-size:13.5px;font-weight:600;">${state.selectedVectorEngine || 'SQLite (内置向量存储 - 推荐)'}</span>
+                    <span id="kbEngineSelectedText" style="color:var(--ink-strong);font-size:13.5px;font-weight:600;">${esc(state.selectedVectorEngine || (vectorHealth?.provider ? `${vectorHealth.provider} · ${vectorHealth.status || '未记录'}` : '服务端未记录'))}</span>
                     <span id="kbEngineChevron" style="font-size:12px;color:var(--ink-dim);">⌄</span>
                   </div>
 
@@ -1965,6 +1980,10 @@
     if (api && api.connected && !activeDs.id.startsWith('ds-demo-') && !docs.length) {
       docs = [];
     }
+    if (docs?.meta?.total != null) totalDocs = Number(docs.meta.total);
+    const datasetPageCount = Math.max(1, Math.ceil(Number(totalDocs || 0) / limit));
+    const pageNumbers = [...new Set([1, page - 1, page, page + 1, datasetPageCount].filter(value => value >= 1 && value <= datasetPageCount))].sort((a, b) => a - b);
+    const pageButtonHtml = pageNumbers.map((value, index) => `${index && value - pageNumbers[index - 1] > 1 ? '<span class="page-ellipsis">…</span>' : ''}<button class="page-num ${page === value ? 'active' : ''}" type="button" onclick="window.handleDatasetPageChange(${value})">${value}</button>`).join('');
 
     const currentTab = state.datasetTab || 'data';
     // 进入真实数据集后，页签所需的数据全部来自对应 API；演示数据只在离线模式下使用。
@@ -2299,37 +2318,46 @@
       </div>
       <div class="modal-body" style="padding:16px 20px;">
         <div style="margin-bottom:12px;">
+          <label class="form-label" style="display:block;font-size:12.5px;font-weight:600;margin-bottom:4px;">连接名称</label>
+          <input class="input" id="dbConnectionNameInput" placeholder="例如：业务 PostgreSQL" autocomplete="off">
+        </div>
+        <div style="margin-bottom:12px;">
           <label class="form-label" style="display:block;font-size:12.5px;font-weight:600;margin-bottom:4px;">数据库类型</label>
-          <select class="input" id="dbTypeSelect" style="width:100%;">
-            <option value="postgresql">PostgreSQL (推荐，支持 pgvector 扩展)</option>
-            <option value="mysql">MySQL 8.0+</option>
-            <option value="clickhouse">ClickHouse OLAP</option>
-            <option value="sqlite">SQLite 3 本地数据库</option>
+          <select class="input" id="dbTypeSelect" style="width:100%;" onchange="window.toggleDatabaseTypeFields(this.value)">
+            <option value="postgresql">PostgreSQL</option>
+            <option value="sqlite">SQLite 3</option>
           </select>
         </div>
+        <div id="dbPostgresFields">
         <div class="grid grid-2" style="gap:10px;margin-bottom:12px;">
           <div>
             <label class="form-label" style="display:block;font-size:12.5px;font-weight:600;margin-bottom:4px;">主机地址 / Host</label>
-            <input class="input" id="dbHostInput" value="127.0.0.1" placeholder="例如: 127.0.0.1 或 db.corp.internal">
+            <input class="input" id="dbHostInput" placeholder="例如: db.corp.internal" autocomplete="off">
           </div>
           <div>
             <label class="form-label" style="display:block;font-size:12.5px;font-weight:600;margin-bottom:4px;">端口 / Port</label>
-            <input class="input" id="dbPortInput" value="5432" placeholder="5432">
+            <input class="input" id="dbPortInput" value="5432" placeholder="5432" inputmode="numeric">
           </div>
         </div>
         <div class="grid grid-2" style="gap:10px;margin-bottom:12px;">
           <div>
             <label class="form-label" style="display:block;font-size:12.5px;font-weight:600;margin-bottom:4px;">数据库名 / Database</label>
-            <input class="input" id="dbNameInput" value="ordo_business" placeholder="ordo_business">
+            <input class="input" id="dbNameInput" placeholder="ordo_business" autocomplete="off">
           </div>
           <div>
             <label class="form-label" style="display:block;font-size:12.5px;font-weight:600;margin-bottom:4px;">用户名 / Username</label>
-            <input class="input" id="dbUserInput" value="postgres" placeholder="postgres">
+            <input class="input" id="dbUserInput" placeholder="postgres" autocomplete="username">
           </div>
         </div>
         <div style="margin-bottom:14px;">
           <label class="form-label" style="display:block;font-size:12.5px;font-weight:600;margin-bottom:4px;">密码 / Password</label>
-          <input class="input" type="password" id="dbPassInput" value="••••••••" placeholder="输入密码">
+          <input class="input" type="password" id="dbPassInput" placeholder="输入密码" autocomplete="new-password">
+        </div>
+        </div>
+        <div id="dbSqliteFields" style="display:none;margin-bottom:14px;">
+          <label class="form-label" style="display:block;font-size:12.5px;font-weight:600;margin-bottom:4px;">SQLite 文件路径</label>
+          <input class="input" id="dbPathInput" placeholder="例如：D:\\data\\business.sqlite3" autocomplete="off">
+          <div class="muted" style="font-size:11.5px;margin-top:5px;">服务端会以只读方式打开本机文件，并在连接成功后读取表结构。</div>
         </div>
         <div id="dbTestResult" style="margin-bottom:12px;display:none;padding:8px 12px;border-radius:6px;font-size:12.5px;"></div>
       </div>
@@ -2344,21 +2372,99 @@
     showOverlay(html);
   };
 
-  window.handleTestDbConnection = function() {
+  window.toggleDatabaseTypeFields = function(type) {
+    const postgres = document.getElementById('dbPostgresFields');
+    const sqlite = document.getElementById('dbSqliteFields');
+    if (postgres) postgres.style.display = type === 'sqlite' ? 'none' : '';
+    if (sqlite) sqlite.style.display = type === 'sqlite' ? '' : 'none';
+  };
+
+  function readDatabaseConnectorForm() {
+    const type = document.getElementById('dbTypeSelect')?.value || 'postgresql';
+    const name = document.getElementById('dbConnectionNameInput')?.value?.trim();
+    if (!name) throw new Error('请输入连接名称');
+    if (type === 'sqlite') {
+      const filePath = document.getElementById('dbPathInput')?.value?.trim();
+      if (!filePath) throw new Error('请输入 SQLite 文件路径');
+      return { type, name, path: filePath };
+    }
+    const host = document.getElementById('dbHostInput')?.value?.trim();
+    const database = document.getElementById('dbNameInput')?.value?.trim();
+    const username = document.getElementById('dbUserInput')?.value?.trim();
+    const password = document.getElementById('dbPassInput')?.value || '';
+    const port = Number(document.getElementById('dbPortInput')?.value || 5432);
+    if (!host || !database || !username || !password) throw new Error('请完整填写 PostgreSQL 主机、数据库、用户名和密码');
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('端口必须是 1 到 65535 之间的整数');
+    return { type, name, host, port, database, username, password };
+  }
+
+  async function ensureDatabaseConnector(payload) {
+    const fingerprint = JSON.stringify(payload);
+    if (window._dbConnectorId && window._dbConnectorFingerprint === fingerprint) {
+      return await api.getConnector(window._dbConnectorId);
+    }
+    const connector = await api.createConnector(payload);
+    if (connector) {
+      window._dbConnectorId = connector.id;
+      window._dbConnectorFingerprint = fingerprint;
+    }
+    return connector;
+  }
+
+  function showDatabaseTestResult(kind, message) {
     const box = document.getElementById('dbTestResult');
     if (!box) return;
     box.style.display = 'block';
-    box.style.background = '#f0fdf4';
-    box.style.border = '1px solid #86efac';
-    box.style.color = '#16a34a';
-    box.innerHTML = '⚡ 正在探测主机与端口... 认证成功！延迟 14 ms，已识别 28 张业务数据表与 4 个视图。';
-    showToast('✓ 数据库连接成功！', 'ok');
+    const success = kind === 'ok';
+    box.style.background = success ? '#f0fdf4' : '#fff7ed';
+    box.style.border = success ? '1px solid #86efac' : '1px solid #fed7aa';
+    box.style.color = success ? '#166534' : '#9a3412';
+    box.textContent = message;
+  }
+
+  window.handleTestDbConnection = async function() {
+    if (!api || !api.connected) {
+      showDatabaseTestResult('error', '当前未连接 Ordo 服务端，无法执行真实数据库测试。');
+      showToast('请先启动并连接 Ordo 服务端', 'warn');
+      return;
+    }
+    let payload;
+    try { payload = readDatabaseConnectorForm(); }
+    catch (error) { showDatabaseTestResult('error', error.message); showToast(error.message, 'warn'); return; }
+    showDatabaseTestResult('pending', '正在登记连接并请求服务端测试…');
+    const connector = await ensureDatabaseConnector(payload);
+    if (!connector) {
+      const message = api.lastError?.message || '数据库连接登记失败';
+      showDatabaseTestResult('error', message);
+      showToast(message, 'error');
+      return;
+    }
+    const tested = await api.testConnector(connector.id);
+    if (!tested) {
+      const message = api.lastError?.message || '数据库连接测试失败';
+      showDatabaseTestResult('error', message);
+      showToast(message, 'error');
+      return;
+    }
+    const schema = await api.getConnectorSchema(connector.id);
+    const objects = Array.isArray(schema) ? schema : [];
+    const tables = objects.filter(item => String(item.type || '').toLowerCase().includes('table')).length;
+    const views = objects.filter(item => String(item.type || '').toLowerCase().includes('view')).length;
+    const schemaText = schema === null ? '表结构读取失败' : `已读取 ${objects.length} 个对象（${tables} 表 / ${views} 视图）`;
+    showDatabaseTestResult('ok', `连接成功 · ${tested.type || payload.type} ${tested.version ? `v${tested.version}` : ''} · 延迟 ${tested.latencyMs ?? '—'} ms · ${schemaText}`);
+    showToast('数据库连接测试成功', 'ok');
   };
 
-  window.handleSaveDbConnection = function() {
-    const name = document.getElementById('dbNameInput')?.value || '业务数据库';
-    showToast(`已成功接入数据库「${name}」并登记元数据！`, 'ok');
+  window.handleSaveDbConnection = async function() {
+    if (!api || !api.connected) { showToast('请先连接 Ordo 服务端后再登记数据库', 'warn'); return; }
+    let payload;
+    try { payload = readDatabaseConnectorForm(); }
+    catch (error) { showToast(error.message, 'warn'); return; }
+    const connector = await ensureDatabaseConnector(payload);
+    if (!connector) { showToast(api.lastError?.message || '数据库连接登记失败', 'error'); return; }
+    showToast(`数据库「${connector.name || payload.name}」已登记，当前状态：${connector.status || 'unverified'}`, 'ok');
     closeOverlay();
+    render();
   };
 
   async function renderLiveRegistry() {
@@ -2371,7 +2477,13 @@
     if (!dataset) return { desc: '文件、目录、压缩包、网盘、业务数据库和本机资料登记', actions: '', html: emptyState('暂无数据集', '请先为当前知识库创建数据集。', '<button class="btn primary" onclick="go(\'knowledge/datasets\')">前往数据集</button>') };
     state.selectedDatasetId = dataset.id;
     state.registrySelectedDatasetId = dataset.id;
-    const [sources, docs] = await Promise.all([api.getSources(dataset.id), api.getDocuments(dataset.id, { limit: state.registryPageSize, offset: (state.registryPage - 1) * state.registryPageSize })]);
+    const [sources, docs, connectorResult] = await Promise.all([
+      api.getSources(dataset.id),
+      api.getDocuments(dataset.id, { limit: state.registryPageSize, offset: (state.registryPage - 1) * state.registryPageSize }),
+      api.getConnectors()
+    ]);
+    const connectors = Array.isArray(connectorResult) ? connectorResult : [];
+    const connectorsAvailable = connectorResult !== null;
     const meta = docs.meta || { total: docs.length, limit: state.registryPageSize, offset: 0, hasMore: false };
     const sourceById = new Map(sources.map(item => [item.id, item]));
     const rows = docs.length ? docs.map(doc => {
@@ -2381,7 +2493,16 @@
     }).join('') : `<tr><td colspan="7">${emptyState('暂无登记文档', '当前在线数据集没有文档；上传、目录和压缩包导入会在服务端确认后显示。')}</td></tr>`;
     const pageCount = Math.max(1, Math.ceil(Number(meta.total || 0) / Number(meta.limit || state.registryPageSize)));
     const pageButtons = Array.from({ length: Math.min(pageCount, 7) }, (_, index) => index + 1).map(page => `<button class="page-num ${page === state.registryPage ? 'active' : ''}" onclick="window.handleRegistryPageChange(${page})">${page}</button>`).join('');
-    return { desc: '文件、目录、压缩包、网盘、业务数据库和本机资料登记', actions: '', html: `<div class="registry-action-row"><div class="registry-action-card" onclick="triggerNativeFileUpload()">⇪ 上传文件</div><div class="registry-action-card" onclick="window.handleDirectoryImportPrompt()">📁 导入目录</div><div class="registry-action-card" onclick="window.handleUploadArchivePrompt()">🗜 导入压缩包</div><div class="registry-action-card" style="opacity:.55;cursor:not-allowed">☁ 外部连接器（未启用）</div></div><div class="card" style="margin-bottom:16px;"><div class="card-head" style="display:flex;justify-content:space-between;align-items:center;"><span>数据来源 · ${esc(kb.name)} / ${esc(dataset.name)}</span><span class="muted">${Number(meta.total || 0)} 项</span></div><div class="card-body" style="padding:0;"><table class="data-table"><thead><tr><th style="padding-left:16px;">名称</th><th>来源</th><th>同步状态</th><th>处理状态</th><th>所属数据集</th><th>最近更新</th><th></th></tr></thead><tbody>${rows}</tbody></table><div class="table-pagination-bar" style="padding:14px 18px;"><span>第 ${state.registryPage} / ${pageCount} 页</span><div class="pagination-controls"><button class="page-arrow" onclick="window.handleRegistryPageChange('prev')" ${state.registryPage <= 1 ? 'disabled' : ''}>&lt;</button>${pageButtons}<button class="page-arrow" onclick="window.handleRegistryPageChange('next')" ${!meta.hasMore ? 'disabled' : ''}>&gt;</button></div></div></div></div><div class="card"><div class="card-head">已登记来源</div><div class="card-body">${sources.length ? sources.map(source => `<div class="list-item-row"><b>${esc(source.name)}</b><span class="muted" style="margin-left:auto;">${esc(source.type)} · ${source.document_count ?? 0} 文档</span></div>`).join('') : '<div class="muted">暂无来源记录</div>'}</div></div>` };
+    const connectorAction = connectorsAvailable
+      ? '<div class="registry-action-card" onclick="window.openAddDatabaseModal()"><span style="color:var(--accent);font-size:16px;">🗄</span><span>连接数据库</span></div>'
+      : '<div class="registry-action-card" style="opacity:.55;cursor:not-allowed" title="服务端未启用数据库连接器"><span style="color:#94a3b8;font-size:16px;">🗄</span><span style="color:#94a3b8;">连接数据库（不可用）</span></div>';
+    const connectorRows = connectors.length ? connectors.map(connector => {
+      const status = connector.status || 'unverified';
+      const statusClass = status === 'available' ? 'ok' : status === 'unavailable' ? 'danger' : 'warn';
+      const checked = connector.last_checked_at ? formatDateTime(connector.last_checked_at) : '未检查';
+      return `<div class="list-item-row"><div><b>${esc(connector.name || connector.id)}</b><div class="muted" style="font-size:11.5px;margin-top:2px;">${esc(connector.type || '未记录')} · 最近检查 ${esc(checked)}</div></div><span class="badge ${statusClass}" title="${esc(connector.last_error || '')}">${esc(status)}</span></div>`;
+    }).join('') : `<div class="muted">${connectorsAvailable ? '暂无数据库连接记录' : '服务端未启用数据库连接器'}</div>`;
+    return { desc: '文件、目录、压缩包、网盘、业务数据库和本机资料登记', actions: '', html: `<div class="registry-action-row"><div class="registry-action-card" onclick="triggerNativeFileUpload()">⇪ 上传文件</div><div class="registry-action-card" onclick="window.handleDirectoryImportPrompt()">📁 导入目录</div><div class="registry-action-card" onclick="window.handleUploadArchivePrompt()">🗜 导入压缩包</div>${connectorAction}</div><div class="card" style="margin-bottom:16px;"><div class="card-head" style="display:flex;justify-content:space-between;align-items:center;"><span>数据来源 · ${esc(kb.name)} / ${esc(dataset.name)}</span><span class="muted">${Number(meta.total || 0)} 项</span></div><div class="card-body" style="padding:0;"><table class="data-table"><thead><tr><th style="padding-left:16px;">名称</th><th>来源</th><th>同步状态</th><th>处理状态</th><th>所属数据集</th><th>最近更新</th><th></th></tr></thead><tbody>${rows}</tbody></table><div class="table-pagination-bar" style="padding:14px 18px;"><span>第 ${state.registryPage} / ${pageCount} 页</span><div class="pagination-controls"><button class="page-arrow" onclick="window.handleRegistryPageChange('prev')" ${state.registryPage <= 1 ? 'disabled' : ''}>&lt;</button>${pageButtons}<button class="page-arrow" onclick="window.handleRegistryPageChange('next')" ${!meta.hasMore ? 'disabled' : ''}>&gt;</button></div></div></div></div><div class="card"><div class="card-head">已登记来源</div><div class="card-body">${sources.length ? sources.map(source => `<div class="list-item-row"><b>${esc(source.name)}</b><span class="muted" style="margin-left:auto;">${esc(source.type)} · ${source.document_count ?? 0} 文档</span></div>`).join('') : '<div class="muted">暂无来源记录</div>'}</div></div><div class="card" style="margin-top:16px;"><div class="card-head">数据库连接</div><div class="card-body">${connectorRows}</div></div>` };
   }
 
   /* 04 知识库 > 数据登记 - 100% 对应 04-知识库-数据登记.png */
@@ -7398,8 +7519,42 @@
     return { desc: '统一管理系统存储资源、健康状态与生命周期策略', html };
   }
 
+  async function renderLiveVersion() {
+    const [version, health, diagnostics] = await Promise.all([
+      api.getVersion(),
+      api.getHealth(),
+      api.getDiagnostics()
+    ]);
+    if (!version && !health && !diagnostics) {
+      return { desc: '服务端版本、Schema 与运行能力信息', actions: '', html: emptyState('版本信息读取失败', api.lastError?.message || '服务端没有返回版本信息。') };
+    }
+    const ver = { ...(version || {}), ...(diagnostics || {}) };
+    const healthLabel = health?.status === 'ready' ? '正常' : health?.status === 'degraded' ? '降级' : (health?.status || '未记录');
+    const schemaLabel = ver.schemaVersion != null ? `v${String(ver.schemaVersion).replace(/^v/, '')}` : '未记录';
+    const componentName = { metadata: '关系数据', blob: '文件与对象', artifacts: '解析产物', fullText: '全文索引', vector: '向量索引', generation: '回答模型', parser: '解析器' };
+    const componentRows = Object.entries(health?.components || {}).map(([key, component]) => {
+      const status = component?.status || '未记录';
+      const ready = status === 'available' || status === 'ready';
+      return `<div class="list-item-row"><div><b>${esc(componentName[key] || key)}</b><div class="muted" style="font-size:11.5px;margin-top:2px;">${esc(component?.provider || '服务端未记录提供方')}</div></div><span class="badge ${ready ? 'ok' : 'warn'}">${esc(status)}</span></div>`;
+    }).join('');
+    const capabilityCard = (title, values) => `<div class="card"><div class="card-head">${esc(title)}</div><div class="card-body">${Array.isArray(values) && values.length ? `<div class="cap-pills">${values.map(value => `<span class="badge">${esc(value)}</span>`).join('')}</div>` : '<span class="muted">服务端未记录</span>'}</div></div>`;
+    const audit = diagnostics?.audit || {};
+    const html = `<div style="display:flex;flex-direction:column;gap:16px;width:100%;">
+      <div class="card" style="padding:20px 24px;display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap;">
+        <div><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;"><b style="font-size:22px;color:var(--ink-strong);">Ordo ${esc(ver.appVersion || '未记录')}</b><span class="badge ${health?.status === 'ready' ? 'ok' : ''}">服务状态：${esc(healthLabel)}</span></div><div class="muted" style="font-size:12.5px;margin-top:5px;">版本信息由 /api/v1/version 与 /api/v1/diagnostics 返回</div></div>
+        <div class="muted" style="font-size:12px;">检查时间：${esc(health?.checkedAt || diagnostics?.generatedAt || '未记录')}</div>
+      </div>
+      <div class="grid grid-4"><div class="card stat-card"><div class="muted">构建编号</div><b>${esc(ver.build || ver.buildNumber || ver.build_id || '未记录')}</b></div><div class="card stat-card"><div class="muted">发行标识</div><b>${esc(ver.channel || ver.releaseChannel || '未记录')}</b></div><div class="card stat-card"><div class="muted">运行平台</div><b>${esc(ver.platform || '未记录')}</b></div><div class="card stat-card"><div class="muted">Node.js</div><b>${esc(ver.node || '未记录')}</b></div></div>
+      <div class="grid grid-2"><div class="card"><div class="card-head">数据库与索引</div><div class="card-body"><div class="list-item-row"><span>数据库 Schema</span><b>${esc(schemaLabel)}</b></div><div class="list-item-row"><span>知识索引格式</span><b>${esc(ver.indexVersion || '服务端未记录')}</b></div><div class="list-item-row"><span>部署配置</span><b>${esc(ver.deploymentProfile || '未记录')}</b></div><div class="list-item-row"><span>API 版本</span><b>${esc(ver.apiVersion || '服务端未记录')}</b></div></div></div><div class="card"><div class="card-head">组件健康状态</div><div class="card-body">${componentRows || '<span class="muted">服务端未返回组件信息</span>'}</div></div></div>
+      <div class="grid grid-3">${capabilityCard('支持格式', diagnostics?.capabilities?.formats)}${capabilityCard('问答能力', diagnostics?.capabilities?.query)}${capabilityCard('模型提供方', diagnostics?.capabilities?.providers)}</div>
+      <div class="grid grid-2"><div class="card"><div class="card-head">审核状态</div><div class="card-body"><div class="list-item-row"><span>审计校验</span><b class="${audit.valid ? 'ok-text' : 'warn-text'}">${audit.valid === true ? '通过' : audit.valid === false ? '失败' : '未记录'}</b></div><div class="list-item-row"><span>需人工复核格式</span><span class="muted">${Array.isArray(diagnostics?.capabilities?.reviewRequired) ? diagnostics.capabilities.reviewRequired.join('、') || '无' : '未记录'}</span></div></div></div><div class="card"><div class="card-head">版本历史</div><div class="card-body"><div class="dataset-empty">服务端当前未提供发布历史接口，页面不展示本地演示版本。</div></div></div></div>
+    </div>`;
+    return { title: '版本信息', desc: '服务端版本、Schema 与运行能力信息', actions: '<span class="muted" style="font-size:12px;">当前数据来自服务端</span>', html };
+  }
+
   /* 20 设置 > 版本信息 (Version) - 100% 对应 20-设置-版本信息.png */
   async function pageVersion() {
+    if (api && api.connected) return renderLiveVersion();
     let ver = { appVersion: '—', schemaVersion: '—', platform: '—', node: '—', deploymentProfile: '—', build: '—', channel: '—', indexVersion: '—', apiVersion: '—' };
     let health = null;
     let diagnostics = null;
@@ -7488,7 +7643,8 @@
         <!-- Left: 版本历史 -->
         <div class="card" style="padding:16px 20px;display:flex;flex-direction:column;">
           <b style="font-size:14px;color:var(--ink-strong);margin-bottom:14px;">版本历史</b>
-          <div style="display:flex;flex-direction:column;gap:14px;flex:1;">
+          ${api?.connected ? '<div class="dataset-empty" style="flex:1;display:flex;align-items:center;justify-content:center;">服务端未提供版本历史接口，当前无法获取历史发行记录。</div>' : ''}
+          <div style="display:${api?.connected ? 'none' : 'flex'};flex-direction:column;gap:14px;flex:1;">
             <!-- Node 1.8.0 (Active Green) -->
             <div style="position:relative;padding-left:18px;">
               <span style="position:absolute;left:0;top:4px;width:10px;height:10px;border-radius:50%;background:#16a34a;border:2px solid #bbf7d0;"></span>
@@ -7629,7 +7785,8 @@
 
   /* 21 新对话选择知识库 Modal - 100% 对应 21-状态-新对话选择知识库.png (动态交互) */
   function openNewChatModal() {
-    window._selectedNewKb = '产品文档库';
+    window._selectedNewKb = null;
+    window._selectedNewKbId = api?.context?.defaultKbId || null;
     const html = `
     <div class="modal-box">
       <div class="modal-header">
@@ -8054,28 +8211,31 @@
   window.handleTestKbConnection = async function() {
     const btn = document.getElementById('testKbBtn');
     const badge = document.getElementById('kbTestStatusBadge');
-    if (btn) btn.innerHTML = '⚡ 正在探测后端连接...';
+    if (btn) { btn.innerHTML = '⚡ 正在读取服务端健康状态…'; btn.disabled = true; }
     if (api && api.connected) {
       const health = await api.getHealth();
-      if (health && (health.status === 'ready' || health.status === 'degraded')) {
-        if (btn) btn.innerHTML = '✓ 真实连接正常 (2ms)';
+      const vector = health?.components?.vector;
+      const ready = vector?.status === 'available' || vector?.status === 'ready';
+      if (health && ready) {
+        if (btn) btn.innerHTML = '✓ 服务端连接正常';
         if (badge) {
           badge.className = 'badge ok';
-          badge.textContent = '✓ SQLite 向量引擎就绪';
+          badge.textContent = `✓ ${vector.provider || '向量引擎'} · ${vector.status}`;
         }
-        showToast('✓ SQLite 向量引擎与数据库连接正常', 'ok');
+        showToast(`向量后端连接正常（检查于 ${formatDateTime(health.checkedAt)}）`, 'ok');
       } else {
-        if (btn) btn.innerHTML = '✕ 连接异常';
+        if (btn) btn.innerHTML = '✕ 服务端连接异常';
         if (badge) {
           badge.className = 'badge danger';
-          badge.textContent = '✕ 向量后端异常';
+          badge.textContent = `✕ ${vector?.provider || '向量后端'} · ${vector?.status || health?.status || '未记录'}`;
         }
         showToast(api.lastError?.message || '连接异常', 'error');
       }
     } else {
-      if (btn) btn.innerHTML = '✓ 演示连接正常 (0ms)';
-      showToast('演示模式：默认 SQLite 引擎已就绪', 'ok');
+      if (btn) btn.innerHTML = '未连接服务端';
+      showToast('演示模式无法执行真实连接测试', 'warn');
     }
+    if (btn) btn.disabled = false;
   };
 
   
@@ -9119,11 +9279,13 @@
 
   window.handleCheckSystemUpdate = function() {
     const btn = document.getElementById('checkUpdateBtn');
-    if (btn) btn.innerHTML = '正在检查远程更新...';
-    setTimeout(() => {
-      if (btn) btn.innerHTML = '✓ 已是最新版本';
-      showToast('当前 Ordo 1.8.0 已是最新稳定发行版！', 'ok');
-    }, 500);
+    if (api && api.connected) {
+      if (btn) btn.innerHTML = '服务端未提供更新检查接口';
+      showToast('服务端未提供在线更新检查接口', 'warn');
+      return;
+    }
+    if (btn) btn.innerHTML = '离线模式不可用';
+    showToast('离线演示模式无法检查更新', 'warn');
   };
 
   // [removed: old storage stubs - replaced by async versions]
