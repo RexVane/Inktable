@@ -2887,8 +2887,24 @@
     return { desc: '', actions: '', html };
   }
 
+  async function renderLiveIndex() {
+    const dsId = state.selectedDatasetId || api?.context?.defaultDatasetId;
+    if (!dsId || String(dsId).startsWith('ds-demo-')) return { desc: '知识块清洗、向量化计算与不可变版本构建发布', actions: '', html: emptyState('暂无可用数据集', '请先选择服务端数据集。', '<button class="btn primary" onclick="go(\\\'knowledge/datasets\\\')">前往数据集</button>') };
+    const [chunks, releases] = await Promise.all([api.getChunks(dsId, { limit: 50 }), api.getReleases(dsId)]);
+    const activeRelease = (releases || []).find(item => item.status === 'active') || null;
+    const selectedIds = new Set(state.indexSelectedChunkIds || []);
+    const selected = chunks.find(item => item.id === state.selectedChunkId) || chunks[0] || null;
+    if (selected && !state.selectedChunkId) state.selectedChunkId = selected.id;
+    const vectorized = chunks.filter(item => item.embedding_json || item.embedding_model).length;
+    const warnings = chunks.filter(item => item.excluded || item.warnings?.length || (item.warnings_json && item.warnings_json !== '[]')).length;
+    const rows = chunks.length ? chunks.map(chunk => `<div style="border:1px solid ${chunk.id === selected?.id ? 'var(--accent)' : 'var(--line)'};border-radius:6px;padding:10px;margin-bottom:8px;background:${chunk.id === selected?.id ? 'var(--accent-soft)' : 'var(--card-bg)'};"><label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;"><input type="checkbox" ${selectedIds.has(chunk.id) ? 'checked' : ''} onchange="window.handleToggleIndexChunk('${esc(chunk.id)}', this.checked)"><span style="min-width:0;"><b style="font-size:12px;">${esc(chunk.id)}</b><span class="badge ${chunk.excluded ? 'warn' : 'ok'}" style="margin-left:8px;">${chunk.excluded ? '已禁用' : (chunk.embedding_model ? '已向量化' : '待向量化')}</span><span class="muted" style="display:block;font-size:11.5px;margin-top:5px;">${esc((chunk.content_text || '').slice(0, 110))}${(chunk.content_text || '').length > 110 ? '…' : ''}</span></span></label><button class="btn sm" style="margin-top:7px;" onclick="window.handleSelectChunkItem('${esc(chunk.id)}')">查看</button></div>`).join('') : emptyState('暂无知识块', '请先完成文档解析。');
+    const editor = selected ? `<div class="card"><div class="card-head">知识块编辑 <span class="muted">· 不可变修订</span></div><div class="card-body"><div class="muted" style="font-size:12px;margin-bottom:8px;">${esc(selected.id)} · ${esc(selected.document_title || selected.document_id || '未命名文档')}</div><textarea class="textarea" id="chunkEditorTextarea" style="width:100%;min-height:220px;">${esc(selected.content_md || selected.content_text || '')}</textarea><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;"><button class="btn" onclick="window.handleToggleChunkDisabled()">${selected.excluded ? '恢复启用' : '禁用'}</button><button class="btn" onclick="window.handleSplitChunk()">拆分</button><button class="btn" onclick="window.handleMergeChunk()">合并${selectedIds.size > 1 ? ` (${selectedIds.size})` : ''}</button><button class="btn primary" onclick="window.handleSaveChunkEdit()">保存修订版本</button></div></div></div>` : emptyState('暂无可编辑知识块', '解析完成后可在此编辑。');
+    return { desc: '服务端知识块、索引状态与不可变 Release', actions: '', html: `<div class="grid grid-4" style="margin-bottom:16px;">${statCard('doc', '知识块', chunks.length)}${statCard('stack', '已向量化', vectorized || '—')}${statCard('warn', '待更新/禁用', warnings)}${statCard('chart', '活动版本', activeRelease ? `v${activeRelease.version}` : '—')}</div><div class="workspace-layout-indexing"><div class="card"><div class="card-head">筛选与状态</div><div class="card-body"><div class="muted" style="font-size:12px;line-height:1.7;">当前数据集：${esc(dsId)}<br>已选 ${selectedIds.size} 个知识块<br>活动 Release：${activeRelease ? `v${activeRelease.version}` : '未激活'}</div><button class="btn" style="margin-top:16px;" onclick="state.indexSelectedChunkIds=[];render();">清除选择</button></div></div><div class="card"><div class="card-head" style="display:flex;justify-content:space-between;align-items:center;"><span>知识块列表</span><span class="muted">${chunks.length} 条</span></div><div class="card-body" style="max-height:600px;overflow:auto;">${rows}</div></div><div>${editor}<div class="card" style="margin-top:16px;"><div class="card-head">发布与检索验证</div><div class="card-body"><div class="muted" style="font-size:12px;margin-bottom:10px;">没有活动 Release 时，检索验证不可用；发布前必须通过质量门。</div><button class="btn" onclick="window.handleSearchRelease()" ${activeRelease ? '' : 'disabled'}>查询验证</button><button class="btn primary" style="margin-left:8px;" onclick="window.handleBuildRelease()">发布新版本</button></div></div></div></div>` };
+  }
+
   /* 06 知识库 > 构建知识索引 - 100% 对应 06-知识库-构建知识索引.png */
   async function pageIndex() {
+    if (api && api.connected) return renderLiveIndex();
     const dsId = state.selectedDatasetId || (api?.context?.defaultDatasetId);
     let chunks = [];
     let activeRelease = null;
