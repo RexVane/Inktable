@@ -69,6 +69,10 @@ class QueryService {
   }
 
   async ask(conversationId, input, workspaceId = this.config.localWorkspaceId, requestId) {
+    return this.askStream(conversationId, input, workspaceId, requestId, null);
+  }
+
+  async askStream(conversationId, input, workspaceId = this.config.localWorkspaceId, requestId, onEvent = null) {
     const conversation = this.getConversation(conversationId, workspaceId);
     if (conversation.status !== 'active') throw new AppError(409, 'INVALID_STATE', '当前会话不可继续问答');
     const question = required(input.question ?? input.query, 'question');
@@ -84,6 +88,7 @@ class QueryService {
     const stage = (name, startedAt, status, output) => {
       const durationMs = Math.max(0, Math.round(performance.now() - startedAt));
       stages.push({ name, status, durationMs, output });
+      if (onEvent) onEvent('stage', { name, status, durationMs });
     };
 
     let stageStart = performance.now();
@@ -201,12 +206,21 @@ class QueryService {
       });
       this.db.run('UPDATE conversations SET updated_at=? WHERE id=?', finished, conversationId);
     });
-    this.audit.append({ workspaceId, action: 'query.complete', objectType: 'query_trace', objectId: traceId, requestId, details: { conversationId, releaseId: conversation.release_id, evidenceStatus, citations: validOrdinals.length, degraded } });
-    return {
+    if (onEvent) {
+      const text = String(generated.content || '');
+      const step = 4;
+      for (let i = 0; i < text.length; i += step) {
+        onEvent('token', { delta: text.slice(i, i + step) });
+        await new Promise(r => setTimeout(r, 10));
+      }
+    }
+    const finalResult = {
       userMessage: this.db.one('SELECT * FROM messages WHERE id=?', userMessageId),
       assistantMessage: { ...this.db.one('SELECT * FROM messages WHERE id=?', assistantMessageId), citations: this.db.all('SELECT * FROM citations WHERE message_id=? ORDER BY ordinal', assistantMessageId) },
       trace: this.getTrace(traceId, workspaceId)
     };
+    if (onEvent) onEvent('done', finalResult);
+    return finalResult;
   }
 
   getTrace(traceId, workspaceId = this.config.localWorkspaceId) {

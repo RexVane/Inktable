@@ -254,7 +254,22 @@ async function createApp(overrides = {}) {
   app.post('/api/v1/conversations', async request => data(query.createConversation(request.body || {}, workspace(request), request.id)));
   app.get('/api/v1/conversations/:id', async request => data(query.getConversation(request.params.id, workspace(request))));
   app.delete('/api/v1/conversations/:id', async request => data(query.deleteConversation(request.params.id, workspace(request), request.id)));
-  app.post('/api/v1/conversations/:id/messages', async request => data(await query.ask(request.params.id, request.body || {}, workspace(request), request.id)));
+  app.post('/api/v1/conversations/:id/messages', async (request, reply) => {
+    const isStream = String(request.headers.accept || '').includes('text/event-stream') || request.query?.stream === 'true' || request.body?.stream === true;
+    if (isStream) {
+      reply.raw.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+      reply.raw.setHeader('Cache-Control', 'no-cache');
+      reply.raw.setHeader('Connection', 'keep-alive');
+      reply.raw.flushHeaders?.();
+      const onEvent = (event, eventData) => {
+        reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(eventData)}\n\n`);
+      };
+      await query.askStream(request.params.id, request.body || {}, workspace(request), request.id, onEvent);
+      reply.raw.end();
+      return;
+    }
+    return data(await query.ask(request.params.id, request.body || {}, workspace(request), request.id));
+  });
   app.post('/api/v1/messages/:id/feedback', async request => data(query.feedback(request.params.id, request.body || {}, workspace(request), request.id)));
   app.get('/api/v1/traces', async request => paginated(query.listTraces(workspace(request), { ...page(request.query), conversationId: request.query?.conversationId })));
   app.get('/api/v1/traces/:id', async request => data(query.getTrace(request.params.id, workspace(request))));

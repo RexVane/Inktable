@@ -401,6 +401,53 @@
       return (await this.request('/api/v1/conversations', { method: 'POST', body: JSON.stringify({ title, knowledgeBaseId: kbId, ...(datasetId ? { datasetId } : {}) }) }))?.data;
     },
     async sendMessage(convId, question) { return (await this.request(`/api/v1/conversations/${convId}/messages`, { method: 'POST', body: JSON.stringify({ question }) }))?.data; },
+    async sendMessageStream(convId, query, callbacks = {}) {
+      const { onStage, onToken, onDone, onError } = callbacks;
+      try {
+        const res = await fetch(`/api/v1/conversations/${convId}/messages`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'text/event-stream',
+            ...(this.csrfToken ? { 'x-ordo-csrf': this.csrfToken } : {})
+          },
+          body: JSON.stringify({ query, stream: true })
+        });
+        if (!res.ok) {
+          const errPayload = await res.json().catch(() => ({}));
+          throw new Error(errPayload?.error?.message || `HTTP ${res.status}`);
+        }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split('\n\n');
+          buffer = parts.pop();
+          for (const part of parts) {
+            const lines = part.split('\n');
+            let eventType = 'message';
+            let dataStr = '';
+            for (const line of lines) {
+              if (line.startsWith('event:')) eventType = line.slice(6).trim();
+              else if (line.startsWith('data:')) dataStr = line.slice(5).trim();
+            }
+            if (dataStr) {
+              try {
+                const parsed = JSON.parse(dataStr);
+                if (eventType === 'stage' && onStage) onStage(parsed);
+                else if (eventType === 'token' && onToken) onToken(parsed.delta || '');
+                else if (eventType === 'done' && onDone) onDone(parsed);
+              } catch (e) {}
+            }
+          }
+        }
+      } catch (err) {
+        if (onError) onError(err);
+      }
+    },
     async sendFeedback(messageId, payload) { return (await this.request(`/api/v1/messages/${messageId}/feedback`, { method: 'POST', body: JSON.stringify(payload) }))?.data; },
     async getTraces(params = {}) {
       const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')).toString();
@@ -2458,8 +2505,37 @@
     return { desc: '文件、目录、压缩包、网盘、业务数据库和本机资料登记', html };
   }
 
+  async function renderLiveParsing() {
+    const tasks = await api.getTasks({ type: 'document.parse', limit: 50 });
+    state.parsingTasks = tasks;
+    const selected = tasks.find(task => task.id === state.parsingSelectedDocId) || tasks[0] || null;
+    if (selected) state.parsingSelectedDocId = selected.id;
+    const groups = ['running', 'queued', 'paused', 'succeeded', 'partial', 'failed', 'cancelled'];
+    const label = status => ({ running: '处理中', queued: '待处理', paused: '已暂停', succeeded: '已完成', partial: '部分完成', failed: '失败', cancelled: '已取消' }[status] || status || '未知');
+    const taskRows = groups.map(status => {
+      const list = tasks.filter(task => task.status === status);
+      if (!list.length) return '';
+      return `<div style="padding:9px 12px;background:var(--inset);font-weight:600;font-size:12px;color:var(--ink-dim);">${esc(label(status))} (${list.length})</div>${list.map(task => `<div class="list-item-row" style="cursor:pointer;${task.id === selected?.id ? 'background:var(--accent-soft);border-left:3px solid var(--accent);' : ''}" onclick="window.handleSelectParsingTask('${esc(task.id)}')"><div class="grow"><b>${esc(task.object_id || task.id)}</b><div class="muted" style="font-size:11.5px;">${esc(task.error_message || task.events?.at(-1)?.message || label(status))}</div></div><span class="badge ${status === 'failed' ? 'danger' : status === 'succeeded' ? 'ok' : 'warn'}">${Number(task.progress || 0)}%</span></div>`).join('')}`;
+    }).join('');
+    const canPause = selected?.status === 'running';
+    const canResume = selected?.status === 'paused';
+    const canRetry = ['failed', 'cancelled', 'partial'].includes(selected?.status);
+    const artifactId = selected?.result?.artifactId;
+    let markdown = null;
+    if (artifactId) markdown = await api.getArtifactMarkdown(artifactId);
+    const action = async (name, method) => {
+      if (!selected) return showToast('暂无可操作任务', 'warn');
+      const result = await api[method](selected.id);
+      if (result) { showToast(name, 'ok'); render(); } else showToast(api.lastError?.message || `${name}失败`, 'error');
+    };
+    window._liveParsingAction = action;
+    const preview = selected ? (markdown ? `<pre style="white-space:pre-wrap;line-height:1.65;margin:0;">${esc(markdown)}</pre>` : emptyState('暂无解析产物', '任务完成后服务端生成的 Markdown Artifact 会显示在这里。')) : emptyState('暂无解析任务', '请先在数据登记页上传文件或导入目录。');
+    return { desc: '服务端解析任务、进度、告警和 Artifact 预览', actions: '', html: `<div class="parsing-top-bar" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;"><span class="muted">任务来自服务端，当前共 ${tasks.length} 项</span><div style="display:flex;gap:8px;"><button class="btn" onclick="window._liveParsingAction('已请求暂停任务','pauseTask')" ${canPause ? '' : 'disabled'}>⏸ 暂停</button><button class="btn" onclick="window._liveParsingAction('已恢复任务','resumeTask')" ${canResume ? '' : 'disabled'}>▶ 恢复</button><button class="btn" onclick="window._liveParsingAction('已提交重试','retryTask')" ${canRetry ? '' : 'disabled'}>↻ 重试</button></div></div><div class="parsing-three-columns"><div class="parsing-col-queue card"><div class="card-head">任务队列</div><div class="card-body" style="padding:0;">${taskRows || '<div style="padding:24px;text-align:center;">暂无解析任务</div>'}</div></div><div class="parsing-col-preview card"><div class="card-head">Artifact Markdown 预览 ${selected ? `<span class="muted">· ${esc(selected.id)}</span>` : ''}</div><div class="card-body" style="padding:16px;max-height:560px;overflow:auto;">${preview}</div></div><div class="parsing-col-info"><div class="card"><div class="card-head">任务详情</div><div class="card-body">${selected ? `<div class="detail-list"><div><span class="muted">状态</span><b>${esc(label(selected.status))}</b></div><div><span class="muted">进度</span><b>${Number(selected.progress || 0)}%</b></div><div><span class="muted">尝试次数</span><b>${Number(selected.attempt || 0)}</b></div><div><span class="muted">开始时间</span><span>${esc(selected.started_at || '—')}</span></div><div><span class="muted">告警/错误</span><span>${esc(selected.error_message || '—')}</span></div></div>` : '<div class="muted">选择一个任务查看详情</div>'}</div></div></div></div>` };
+  }
+
   /* 05 知识库 > 数据解析 - 100% 对应 05-知识库-数据解析.png */
   async function pageParsing() {
+    if (api && api.connected) return renderLiveParsing();
     let tasks = [];
     let curArtifactMarkdown = null;
     if (api && api.connected) {
@@ -5266,33 +5342,58 @@
           state.selectedChatReleaseVersion = newConv.release_version || null;
         }
         if (convId) {
-          const res = await api.sendMessage(convId, query);
-          if (res && res.assistantMessage) {
-            const message = res.assistantMessage;
-            botAnswer = {
-              id: message.id,
-              role: 'assistant',
-              text: message.content || '（服务返回了空回答）',
-              time: timeStr,
-              evidenceStatus: message.evidence_status || null,
-              traceId: res.trace ? res.trace.id : null,
-              citations: (message.citations || []).map(c => ({
-                id: c.id,
-                citationId: c.id,
-                ordinal: c.ordinal,
-                title: c.title || '知识库文档',
-                page: api.parseCitationLocator(c),
-                quote: c.excerpt || ''
-              })),
-              wikis: []
-            };
-            if (res.trace) {
-              state.lastTrace = { id: res.trace.id, status: res.trace.status, evidenceStatus: message.evidence_status };
+          const streamingMsg = {
+            id: 'stream-' + Date.now(),
+            role: 'assistant',
+            text: '',
+            time: timeStr,
+            streaming: true,
+            citations: [],
+            wikis: []
+          };
+          state.chatMessages.push(streamingMsg);
+          state.chatLoading = false;
+          render();
+
+          await api.sendMessageStream(convId, query, {
+            onToken(delta) {
+              streamingMsg.text += delta;
+              const chatMsgList = document.querySelector('.chat-messages');
+              if (chatMsgList && chatMsgList.lastElementChild) {
+                const bubble = chatMsgList.lastElementChild.querySelector('.chat-bubble') || chatMsgList.lastElementChild;
+                bubble.textContent = streamingMsg.text;
+                chatMsgList.scrollTop = chatMsgList.scrollHeight;
+              }
+            },
+            onDone(res) {
+              streamingMsg.streaming = false;
+              if (res && res.assistantMessage) {
+                const message = res.assistantMessage;
+                streamingMsg.id = message.id;
+                streamingMsg.text = message.content;
+                streamingMsg.evidenceStatus = message.evidence_status || null;
+                streamingMsg.traceId = res.trace ? res.trace.id : null;
+                streamingMsg.citations = (message.citations || []).map(c => ({
+                  id: c.id,
+                  citationId: c.id,
+                  ordinal: c.ordinal,
+                  title: c.title || '知识库文档',
+                  page: api.parseCitationLocator(c),
+                  quote: c.excerpt || ''
+                }));
+                if (res.trace) {
+                  state.lastTrace = { id: res.trace.id, status: res.trace.status, evidenceStatus: message.evidence_status };
+                }
+              }
+              render();
+            },
+            onError(err) {
+              streamingMsg.streaming = false;
+              streamingMsg.text = '回答生成失败：' + (err.message || '网络异常');
+              render();
             }
-            if (message.evidence_status === 'insufficient') {
-              botAnswer.text = message.content || '当前知识库中没有找到可回答该问题的证据。请补充资料或换个问法。';
-            }
-          }
+          });
+          return;
         }
         if (!botAnswer) {
           // 已连接但服务失败：如实展示错误，不伪造回答
@@ -6168,12 +6269,16 @@
   };
 
   window.handleRegistryPageChange = function(page) {
-    showToast(`已翻至第 ${page} 页`);
-    render();
+    const next = page === 'next' ? state.registryPage + 1 : page === 'prev' ? state.registryPage - 1 : Number(page);
+    if (Number.isInteger(next) && next >= 1) {
+      state.registryPage = next;
+      render();
+    }
   };
 
   window.handleRegistryPageSizeChange = function() {
-    showToast('已切换每页显示数量');
+    state.registryPageSize = state.registryPageSize === 10 ? 20 : 10;
+    state.registryPage = 1;
     render();
   };
 
