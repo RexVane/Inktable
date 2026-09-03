@@ -140,20 +140,24 @@ class ModelService {
     }
     const connectionId = id('model');
     const baseUrl = provider === 'local-extractive' ? null : await validateEndpointSafety(required(input.baseUrl, 'baseUrl'), this.config.allowLocalModelEndpoints);
+    const name = required(input.name, 'name');
+    const modelId = required(input.modelId || (provider === 'local-extractive' ? 'ordo-local-extractive-v1' : null), 'modelId');
     let secret = null;
-    if (input.apiKey) secret = this.secretStore.create(workspaceId, `model:${connectionId}`, input.apiKey);
     const timestamp = now();
     try {
-      this.db.run(`INSERT INTO model_connections(id,workspace_id,name,provider,purpose,base_url,model_id,secret_ref,config_json,status,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, connectionId, workspaceId, required(input.name, 'name'), provider,
-        input.purpose || 'generation', baseUrl, required(input.modelId || (provider === 'local-extractive' ? 'ordo-local-extractive-v1' : null), 'modelId'),
-        secret?.id || null, JSON.stringify({ timeoutMs: Number(input.timeoutMs || 30_000), temperature: Number(input.temperature ?? 0.1), dataPolicy: input.dataPolicy || 'local-or-approved' }),
-        provider === 'local-extractive' ? 'available' : 'unverified', timestamp, timestamp);
+      this.db.transaction(() => {
+        if (input.apiKey) secret = this.secretStore.create(workspaceId, `model:${connectionId}`, input.apiKey);
+        this.db.run(`INSERT INTO model_connections(id,workspace_id,name,provider,purpose,base_url,model_id,secret_ref,config_json,status,created_at,updated_at)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, connectionId, workspaceId, name, provider,
+          input.purpose || 'generation', baseUrl, modelId,
+          secret?.id || null, JSON.stringify({ timeoutMs: Number(input.timeoutMs || 30_000), temperature: Number(input.temperature ?? 0.1), dataPolicy: input.dataPolicy || 'local-or-approved' }),
+          provider === 'local-extractive' ? 'available' : 'unverified', timestamp, timestamp);
+        this.audit.append({ workspaceId, action: 'model_connection.create', objectType: 'model_connection', objectId: connectionId, requestId, details: { provider, purpose: input.purpose || 'generation', hasSecret: Boolean(secret) } });
+      });
     } catch (error) {
       if (/UNIQUE constraint failed/.test(error.message)) throw new AppError(409, 'NAME_CONFLICT', '同名模型连接已存在');
       throw error;
     }
-    this.audit.append({ workspaceId, action: 'model_connection.create', objectType: 'model_connection', objectId: connectionId, requestId, details: { provider, purpose: input.purpose || 'generation', hasSecret: Boolean(secret) } });
     return this.get(connectionId, workspaceId);
   }
 
@@ -161,15 +165,22 @@ class ModelService {
     const current = this.get(connectionId, workspaceId, true);
     const baseUrl = input.baseUrl === undefined ? current.base_url : current.provider === 'local-extractive' ? null : await validateEndpointSafety(input.baseUrl, this.config.allowLocalModelEndpoints);
     let secretRef = current.secret_ref;
-    if (input.apiKey) {
-      if (secretRef) this.secretStore.replace(secretRef, workspaceId, input.apiKey);
-      else secretRef = this.secretStore.create(workspaceId, `model:${connectionId}`, input.apiKey).id;
-    }
     const config = { ...current.config, ...(input.config || {}) };
-    this.db.run(`UPDATE model_connections SET name=?,purpose=?,base_url=?,model_id=?,secret_ref=?,config_json=?,status=?,last_error=NULL,updated_at=?
-      WHERE id=? AND workspace_id=?`, input.name ?? current.name, input.purpose ?? current.purpose, baseUrl,
-      input.modelId ?? current.model_id, secretRef, JSON.stringify(config), current.provider === 'local-extractive' ? 'available' : 'unverified', now(), connectionId, workspaceId);
-    this.audit.append({ workspaceId, action: 'model_connection.update', objectType: 'model_connection', objectId: connectionId, requestId, details: { changed: Object.keys(input), secretReplaced: Boolean(input.apiKey) } });
+    try {
+      this.db.transaction(() => {
+        if (input.apiKey) {
+          if (secretRef) this.secretStore.replace(secretRef, workspaceId, input.apiKey);
+          else secretRef = this.secretStore.create(workspaceId, `model:${connectionId}`, input.apiKey).id;
+        }
+        this.db.run(`UPDATE model_connections SET name=?,purpose=?,base_url=?,model_id=?,secret_ref=?,config_json=?,status=?,last_error=NULL,updated_at=?
+          WHERE id=? AND workspace_id=?`, input.name ?? current.name, input.purpose ?? current.purpose, baseUrl,
+          input.modelId ?? current.model_id, secretRef, JSON.stringify(config), current.provider === 'local-extractive' ? 'available' : 'unverified', now(), connectionId, workspaceId);
+        this.audit.append({ workspaceId, action: 'model_connection.update', objectType: 'model_connection', objectId: connectionId, requestId, details: { changed: Object.keys(input), secretReplaced: Boolean(input.apiKey) } });
+      });
+    } catch (error) {
+      if (/UNIQUE constraint failed/.test(error.message)) throw new AppError(409, 'NAME_CONFLICT', '同名模型连接已存在');
+      throw error;
+    }
     return this.get(connectionId, workspaceId);
   }
 

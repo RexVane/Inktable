@@ -39,6 +39,17 @@ function multipart(filename, content, fields = {}) {
   return { payload: Buffer.from(parts.join('')), headers: { 'content-type': `multipart/form-data; boundary=${boundary}` } };
 }
 
+let widgetNonce = 0;
+function requestWidgetToken(app, clientId, clientSecret, origin = 'https://example.test') {
+  const tokenBody = JSON.stringify({ origin });
+  const timestamp = Date.now();
+  const nonce = `nonce_${timestamp}_${++widgetNonce}_abcdef`;
+  const signature = sign(clientSecret, canonicalRequest('POST', '/api/v1/public/widget/token', timestamp, nonce, origin, tokenBody));
+  return app.inject({ method: 'POST', url: '/api/v1/public/widget/token', payload: JSON.parse(tokenBody), headers: {
+    origin, 'x-ordo-client': clientId, 'x-ordo-timestamp': String(timestamp), 'x-ordo-nonce': nonce, 'x-ordo-signature': signature
+  } });
+}
+
 test('R1 product loop persists source, release, query trace, citation and backup', async t => {
   const { request, dataRoot } = await fixture(t);
   const model = (await request('POST', '/api/v1/models', { name: '本地严格证据', provider: 'local-extractive', purpose: 'generation', modelId: 'ordo-local-extractive-v1' })).json().data;
@@ -146,6 +157,19 @@ test('connector, graph and signed website assistant APIs enforce their product b
   const assistant = (await request('POST', '/api/v1/assistants', { name: '网站证据助手', datasetId: dataset.id })).json().data;
   const published = (await request('POST', `/api/v1/assistants/${assistant.id}/publish`, {})).json().data;
   const client = (await request('POST', `/api/v1/assistants/${published.id}/clients`, { allowedOrigins: ['https://example.test'] })).json().data;
+  assert.deepEqual(client.allowedOrigins, ['https://example.test']);
+  assert.equal(client.secret_mask, `••••${client.clientSecret.slice(-4)}`);
+  assert.equal(client.status, 'active');
+
+  const clientsResponse = await request('GET', `/api/v1/assistants/${published.id}/clients`);
+  const clients = clientsResponse.json().data;
+  assert.equal(clients.length, 1);
+  assert.deepEqual(clients[0].allowedOrigins, client.allowedOrigins);
+  assert.equal(clients[0].secret_mask, client.secret_mask);
+  assert.equal(Object.hasOwn(clients[0], 'clientSecret'), false);
+  assert.equal(clientsResponse.body.includes(client.clientSecret), false);
+  assert.equal(clientsResponse.body.includes('secret_ref'), false);
+
   const tokenBody = JSON.stringify({ origin: 'https://example.test' });
   const timestamp = Date.now();
   const nonce = `nonce_${Date.now()}_abcdef`;
@@ -168,6 +192,26 @@ test('connector, graph and signed website assistant APIs enforce their product b
   assert.ok(answerResponse.json().data.citations.length > 0);
   const wrongOrigin = await app.inject({ method: 'POST', url: `/api/v1/public/widget/sessions/${visitor.id}/messages`, payload: { question: '泄露内容' }, headers: { origin: 'https://evil.test', authorization: `Bearer ${token}` } });
   assert.equal(wrongOrigin.statusCode, 403);
+
+  const rotated = (await request('POST', `/api/v1/widget-clients/${client.id}/rotate`, {})).json().data;
+  assert.notEqual(rotated.clientSecret, client.clientSecret);
+  assert.deepEqual(rotated.allowedOrigins, client.allowedOrigins);
+  assert.equal(rotated.secret_mask, `••••${rotated.clientSecret.slice(-4)}`);
+  assert.equal(rotated.status, 'active');
+  const oldSecret = await requestWidgetToken(app, client.clientId, client.clientSecret);
+  assert.equal(oldSecret.statusCode, 401);
+  assert.equal(oldSecret.json().error.code, 'WIDGET_SIGNATURE_INVALID');
+  const newSecret = await requestWidgetToken(app, client.clientId, rotated.clientSecret);
+  assert.equal(newSecret.statusCode, 200, newSecret.body);
+
+  const revoked = (await request('DELETE', `/api/v1/widget-clients/${client.id}`)).json().data;
+  assert.deepEqual(revoked.allowedOrigins, client.allowedOrigins);
+  assert.equal(revoked.secret_mask, rotated.secret_mask);
+  assert.equal(revoked.status, 'revoked');
+  assert.equal(Object.hasOwn(revoked, 'clientSecret'), false);
+  const revokedSecret = await requestWidgetToken(app, client.clientId, rotated.clientSecret);
+  assert.equal(revokedSecret.statusCode, 401);
+  assert.equal(revokedSecret.json().error.code, 'WIDGET_CLIENT_INVALID');
 });
 
 test('index profiles preserve nested defaults and enforce immutable release references', async t => {
@@ -185,6 +229,68 @@ test('index profiles preserve nested defaults and enforce immutable release refe
   assert.equal(detail.releaseCount, 0);
   const selected = (await request('POST', `/api/v1/index-profiles/${created.id}/default`, {})).json().data;
   assert.equal(selected.defaultIndexProfileId, created.id);
+});
+
+test('release build idempotency follows the current publishable chunk revisions', async t => {
+  const { request } = await fixture(t);
+  const kb = (await request('POST', '/api/v1/knowledge-bases', { name: '发布快照幂等测试' })).json().data;
+  const dataset = kb.datasets[0];
+  const source = (await request('POST', `/api/v1/datasets/${dataset.id}/sources`, { type: 'upload', name: '发布内容' })).json().data;
+  const upload = multipart('release-idempotency.md', '# 发布内容\n\n第一版可发布内容。', { sourceId: source.id });
+  const registered = (await request('POST', `/api/v1/datasets/${dataset.id}/files`, upload.payload, upload.headers)).json().data;
+  await waitTask(request, registered.task.id);
+
+  const firstTask = (await request('POST', `/api/v1/datasets/${dataset.id}/releases`, { activate: false })).json().data;
+  const first = await waitTask(request, firstTask.id);
+  const repeatedTask = (await request('POST', `/api/v1/datasets/${dataset.id}/releases`, { activate: false })).json().data;
+  assert.equal(repeatedTask.id, firstTask.id);
+
+  const chunks = (await request('GET', `/api/v1/datasets/${dataset.id}/chunks`)).json().data;
+  const revised = (await request('POST', `/api/v1/chunks/${chunks[0].id}/revisions`, {
+    contentMd: `${chunks[0].content_md}\n\n第二版修订`,
+    contentText: `${chunks[0].content_text}\n\n第二版修订`
+  })).json().data;
+  assert.notEqual(revised.id, chunks[0].id);
+
+  const revisedTask = (await request('POST', `/api/v1/datasets/${dataset.id}/releases`, { activate: false })).json().data;
+  assert.notEqual(revisedTask.id, firstTask.id);
+  const second = await waitTask(request, revisedTask.id);
+  assert.notEqual(second.result.releaseId, first.result.releaseId);
+});
+
+test('model create and update roll back secret changes when model writes fail', async t => {
+  const { app } = await fixture(t);
+  const { db, models, secretStore } = app.services;
+  const workspaceId = app.services.config.localWorkspaceId;
+  const primary = await models.create({ name: '事务模型 A', provider: 'local-extractive', apiKey: 'original-key-A' }, workspaceId);
+  const primaryRow = db.one('SELECT * FROM model_connections WHERE id=?', primary.id);
+  assert.equal(secretStore.resolve(primaryRow.secret_ref, workspaceId), 'original-key-A');
+  const initialSecretCount = db.one('SELECT COUNT(*) AS count FROM secrets WHERE workspace_id=?', workspaceId).count;
+
+  await assert.rejects(
+    models.create({ name: '事务模型 A', provider: 'local-extractive', apiKey: 'orphan-candidate' }, workspaceId),
+    error => error.code === 'NAME_CONFLICT'
+  );
+  assert.equal(db.one('SELECT COUNT(*) AS count FROM secrets WHERE workspace_id=?', workspaceId).count, initialSecretCount);
+
+  const secondary = await models.create({ name: '事务模型 B', provider: 'local-extractive' }, workspaceId);
+  await assert.rejects(
+    models.update(primary.id, { name: secondary.name, apiKey: 'replacement-key' }, workspaceId),
+    error => error.code === 'NAME_CONFLICT'
+  );
+  const unchangedPrimary = db.one('SELECT * FROM model_connections WHERE id=?', primary.id);
+  assert.equal(unchangedPrimary.name, '事务模型 A');
+  assert.equal(secretStore.resolve(unchangedPrimary.secret_ref, workspaceId), 'original-key-A');
+  assert.equal(db.one('SELECT COUNT(*) AS count FROM secrets WHERE workspace_id=?', workspaceId).count, initialSecretCount);
+
+  await assert.rejects(
+    models.update(secondary.id, { name: primary.name, apiKey: 'new-orphan-candidate' }, workspaceId),
+    error => error.code === 'NAME_CONFLICT'
+  );
+  const unchangedSecondary = db.one('SELECT * FROM model_connections WHERE id=?', secondary.id);
+  assert.equal(unchangedSecondary.name, '事务模型 B');
+  assert.equal(unchangedSecondary.secret_ref, null);
+  assert.equal(db.one('SELECT COUNT(*) AS count FROM secrets WHERE workspace_id=?', workspaceId).count, initialSecretCount);
 });
 
 test('strict evidence mode refuses unsupported questions without calling a remote model', async t => {

@@ -20,6 +20,28 @@ class WidgetService {
     this.tokenKey = crypto.createHash('sha256').update(secretStore.key).update('ordo-widget-token-v1').digest();
   }
 
+  clientRecord(clientRecordId, workspaceId) {
+    const record = this.db.one(`SELECT wc.id,wc.assistant_id,wc.client_id,wc.allowed_origins_json,wc.status,wc.created_at,wc.rotated_at,s.mask AS secret_mask
+      FROM widget_clients wc JOIN secrets s ON s.id=wc.secret_ref WHERE wc.id=? AND wc.workspace_id=?`, clientRecordId, workspaceId);
+    if (!record) throw new AppError(404, 'NOT_FOUND', '网站客户端不存在或不可访问');
+    return record;
+  }
+
+  clientResponse(record, clientSecret, warning) {
+    return {
+      id: record.id,
+      assistantId: record.assistant_id,
+      clientId: record.client_id,
+      allowedOrigins: record.allowed_origins,
+      secret_mask: record.secret_mask,
+      status: record.status,
+      createdAt: record.created_at,
+      rotatedAt: record.rotated_at || null,
+      ...(clientSecret ? { clientSecret } : {}),
+      ...(warning ? { warning } : {})
+    };
+  }
+
   createClient(assistantId, input, workspaceId = this.config.localWorkspaceId, requestId) {
     const assistant = this.product.getAssistant(assistantId, workspaceId);
     if (assistant.status !== 'published' || !assistant.active_release_id) throw new AppError(409, 'ASSISTANT_NOT_PUBLISHED', '助手必须发布后才能创建网站客户端');
@@ -32,23 +54,34 @@ class WidgetService {
     this.db.run('INSERT INTO widget_clients(id,workspace_id,assistant_id,client_id,secret_ref,allowed_origins_json,status,created_at) VALUES(?,?,?,?,?,?,?,?)',
       recordId, workspaceId, assistantId, clientId, secret.id, JSON.stringify(origins), 'active', now());
     this.audit.append({ workspaceId, action: 'widget_client.create', objectType: 'widget_client', objectId: recordId, requestId, details: { assistantId, clientId, origins } });
-    return { id: recordId, assistantId, clientId, clientSecret: secretValue, allowedOrigins: origins, warning: 'clientSecret 仅返回一次，请保存到客户服务端秘密存储。' };
+    return this.clientResponse(this.clientRecord(recordId, workspaceId), secretValue, 'clientSecret 仅返回一次，请保存到客户服务端秘密存储。');
   }
 
   listClients(assistantId, workspaceId = this.config.localWorkspaceId) {
     this.product.getAssistant(assistantId, workspaceId);
     return this.db.all(`SELECT wc.id,wc.assistant_id,wc.client_id,wc.allowed_origins_json,wc.status,wc.created_at,wc.rotated_at,s.mask AS secret_mask
-      FROM widget_clients wc JOIN secrets s ON s.id=wc.secret_ref WHERE wc.assistant_id=? AND wc.workspace_id=? ORDER BY wc.created_at`, assistantId, workspaceId);
+      FROM widget_clients wc JOIN secrets s ON s.id=wc.secret_ref WHERE wc.assistant_id=? AND wc.workspace_id=? ORDER BY wc.created_at`, assistantId, workspaceId)
+      .map(record => this.clientResponse(record));
   }
 
   rotateClient(clientRecordId, workspaceId = this.config.localWorkspaceId, requestId) {
     const record = this.db.one('SELECT * FROM widget_clients WHERE id=? AND workspace_id=?', clientRecordId, workspaceId);
     if (!record) throw new AppError(404, 'NOT_FOUND', '网站客户端不存在或不可访问');
+    if (record.status !== 'active') throw new AppError(409, 'WIDGET_CLIENT_REVOKED', '已撤销的网站客户端不能轮换密钥');
     const secretValue = crypto.randomBytes(32).toString('base64url');
     this.secretStore.replace(record.secret_ref, workspaceId, secretValue);
     this.db.run('UPDATE widget_clients SET rotated_at=? WHERE id=?', now(), record.id);
     this.audit.append({ workspaceId, action: 'widget_client.rotate', objectType: 'widget_client', objectId: record.id, requestId });
-    return { id: record.id, clientId: record.client_id, clientSecret: secretValue, warning: '旧密钥已立即失效，新密钥仅返回一次。' };
+    return this.clientResponse(this.clientRecord(record.id, workspaceId), secretValue, '旧密钥已立即失效，新密钥仅返回一次。');
+  }
+
+  revokeClient(clientRecordId, workspaceId = this.config.localWorkspaceId, requestId) {
+    const record = this.clientRecord(clientRecordId, workspaceId);
+    if (record.status !== 'revoked') {
+      this.db.run("UPDATE widget_clients SET status='revoked' WHERE id=? AND workspace_id=?", record.id, workspaceId);
+      this.audit.append({ workspaceId, action: 'widget_client.revoke', objectType: 'widget_client', objectId: record.id, requestId });
+    }
+    return this.clientResponse(this.clientRecord(record.id, workspaceId));
   }
 
   verifySignedRequest({ clientId, timestamp, nonce, origin, signature, method, route, rawBody }) {

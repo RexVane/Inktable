@@ -2,14 +2,13 @@
 /* Ordo 后端全链冒烟测试：一次性实例（8791/临时数据目录），覆盖全部路由组与前端请求形状 */
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const serverDir = path.resolve(here, '..', 'server');
-const dataRoot = path.join(here, 'data');
-fs.rmSync(dataRoot, { recursive: true, force: true });
-fs.mkdirSync(dataRoot, { recursive: true });
+const serverDir = path.resolve(here, '..');
+const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ordo-fullchain-'));
 
 const PORT = 8791;
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -223,11 +222,18 @@ async function main() {
       must(searched.results && searched.results.length >= 1, `检索命中 ${searched.results && searched.results.length}`);
       return `${searched.results.length} 命中`;
     });
-    await step('releases: 第二版本构建 + rollback → activate（指针切换）', async () => {
-      // 单一版本无可回滚对象（409 属正确行为），先构建第二个版本
+    await step('releases: 内容修订后构建第二版本 + rollback → activate（指针切换）', async () => {
+      const currentChunks = (await req('GET', `/api/v1/datasets/${dataset.id}/chunks`)).json.data;
+      const current = currentChunks.find(item => !item.excluded);
+      must(current && current.id, '应存在当前可发布 chunk');
+      const revised = await req('POST', `/api/v1/chunks/${current.id}/revisions`, {
+        contentMd: `${current.content_md}\n\n（发布快照变更）`,
+        contentText: `${current.content_text} 发布快照变更`
+      });
+      must(revised.status === 200, `chunk revision → ${revised.status}`);
       const second = (await req('POST', `/api/v1/datasets/${dataset.id}/releases`, { activate: true })).json.data;
       const secondTask = await waitTask(second.id);
-      must(secondTask.result && secondTask.result.status === 'active', '第二版本应激活');
+      must(secondTask.result && secondTask.result.status === 'active' && secondTask.result.releaseId !== release.id, '内容变化后应激活第二版本');
       const rolled = await req('POST', `/api/v1/releases/${release.id}/rollback`, {});
       must(rolled.status === 200, `rollback → ${rolled.status} ${JSON.stringify(rolled.json.error || {})}`);
       const back = await req('POST', `/api/v1/releases/${release.id}/activate`, {});
@@ -404,11 +410,13 @@ async function main() {
       return '';
     });
   } finally {
-    child.kill('SIGKILL');
-    // Windows 上 SIGKILL 可能不立即生效，强制 taskkill
     if (process.platform === 'win32' && child.pid) {
-      try { spawn('taskkill', ['/PID', String(child.pid), '/F', '/T'], { stdio: 'ignore' }); } catch {}
-    }
+      await new Promise(resolve => {
+        const killer = spawn('taskkill', ['/PID', String(child.pid), '/F', '/T'], { stdio: 'ignore' });
+        killer.once('error', resolve);
+        killer.once('exit', resolve);
+      });
+    } else if (child.exitCode === null) child.kill('SIGKILL');
   }
 
   const failed = results.filter(r => !r.ok);
@@ -416,4 +424,6 @@ async function main() {
   if (failed.length) { failed.forEach(f => console.log('FAIL:', f.name, '—', f.detail)); process.exitCode = 1; }
 }
 
-main().catch(error => { console.error('SMOKE CRASH:', error); process.exitCode = 1; });
+main()
+  .catch(error => { console.error('SMOKE CRASH:', error); process.exitCode = 1; })
+  .finally(() => fs.rmSync(dataRoot, { recursive: true, force: true }));

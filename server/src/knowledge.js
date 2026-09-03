@@ -636,6 +636,27 @@ class KnowledgeService {
     return returnLogical ? { id: nextId, logicalId } : { id: nextId };
   }
 
+  releaseContentFingerprint(datasetId, workspaceId) {
+    const chunks = this.db.all(`SELECT cr.id,cr.chunk_logical_id,cr.revision_number,cr.document_revision_id,cr.artifact_id,
+      cr.content_text,cr.sensitivity,d.id AS document_id,d.title AS document_title,d.status AS document_status
+      FROM chunk_revisions cr JOIN documents d ON d.id=cr.document_id
+      WHERE cr.dataset_id=? AND cr.workspace_id=? AND d.status!='deleted' AND cr.excluded=0
+      AND cr.id=(SELECT cr2.id FROM chunk_revisions cr2 WHERE cr2.chunk_logical_id=cr.chunk_logical_id ORDER BY cr2.revision_number DESC LIMIT 1)
+      ORDER BY cr.chunk_logical_id`, datasetId, workspaceId);
+    return hash(stableJson(chunks.map(chunk => ({
+      id: chunk.id,
+      logicalId: chunk.chunk_logical_id,
+      revision: chunk.revision_number,
+      documentId: chunk.document_id,
+      documentRevisionId: chunk.document_revision_id,
+      artifactId: chunk.artifact_id,
+      documentTitle: chunk.document_title,
+      documentStatus: chunk.document_status,
+      sensitivity: chunk.sensitivity,
+      contentHash: hash(chunk.content_text || '')
+    }))));
+  }
+
   buildRelease(datasetId, input = {}, workspaceId = this.workspaceId(), requestId) {
     const dataset = this.ensureDataset(datasetId, workspaceId);
     const profile = input.indexProfileId
@@ -644,10 +665,11 @@ class KnowledgeService {
     if (!profile) throw new AppError(409, 'INDEX_PROFILE_REQUIRED', '知识库没有可用索引配置');
     const activate = input.activate !== false;
     const allowReviewRequired = Boolean(input.allowReviewRequired);
-    const idempotencyKey = input.idempotencyKey || `release:${datasetId}:${profile.id}:${dataset.updated_at}:${activate ? 'active' : 'ready'}:${allowReviewRequired ? 'review' : 'strict'}`;
+    const contentFingerprint = this.releaseContentFingerprint(datasetId, workspaceId);
+    const idempotencyKey = input.idempotencyKey || `release:${datasetId}:${profile.id}:${profile.config_hash}:${contentFingerprint}:${activate ? 'active' : 'ready'}:${allowReviewRequired ? 'review' : 'strict'}`;
     const releaseId = input.releaseId || `rel_${hash(idempotencyKey).slice(0, 32)}`;
     const task = this.tasks.create({ workspaceId, type: 'release.build', objectType: 'dataset', objectId: datasetId,
-      idempotencyKey, input: { datasetId, indexProfileId: profile.id, releaseId, allowReviewRequired, activate } });
+      idempotencyKey, input: { datasetId, indexProfileId: profile.id, releaseId, contentFingerprint, allowReviewRequired, activate } });
     this.audit.append({ workspaceId, action: 'release.build_requested', objectType: 'dataset', objectId: datasetId, requestId, details: { taskId: task.id, indexProfileId: profile.id } });
     return task;
   }
@@ -656,6 +678,10 @@ class KnowledgeService {
     const dataset = this.ensureDataset(input.datasetId, workspaceId);
     const profile = this.db.one('SELECT * FROM index_profiles WHERE id=? AND workspace_id=? AND knowledge_base_id=?', input.indexProfileId, workspaceId, dataset.knowledge_base_id);
     if (!profile) throw new AppError(404, 'NOT_FOUND', '索引配置不存在');
+    const currentContentFingerprint = this.releaseContentFingerprint(input.datasetId, workspaceId);
+    if (input.contentFingerprint && input.contentFingerprint !== currentContentFingerprint) {
+      throw new AppError(409, 'RELEASE_CONTENT_CHANGED', '可发布知识块在任务排队后发生变化，请重新发起发布');
+    }
     const releaseId = input.releaseId || `rel_${hash(`release:${input.datasetId}:${input.indexProfileId}`).slice(0, 32)}`;
     const existingRelease = this.db.one('SELECT * FROM knowledge_releases WHERE id=? AND workspace_id=?', releaseId, workspaceId);
     if (existingRelease && ['active','ready','superseded','retained'].includes(existingRelease.status)) {
