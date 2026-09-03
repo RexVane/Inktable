@@ -191,9 +191,10 @@ class ProductService {
   setFeatureFlag(key, input, workspaceId = this.workspaceId(), requestId) {
     const existing = this.db.one('SELECT * FROM feature_flags WHERE workspace_id=? AND key=?', workspaceId, key);
     if (!existing) throw new AppError(404, 'NOT_FOUND', '功能开关不存在');
-    if (typeof input.enabled !== 'boolean') throw new AppError(400, 'VALIDATION_ERROR', '功能开关 enabled 必须是布尔值');
-    this.db.run('UPDATE feature_flags SET enabled=?,config_json=?,updated_at=? WHERE workspace_id=? AND key=?', input.enabled ? 1 : 0, JSON.stringify(input.config || existing.config || {}), now(), workspaceId, key);
-    this.audit.append({ workspaceId, action: 'feature_flag.update', objectType: 'feature_flag', objectId: key, requestId, details: { enabled: Boolean(input.enabled) } });
+    const enabled = typeof input.enabled === 'boolean' ? input.enabled : (input.enabled === 1 ? true : (input.enabled === 0 ? false : null));
+    if (enabled === null) throw new AppError(400, 'VALIDATION_ERROR', '功能开关 enabled 必须是布尔值或 0/1');
+    this.db.run('UPDATE feature_flags SET enabled=?,config_json=?,updated_at=? WHERE workspace_id=? AND key=?', enabled ? 1 : 0, JSON.stringify(input.config || existing.config || {}), now(), workspaceId, key);
+    this.audit.append({ workspaceId, action: 'feature_flag.update', objectType: 'feature_flag', objectId: key, requestId, details: { enabled: Boolean(enabled) } });
     return this.db.one('SELECT key,enabled,config_json,updated_at FROM feature_flags WHERE workspace_id=? AND key=?', workspaceId, key);
   }
 

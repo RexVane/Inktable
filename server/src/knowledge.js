@@ -351,7 +351,12 @@ class KnowledgeService {
   }
 
   getDocument(documentId, workspaceId = this.workspaceId()) {
-    const document = this.db.one("SELECT * FROM documents WHERE id=? AND workspace_id=? AND status!='deleted'", documentId, workspaceId);
+    const document = this.db.one(`SELECT d.*,dr.revision_number,dr.content_hash,dr.size_bytes,dr.parser_id,dr.warnings_json,
+      pa.id AS artifact_id,pa.quality_status,
+      (SELECT COUNT(*) FROM chunk_logicals cl WHERE cl.document_id=d.id) AS chunk_count
+      FROM documents d LEFT JOIN document_revisions dr ON dr.id=d.current_revision_id
+      LEFT JOIN parsed_artifacts pa ON pa.document_revision_id=dr.id
+      WHERE d.id=? AND d.workspace_id=? AND d.status!='deleted'`, documentId, workspaceId);
     if (!document) throw new AppError(404, 'NOT_FOUND', '文档不存在或不可访问');
     document.revisions = this.db.all('SELECT * FROM document_revisions WHERE document_id=? AND workspace_id=? ORDER BY revision_number DESC', documentId, workspaceId);
     return document;
