@@ -1445,14 +1445,8 @@
       <!-- Bottom 3 Cards Filling Remaining Height -->
       <div class="home-bottom-grid">
         <!-- 1. 近 7 天请求 -->
-          <div class="card-head" style="display:flex;justify-content:space-between;align-items:center;">
-            <span>请求趋势 (${(state.homeTrendRange || '7d') === 'today' ? '今天' : ((state.homeTrendRange || '7d') === '30d' ? '近 30 天' : '近 7 天')})</span>
-            <div style="display:flex;gap:4px;">
-              <button class="btn sm ${(state.homeTrendRange || '7d') === 'today' ? 'primary' : ''}" style="font-size:11px;padding:2px 8px;" onclick="state.homeTrendRange='today';render();">今天</button>
-              <button class="btn sm ${(state.homeTrendRange || '7d') === '7d' ? 'primary' : ''}" style="font-size:11px;padding:2px 8px;" onclick="state.homeTrendRange='7d';render();">近 7 天</button>
-              <button class="btn sm ${(state.homeTrendRange || '7d') === '30d' ? 'primary' : ''}" style="font-size:11px;padding:2px 8px;" onclick="state.homeTrendRange='30d';render();">近 30 天</button>
-            </div>
-          </div>
+        <div class="card home-bottom-card">
+          <div class="card-head"><span>近 7 天请求</span><span class="badge" style="background:var(--card-bg);border:1px solid var(--line);cursor:pointer;">近 7 天 ⌄</span></div>
           <div class="card-body">
             ${svgChart}
             <div style="display:flex;align-items:center;justify-content:center;gap:6px;font-size:12px;color:var(--ink-dim);margin-top:6px;">

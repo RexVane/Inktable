@@ -110,7 +110,8 @@ test('all P1, P2 and P3 wired endpoints, handlers and security contracts are ver
 
   // P3 Experience & Debounce
   assert.match(app, /searchDebounceTimer/);
-  assert.match(app, /homeTrendRange/);
+  assert.match(app, /home-bottom-grid/);
+  assert.match(app, /home-bottom-card/);
 });
 
 
