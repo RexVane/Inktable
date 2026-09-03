@@ -1355,7 +1355,7 @@
       kbStatusHtml = `
             <div class="home-sub-card" onclick="window.location.hash='#/knowledge/datasets'">
               <div class="grow"><div style="display:flex;align-items:center;gap:6px;"><span class="dot" style="background:#0f8b4c;"></span><b>产品文档库</b></div><div class="muted" style="font-size:12px;margin-top:4px;">更新于 5 分钟前（演示数据）</div></div>
-              <div style="text-align:right;font-size:12px;margin-right:4px;"><div class="muted">知识块 8,652</div><div class="ok-text" style="color:var(--accent);">索引 8,610 可用</div></div>
+              <div style="text-align:right;font-size:12px;margin-right:4px;"><div class="muted">知识块 ${(api && api.connected && state.dashboard?.chunks) || "8,652"}</div><div class="ok-text" style="color:var(--accent);">索引 8,610 可用</div></div>
               <span class="list-arrow">›</span>
             </div>`;
       statsAsOf = '<span class="badge" style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;">演示模式 · 数据非真实</span>';
@@ -2118,6 +2118,19 @@
 
   /* 04 知识库 > 数据登记 - 100% 对应 04-知识库-数据登记.png */
   async function pageRegistry() {
+    let regKbs = [];
+    let regDocs = [];
+    if (api && api.connected) {
+      try {
+        regKbs = await api.getKnowledgeBases() || [];
+        const dsId = state.selectedDatasetId || (api?.context?.defaultDatasetId);
+        if (dsId && !String(dsId).startsWith('ds-demo-')) {
+          const docRes = await api.getDocuments(dsId, { limit: 10 });
+          if (docRes && docRes.items) regDocs = docRes.items;
+        }
+      } catch (e) {}
+    }
+
     const html = `
     <!-- Top Action Cards Row -->
     <div class="registry-action-row">
@@ -2435,6 +2448,18 @@
 
   /* 05 知识库 > 数据解析 - 100% 对应 05-知识库-数据解析.png */
   async function pageParsing() {
+    let tasks = [];
+    if (api && api.connected) {
+      try {
+        tasks = await api.getTasks({ type: 'document.parse', limit: 20 }) || [];
+        if (tasks.length) {
+          state.parsingTotalCount = String(tasks.length);
+          state.parsingDoneCount = String(tasks.filter(t => t.status === 'succeeded' || t.status === 'partial').length);
+          state.parsingArtifactCount = String(tasks.filter(t => t.result?.artifactId).length);
+        }
+      } catch (e) {}
+    }
+
     const html = `
     <!-- Top Configuration & Actions Bar -->
     <div class="parsing-top-bar" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
@@ -5320,11 +5345,7 @@
     }, 50);
   };
 
-  window.handleSwitchConversation = function(convId) {
-    state.chatConversations.forEach(c => c.active = (c.id === convId));
-    showToast('已切换会话');
-    render();
-  };
+  // [removed: old handleSwitchConversation stub - replaced by async version above]
 
   window.handleCopyChatText = function(text) {
     if (navigator.clipboard) {
@@ -5701,16 +5722,7 @@
     render();
   };
 
-  window.handleRetryFailedTasks = function() {
-    state.parsingRetrying = true;
-    showToast('正在重试失败任务...');
-    setTimeout(() => {
-      state.parsingRetrying = false;
-      showToast('重试任务已完成', 'ok');
-      render();
-    }, 1000);
-    render();
-  };
+  // [removed: old handleRetryFailedTasks stub]
 
   window.handleParsingJumpPage = function(pageNum) {
     state.parsingCurrentPage = pageNum;
@@ -5793,10 +5805,7 @@
     render();
   };
 
-  window.handleSaveModelConfig = function() {
-    showToast('模型配置已保存到本地凭据库', 'ok');
-    render();
-  };
+  // [removed: old handleSaveModelConfig stub]
 
   window.handleResetGeneralSettings = function() {
     state.theme = 'system';
@@ -5842,7 +5851,9 @@
     render();
   };
 
-  window.handleChatFeedback = function(type) {
+  // [removed: old handleChatFeedback stub - replaced by async version above]
+  window.handleChatFeedback_legacy = function(type) {
+    // legacy stub kept to avoid reference errors, real handler is above
     if (type === 'positive') {
       showToast('感谢反馈！已记录到评估集', 'ok');
     } else {
@@ -6430,7 +6441,10 @@
               <button class="btn primary" onclick="window.handleTestModelConnection()">测试连接</button>
               <button class="btn" onclick="openReAuthModal()">重新授权</button>
             </div>
-            <button class="btn primary" onclick="window.handleSaveModelConfig()">保存</button>
+            <div style="display:flex;gap:8px;">
+              <button class="btn" style="color:var(--danger);border-color:#fca5a5;" onclick="window.handleDeleteModel(state.selectedModel || 'gpt-5')">移除模型</button>
+              <button class="btn primary" onclick="window.handleSaveModelConfig(state.selectedModel || 'gpt-5')">保存</button>
+            </div>
           </div>
 
           <!-- Test Result Banner -->
@@ -6494,8 +6508,8 @@
     const html = `
     <!-- Top 4 Stat Cards -->
     <div class="grid grid-4">
-      ${statCard('db', '总占用', '128.4 GB', '<span class="muted">占用空间</span>')}
-      ${statCard('doc', '对象', '503 类', '<span class="muted">登记的对象类</span>')}
+      ${statCard('db', '总占用', (api && api.connected && dbBytes) ? dbBytes : '128.4 GB', '<span class="muted">占用空间</span>')}
+      ${statCard('doc', '对象', (api && api.connected && blobsCount) ? blobsCount + ' 项' : '503 类', '<span class="muted">登记对象</span>')}
       ${statCard('check', '健康', '7 / 8', '<span class="ok-text">组件健康</span>')}
       ${statCard('stack', '最近备份', '2 小时前', '<span class="muted">增量备份成功</span>')}
     </div>
@@ -6545,7 +6559,7 @@
             <circle cx="50" cy="50" r="40" fill="transparent" stroke="#e5e7eb" stroke-width="12"/>
             <circle cx="50" cy="50" r="40" fill="transparent" stroke="#0f8b4c" stroke-width="12" stroke-dasharray="134 251" stroke-dashoffset="0"/>
             <circle cx="50" cy="50" r="40" fill="transparent" stroke="#2563eb" stroke-width="12" stroke-dasharray="63 251" stroke-dashoffset="-134"/>
-            <text x="50" y="55" font-size="12" font-weight="700" text-anchor="middle" fill="#111827">128.4 GB</text>
+            <text x="50" y="55" font-size="12" font-weight="700" text-anchor="middle" fill="#111827">${(api && api.connected && dbBytes) ? dbBytes : "128.4 GB"}</text>
           </svg>
           <div style="font-size:12px;margin-top:12px;text-align:left;display:flex;flex-direction:column;gap:4px;">
             <div><span style="color:#0f8b4c;">■</span> 文件与对象: 68.7 GB (53.4%)</div>
@@ -6885,7 +6899,7 @@
             <span class="check-circle">✓</span>
             <div style="font-size:24px;margin-bottom:6px;">📚</div>
             <b>产品文档库</b>
-            <div class="muted" style="font-size:12px;margin-top:4px;">8,652 chunks · <span class="ok-text">● 可用</span></div>
+            <div class="muted" style="font-size:12px;margin-top:4px;">${(api && api.connected && state.dashboard?.chunks) || "8,652"} chunks · <span class="ok-text">● 可用</span></div>
           </div>
           <div class="kb-picker-card" onclick="document.querySelectorAll('.kb-picker-card').forEach(e=>e.classList.remove('selected'));this.classList.add('selected');">
             <div style="font-size:24px;margin-bottom:6px;">💻</div>
@@ -7173,7 +7187,7 @@
       <div style="display:flex;flex-direction:column;gap:8px;max-height:260px;overflow-y:auto;font-size:12px;">
         <div style="padding:6px 8px;background:#f0fdf4;border-radius:6px;border:1px solid #bbf7d0;">
           <div style="font-weight:600;color:#16a34a;">✓ 知识库 v7 版本发布成功</div>
-          <div class="muted" style="font-size:11px;margin-top:2px;">产品文档库 8,652 个知识块已完成向量化索引</div>
+          <div class="muted" style="font-size:11px;margin-top:2px;">${esc(cur.kb || "核心知识库")} ${(api && api.connected && state.dashboard?.chunks) || "8,652"} 个知识块已完成向量化索引</div>
         </div>
         <div style="padding:6px 8px;background:#fffbeb;border-radius:6px;border:1px solid #fde68a;">
           <div style="font-weight:600;color:#d97706;">⚠️ 1 条文档解析告警</div>
@@ -7613,34 +7627,126 @@
     showToast(`已切换至索引构建流水线阶段 ${stepIdx + 1}`);
   };
 
-  window.handleSelectChunkItem = function(chunkId) {
-    state.selectedChunkId = chunkId;
-    render();
-  };
-
-  window.handleSaveChunkEdit = function() {
-    const textarea = document.getElementById('chunkEditorTextarea');
-    if (textarea) {
-      showToast('知识块内容已修改并增量更新到本地向量存储！', 'ok');
-    }
-  };
-
-  window.handleSplitChunk = function() {
-    showToast('知识块已在当前光标位置拆分为 2 个子块 (Chunk 1-A / 1-B)', 'ok');
-  };
-
-  window.handleMergeChunk = function() {
-    showToast('已与相邻前序知识块完成物理合并', 'ok');
-  };
-
-  window.handleToggleChunkDisabled = function() {
-    state.chunkDisabled = !state.chunkDisabled;
-    showToast(state.chunkDisabled ? '当前知识块已标记为【禁用】（不参与检索召回）' : '当前知识块已恢复【启用】状态', 'ok');
-    render();
-  };
+  // [removed: old chunk operation stubs - replaced by async versions]
 
   // 5. Real Assistant Management
   
+  
+  // Wire retryTask in pageParsing retry button
+  window.handleRetryFailedTasks = async function() {
+    showToast('正在重试失败的解析任务...');
+    if (api && api.connected) {
+      try {
+        const tasks = await api.getTasks({ status: 'failed', type: 'document.parse', limit: 20 });
+        if (tasks && tasks.length) {
+          let retried = 0;
+          for (const t of tasks) {
+            const res = await api.retryTask(t.id);
+            if (res) retried++;
+          }
+          showToast(`✓ 已重新提交 ${retried} 个失败的解析任务！`, 'ok');
+          render();
+          return;
+        } else {
+          showToast('当前没有失败的解析任务', 'ok');
+          return;
+        }
+      } catch (e) {}
+    }
+    showToast('演示模式：已重试失败的解析任务', 'ok');
+  };
+
+  // Wire patchModel in settings-model save
+  window.handleSaveModelConfig = async function(modelId) {
+    const apiKeyInput = document.getElementById('modelApiKeyInput');
+    const baseUrlInput = document.getElementById('modelBaseUrlInput');
+    const payload = {};
+    if (apiKeyInput && apiKeyInput.value && !apiKeyInput.value.startsWith('sk-***')) {
+      payload.apiKey = apiKeyInput.value;
+    }
+    if (baseUrlInput && baseUrlInput.value) {
+      payload.baseUrl = baseUrlInput.value;
+    }
+    showToast('正在更新模型配置...');
+    if (api && api.connected && modelId) {
+      const res = await api.patchModel(modelId, payload);
+      if (res) {
+        showToast('✓ 模型配置已更新！API Key 已安全持久化（密文存储）', 'ok');
+        if (apiKeyInput && payload.apiKey) apiKeyInput.value = 'sk-***' + payload.apiKey.slice(-4);
+        render();
+      } else {
+        showToast(api.lastError?.message || '模型配置更新失败', 'error');
+      }
+    } else {
+      showToast('演示模式：模型配置已保存', 'ok');
+    }
+  };
+
+  // Wire deleteModel
+  window.handleDeleteModel = async function(modelId) {
+    if (!confirm('确定要移除此模型配置吗？移除后需重新配置 API Key。')) return;
+    if (api && api.connected && modelId) {
+      const res = await api.deleteModel(modelId);
+      if (res) {
+        showToast('✓ 模型配置已移除', 'ok');
+        await api.syncContext();
+        render();
+      } else {
+        showToast(api.lastError?.message || '移除模型失败', 'error');
+      }
+    } else {
+      showToast('演示模式：模型配置已移除', 'ok');
+      render();
+    }
+  };
+
+  // Wire getArtifactMarkdown for document preview in parsing page
+  window.handlePreviewArtifactMarkdown = async function(artifactId) {
+    if (!artifactId) return showToast('此文档尚未生成解析制品', 'warn');
+    showToast('正在加载文档解析 Markdown 预览...');
+    if (api && api.connected) {
+      const md = await api.getArtifactMarkdown(artifactId);
+      if (md) {
+        const html = `
+          <div class="modal-box" style="max-width:680px;max-height:80vh;">
+            <div class="modal-header">
+              <span>文档解析 Markdown 预览</span>
+              <button class="btn sm" data-close>✕</button>
+            </div>
+            <div class="modal-body" style="padding:16px 20px;overflow-y:auto;max-height:60vh;">
+              <pre style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:14px;font-size:12.5px;line-height:1.6;white-space:pre-wrap;word-break:break-word;">${esc(md)}</pre>
+            </div>
+            <div class="modal-footer" style="display:flex;justify-content:flex-end;">
+              <button class="btn primary" data-close>关闭</button>
+            </div>
+          </div>
+        `;
+        showOverlay(html);
+        return;
+      }
+    }
+    showToast('演示模式：解析制品预览不可用', 'warn');
+  };
+
+  // Wire getConversations for chat history sidebar
+  window.handleLoadConversationHistory = async function() {
+    if (api && api.connected) {
+      try {
+        const convs = await api.getConversations();
+        if (convs && convs.length) {
+          state.chatConversations = convs.map((c, i) => ({
+            id: c.id,
+            label: c.title || c.last_query || '会话 ' + (i + 1),
+            time: (c.updated_at || c.created_at || '').slice(0, 16).replace('T', ' '),
+            active: i === 0
+          }));
+          render();
+          return;
+        }
+      } catch (e) {}
+    }
+  };
+
   // 1. Data Registry Import Handlers
   window.handleUploadArchivePrompt = function() {
     const dsId = state.selectedDatasetId || (api?.context?.defaultDatasetId);
@@ -7979,34 +8085,8 @@
     showOverlay(html);
   };
 
-  window.handleConfirmCreateAssistant = function() {
-    const name = document.getElementById('newAstNameInput')?.value || '新智能助手';
-    const kb = document.getElementById('newAstKbSelect')?.value || '产品文档库';
-    const desc = document.getElementById('newAstDescInput')?.value || '智能客服助手';
-    const newAst = {
-      id: 'ast_' + Date.now(),
-      name,
-      status: 'published',
-      statusText: '已发布',
-      health: '健康',
-      url: 'www.example.com',
-      kb,
-      version: 'v1.0.0',
-      desc,
-      tone: '专业且友好',
-      welcome: `你好！我是${name}，请问有什么可以帮助你？`,
-      questions: ['如何使用产品功能？', '支持哪些部署方案？'],
-      requestsToday: 0,
-      successRate: '100%'
-    };
-    state.assistants.unshift(newAst);
-    state.selectedAssistantId = newAst.id;
-    closeOverlay();
-    showToast(`智能助手「${name}」已创建！已自动加载配置`, 'ok');
-    render();
-  };
+  // [removed: old handleConfirmCreateAssistant stub - replaced by async version]
 
-  // 6. QA Flow Fusion Modal
   window.openAdjustWeightsModal = function() {
     const curW = state.fusionWeights || { dense: 0.50, sparse: 0.30, graph: 0.20 };
     const html = `
@@ -8115,26 +8195,7 @@
     }, 500);
   };
 
-  window.handleRunStorageConsistencyCheck = function() {
-    showToast('正在对 503 项元数据对象、Blobs 与向量索引执行双向哈希校验...', 'ok');
-    setTimeout(() => {
-      showToast('✓ 一致性校验通过：0 项孤立对象，数据完全一致！', 'ok');
-    }, 600);
-  };
-
-  window.handleCreateStorageBackup = function() {
-    showToast('正在创建全局不可变备份快照 snapshot_' + Date.now().toString().slice(-6) + '...', 'ok');
-    setTimeout(() => {
-      showToast('✓ 全局增量备份快照创建成功！已持久化至本地磁盘', 'ok');
-    }, 600);
-  };
-
-  window.handleSyncStorageRegistry = function() {
-    showToast('正在重新扫描物理磁盘并同步 503 项数据登记状态...', 'ok');
-    setTimeout(() => {
-      showToast('✓ 登记同步完成：覆盖率保持 100.0% 完全覆盖', 'ok');
-    }, 500);
-  };
+  // [removed: old storage stubs - replaced by async versions]
 
   /* Additional Full Product Interactive Modals & Handlers */
 
@@ -8194,19 +8255,7 @@
     }, 400);
   };
 
-  window.handleToggleAssistantStatus = function() {
-    const curAst = state.assistants.find(a => a.id === state.selectedAssistantId) || state.assistants[0];
-    if (curAst.status === 'published') {
-      curAst.status = 'paused';
-      curAst.statusText = '已停用';
-      showToast(`助手「${curAst.name}」已停用，外网访客将暂停访问`, 'ok');
-    } else {
-      curAst.status = 'published';
-      curAst.statusText = '已发布';
-      showToast(`助手「${curAst.name}」已重新发布上线！`, 'ok');
-    }
-    render();
-  };
+  // [removed: old handleToggleAssistantStatus stub - replaced by async version]
 
   window.handlePublishAssistantVersion = function() {
     const curAst = state.assistants.find(a => a.id === state.selectedAssistantId) || state.assistants[0];
