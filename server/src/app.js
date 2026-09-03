@@ -153,6 +153,12 @@ async function createApp(overrides = {}) {
     reply.status(404).type('text/plain; charset=utf-8').send('Not found');
   });
   const data = (value, meta) => ({ data: value, ...(meta ? { meta } : {}) });
+  const paginated = result => data(result.items, {
+    total: result.total,
+    limit: result.limit,
+    offset: result.offset,
+    hasMore: result.offset + result.items.length < result.total
+  });
   const workspace = request => request.workspaceId || config.localWorkspaceId;
 
   app.get('/api/v1/session/bootstrap', async (request, reply) => {
@@ -167,7 +173,7 @@ async function createApp(overrides = {}) {
   });
   app.get('/api/v1/health', async () => data(product.health()));
   app.get('/api/v1/dashboard', async request => data(product.dashboard(workspace(request))));
-  app.get('/api/v1/version', async () => data({ appVersion: config.appVersion, schemaVersion: config.schemaVersion, deploymentProfile: config.deploymentProfile, platform: config.platform, node: process.version }));
+  app.get('/api/v1/version', async () => data({ appVersion: config.appVersion, schemaVersion: product.schemaVersion(), deploymentProfile: config.deploymentProfile, platform: config.platform, node: process.version }));
   app.get('/api/v1/diagnostics', async request => data(product.diagnostics(workspace(request))));
   app.get('/api/v1/openapi.json', async () => createOpenApi(config));
 
@@ -207,7 +213,7 @@ async function createApp(overrides = {}) {
   });
   app.post('/api/v1/datasets/:id/directory/preview', async request => data(ingest.directoryPreview(request.body?.directory, request.body?.rules || {})));
   app.post('/api/v1/datasets/:id/directory/import', async request => data(ingest.directoryImport(request.params.id, request.body || {}, workspace(request), request.id)));
-  app.get('/api/v1/datasets/:id/documents', async request => data(knowledge.listDocuments(request.params.id, workspace(request), { ...page(request.query), status: request.query?.status, query: request.query?.query })));
+  app.get('/api/v1/datasets/:id/documents', async request => paginated(knowledge.listDocuments(request.params.id, workspace(request), { ...page(request.query), status: request.query?.status, query: request.query?.query })));
   app.get('/api/v1/documents/:id', async request => data(knowledge.getDocument(request.params.id, workspace(request))));
   app.delete('/api/v1/documents/:id', async request => data(knowledge.deleteDocument(request.params.id, workspace(request), request.id)));
   app.get('/api/v1/artifacts/:id/:kind', async (request, reply) => {
@@ -215,7 +221,7 @@ async function createApp(overrides = {}) {
     reply.type(request.params.kind === 'markdown' ? 'text/markdown; charset=utf-8' : 'application/json; charset=utf-8');
     return reply.send(buffer);
   });
-  app.get('/api/v1/datasets/:id/chunks', async request => data(knowledge.listChunks(request.params.id, workspace(request), { ...page(request.query), query: request.query?.query, documentId: request.query?.documentId, type: request.query?.type, warning: request.query?.warning === 'true' })));
+  app.get('/api/v1/datasets/:id/chunks', async request => paginated(knowledge.listChunks(request.params.id, workspace(request), { ...page(request.query), query: request.query?.query, documentId: request.query?.documentId, type: request.query?.type, warning: request.query?.warning === 'true' })));
   app.get('/api/v1/chunks/:id', async request => data(knowledge.getChunk(request.params.id, workspace(request))));
   app.post('/api/v1/chunks/:id/revisions', async request => data(knowledge.editChunk(request.params.id, request.body || {}, workspace(request), request.id)));
   app.post('/api/v1/chunks/:id/restore', async request => data(knowledge.restoreChunk(request.params.id, workspace(request), request.id)));
@@ -231,7 +237,7 @@ async function createApp(overrides = {}) {
   app.get('/api/v1/releases/:id/impact', async request => data(knowledge.releaseImpact(request.params.id, workspace(request))));
   app.post('/api/v1/releases/:id/search', async request => data(knowledge.searchRelease(request.params.id, request.body?.query, workspace(request), { limit: request.body?.limit })));
 
-  app.get('/api/v1/tasks', async request => data(tasks.list(workspace(request), { ...page(request.query), status: request.query?.status, type: request.query?.type })));
+  app.get('/api/v1/tasks', async request => paginated(tasks.list(workspace(request), { ...page(request.query), status: request.query?.status, type: request.query?.type })));
   app.get('/api/v1/tasks/:id', async request => data(tasks.get(request.params.id, workspace(request))));
   app.post('/api/v1/tasks/:id/cancel', async request => data(tasks.cancel(request.params.id, workspace(request))));
   app.post('/api/v1/tasks/:id/pause', async request => data(tasks.pause(request.params.id, workspace(request))));
@@ -239,13 +245,13 @@ async function createApp(overrides = {}) {
   app.post('/api/v1/tasks/:id/retry', async request => data(tasks.retry(request.params.id, workspace(request))));
   app.get('/api/v1/tasks/:id/wait', async request => data(await tasks.wait(request.params.id, workspace(request), boundedInt(request.query?.timeoutMs, 10000, 10, 120000, 'timeoutMs'))));
 
-  app.get('/api/v1/conversations', async request => data(query.listConversations(workspace(request), page(request.query))));
+  app.get('/api/v1/conversations', async request => paginated(query.listConversations(workspace(request), page(request.query))));
   app.post('/api/v1/conversations', async request => data(query.createConversation(request.body || {}, workspace(request), request.id)));
   app.get('/api/v1/conversations/:id', async request => data(query.getConversation(request.params.id, workspace(request))));
   app.delete('/api/v1/conversations/:id', async request => data(query.deleteConversation(request.params.id, workspace(request), request.id)));
   app.post('/api/v1/conversations/:id/messages', async request => data(await query.ask(request.params.id, request.body || {}, workspace(request), request.id)));
   app.post('/api/v1/messages/:id/feedback', async request => data(query.feedback(request.params.id, request.body || {}, workspace(request), request.id)));
-  app.get('/api/v1/traces', async request => data(query.listTraces(workspace(request), { ...page(request.query), conversationId: request.query?.conversationId })));
+  app.get('/api/v1/traces', async request => paginated(query.listTraces(workspace(request), { ...page(request.query), conversationId: request.query?.conversationId })));
   app.get('/api/v1/traces/:id', async request => data(query.getTrace(request.params.id, workspace(request))));
   app.get('/api/v1/citations/:id', async request => data(query.openCitation(request.params.id, workspace(request))));
 
@@ -309,7 +315,10 @@ async function createApp(overrides = {}) {
   app.get('/api/v1/backups', async request => data(product.listBackups(workspace(request))));
   app.post('/api/v1/backups', async request => data(product.requestBackup(request.body || {}, workspace(request), request.id)));
   app.post('/api/v1/backups/:id/restore', async request => data(product.requestRestore(request.params.id, request.body || {}, workspace(request), request.id)));
-  app.get('/api/v1/audit', async request => data(audit.list(workspace(request), page(request.query).limit, page(request.query).offset)));
+  app.get('/api/v1/audit', async request => {
+    const pagination = page(request.query);
+    return paginated(audit.list(workspace(request), pagination.limit, pagination.offset));
+  });
   app.get('/api/v1/audit/verify', async request => data(audit.verify(workspace(request))));
 
   await app.register(fastifyStatic, { root: config.webRoot, prefix: '/', wildcard: false, index: ['index.html'], dotfiles: 'deny', decorateReply: false });

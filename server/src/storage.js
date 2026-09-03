@@ -210,7 +210,9 @@ class AuditLog {
   }
 
   list(workspaceId, limit = 100, offset = 0) {
-    return this.db.all('SELECT id,workspace_id,actor_id,action,object_type,object_id,result,request_id,details_json,previous_hash,event_hash,created_at FROM audit_events WHERE workspace_id=? ORDER BY rowid DESC LIMIT ? OFFSET ?', workspaceId, limit, offset);
+    const total = this.db.one('SELECT COUNT(*) AS count FROM audit_events WHERE workspace_id=?', workspaceId)?.count || 0;
+    const items = this.db.all('SELECT id,workspace_id,actor_id,action,object_type,object_id,result,request_id,details_json,previous_hash,event_hash,created_at FROM audit_events WHERE workspace_id=? ORDER BY rowid DESC LIMIT ? OFFSET ?', workspaceId, limit, offset);
+    return { items, total, limit, offset };
   }
 
   verify(workspaceId) {

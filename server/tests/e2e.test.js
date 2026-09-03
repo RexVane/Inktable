@@ -336,6 +336,65 @@ test('web workbench api client request shapes are accepted alongside canonical o
   assert.equal(settings.general.language, 'zh-CN');
 });
 
+test('runtime schema version and list pagination metadata come from persisted data', async t => {
+  const { app, request } = await fixture(t);
+  const expectedSchemaVersion = app.services.db.one('SELECT MAX(version) AS version FROM schema_migrations').version;
+
+  const version = (await request('GET', '/api/v1/version')).json().data;
+  const health = (await request('GET', '/api/v1/health')).json().data;
+  const diagnostics = (await request('GET', '/api/v1/diagnostics')).json().data;
+  assert.equal(version.schemaVersion, expectedSchemaVersion);
+  assert.equal(health.components.metadata.schemaVersion, expectedSchemaVersion);
+  assert.equal(diagnostics.schemaVersion, expectedSchemaVersion);
+  assert.equal(diagnostics.health.components.metadata.schemaVersion, expectedSchemaVersion);
+
+  const kb = (await request('POST', '/api/v1/knowledge-bases', { name: '版本分页测试库' })).json().data;
+  const dataset = kb.datasets[0];
+  const source = (await request('POST', `/api/v1/datasets/${dataset.id}/sources`, { type: 'upload', name: '分页文档' })).json().data;
+  for (const [filename, content] of [
+    ['page-one.md', '# 第一页\n\nOrdo 分页测试第一份文档。'],
+    ['page-two.md', '# 第二页\n\nOrdo 分页测试第二份文档。']
+  ]) {
+    const upload = multipart(filename, content, { sourceId: source.id });
+    const registered = (await request('POST', `/api/v1/datasets/${dataset.id}/files`, upload.payload, upload.headers)).json().data;
+    await waitTask(request, registered.task.id);
+  }
+  const releaseTask = (await request('POST', `/api/v1/datasets/${dataset.id}/releases`, { activate: true })).json().data;
+  await waitTask(request, releaseTask.id);
+  for (const title of ['分页会话一', '分页会话二']) {
+    const conversation = (await request('POST', '/api/v1/conversations', { knowledgeBaseId: kb.id, datasetId: dataset.id, title })).json().data;
+    await request('POST', `/api/v1/conversations/${conversation.id}/messages`, { question: 'Ordo 分页测试是什么？' });
+  }
+
+  const assertPaginated = async url => {
+    const separator = url.includes('?') ? '&' : '?';
+    const first = (await request('GET', `${url}${separator}limit=1&offset=0`)).json();
+    assert.equal(Array.isArray(first.data), true);
+    assert.equal(first.data.length, 1);
+    assert.ok(first.meta.total >= 2, `${url} total=${first.meta.total}`);
+    assert.deepEqual({ limit: first.meta.limit, offset: first.meta.offset, hasMore: first.meta.hasMore }, { limit: 1, offset: 0, hasMore: true });
+
+    const last = (await request('GET', `${url}${separator}limit=1&offset=${first.meta.total - 1}`)).json();
+    assert.equal(Array.isArray(last.data), true);
+    assert.equal(last.data.length, 1);
+    assert.deepEqual(last.meta, { total: first.meta.total, limit: 1, offset: first.meta.total - 1, hasMore: false });
+  };
+
+  await assertPaginated(`/api/v1/datasets/${dataset.id}/documents`);
+  await assertPaginated(`/api/v1/datasets/${dataset.id}/chunks`);
+  await assertPaginated('/api/v1/tasks');
+  await assertPaginated('/api/v1/conversations');
+  await assertPaginated('/api/v1/traces');
+  await assertPaginated('/api/v1/audit');
+
+  const backupTask = (await request('POST', '/api/v1/backups', { label: 'schema-version-e2e' })).json().data;
+  const backup = await waitTask(request, backupTask.id);
+  const manifests = (await request('GET', '/api/v1/backups')).json().data;
+  const manifest = manifests.find(item => item.id === backup.result.backupId)?.manifest;
+  assert.ok(manifest);
+  assert.equal(manifest.schemaVersion, expectedSchemaVersion);
+});
+
 async function authHeaders(app) {
   const bootstrap = await app.inject({ method: 'GET', url: '/api/v1/session/bootstrap' });
   return { cookie: bootstrap.headers['set-cookie'].split(';')[0], 'x-ordo-csrf': bootstrap.json().data.csrfToken };

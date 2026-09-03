@@ -38,11 +38,14 @@ class QueryService {
   }
 
   listConversations(workspaceId = this.config.localWorkspaceId, { limit = 100, offset = 0 } = {}) {
-    return this.db.all(`SELECT c.*,kb.name AS knowledge_base_name,d.name AS dataset_name,kr.version AS release_version,
+    const from = `FROM conversations c JOIN knowledge_bases kb ON kb.id=c.knowledge_base_id JOIN datasets d ON d.id=c.dataset_id
+      JOIN knowledge_releases kr ON kr.id=c.release_id`;
+    const total = this.db.one(`SELECT COUNT(*) AS count ${from} WHERE c.workspace_id=? AND c.deleted_at IS NULL`, workspaceId)?.count || 0;
+    const items = this.db.all(`SELECT c.*,kb.name AS knowledge_base_name,d.name AS dataset_name,kr.version AS release_version,
       (SELECT COUNT(*) FROM messages m WHERE m.conversation_id=c.id) AS message_count
-      FROM conversations c JOIN knowledge_bases kb ON kb.id=c.knowledge_base_id JOIN datasets d ON d.id=c.dataset_id
-      JOIN knowledge_releases kr ON kr.id=c.release_id
+      ${from}
       WHERE c.workspace_id=? AND c.deleted_at IS NULL ORDER BY c.updated_at DESC LIMIT ? OFFSET ?`, workspaceId, limit, offset);
+    return { items, total, limit, offset };
   }
 
   getConversation(conversationId, workspaceId = this.config.localWorkspaceId) {
@@ -136,11 +139,11 @@ class QueryService {
     });
 
     stageStart = performance.now();
-    const selected = candidates.filter(item => item.rerankScore > 0 || item.vectorScore > 0.08).slice(0, 6);
+    const selected = candidates.filter(item => (item.rerankScore != null && item.rerankScore > 0) || (item.fullTextScore != null && item.fullTextScore > 0) || (item.vectorScore != null && item.vectorScore > 0.35)).slice(0, 6);
     const selectedIds = new Set(selected.map(item => item.chunkRevisionId));
     stage('重排', stageStart, 'succeeded', {
       provider: 'local-lexical-v1',
-      threshold: 0.08,
+      threshold: 0.35,
       inputCount: candidates.length,
       selectedCount: selected.length,
       selected: selected.map(item => ({ ...candidateSummary(item), rank: item.rank, score: item.rerankScore })),
@@ -214,8 +217,12 @@ class QueryService {
   }
 
   listTraces(workspaceId = this.config.localWorkspaceId, { conversationId, limit = 100, offset = 0 } = {}) {
-    if (conversationId) return this.db.all('SELECT * FROM query_traces WHERE workspace_id=? AND conversation_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?', workspaceId, conversationId, limit, offset);
-    return this.db.all('SELECT * FROM query_traces WHERE workspace_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?', workspaceId, limit, offset);
+    const clauses = ['workspace_id=?'];
+    const params = [workspaceId];
+    if (conversationId) { clauses.push('conversation_id=?'); params.push(conversationId); }
+    const total = this.db.one(`SELECT COUNT(*) AS count FROM query_traces WHERE ${clauses.join(' AND ')}`, ...params)?.count || 0;
+    const items = this.db.all(`SELECT * FROM query_traces WHERE ${clauses.join(' AND ')} ORDER BY created_at DESC LIMIT ? OFFSET ?`, ...params, limit, offset);
+    return { items, total, limit, offset };
   }
 
   openCitation(citationId, workspaceId = this.config.localWorkspaceId) {

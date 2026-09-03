@@ -106,8 +106,9 @@ class TaskService {
     const params = [workspaceId];
     if (status) { clauses.push('status=?'); params.push(status); }
     if (type) { clauses.push('type=?'); params.push(type); }
-    params.push(limit, offset);
-    return this.db.all(`SELECT * FROM tasks WHERE ${clauses.join(' AND ')} ORDER BY created_at DESC LIMIT ? OFFSET ?`, ...params);
+    const total = this.db.one(`SELECT COUNT(*) AS count FROM tasks WHERE ${clauses.join(' AND ')}`, ...params)?.count || 0;
+    const items = this.db.all(`SELECT * FROM tasks WHERE ${clauses.join(' AND ')} ORDER BY created_at DESC LIMIT ? OFFSET ?`, ...params, limit, offset);
+    return { items, total, limit, offset };
   }
 
   cancel(taskId, workspaceId) {

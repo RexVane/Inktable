@@ -368,13 +368,14 @@ class KnowledgeService {
     const params = [datasetId, workspaceId];
     if (status) { clauses.push('d.status=?'); params.push(status); }
     if (query) { clauses.push('(d.title LIKE ? OR d.logical_path LIKE ?)'); params.push(`%${query}%`, `%${query}%`); }
-    params.push(limit, offset);
-    return this.db.all(`SELECT d.*,dr.revision_number,dr.content_hash,dr.size_bytes,dr.parser_id,dr.warnings_json,
+    const total = this.db.one(`SELECT COUNT(*) AS count FROM documents d WHERE ${clauses.join(' AND ')}`, ...params)?.count || 0;
+    const items = this.db.all(`SELECT d.*,dr.revision_number,dr.content_hash,dr.size_bytes,dr.parser_id,dr.warnings_json,
       pa.id AS artifact_id,pa.quality_status,
       (SELECT COUNT(*) FROM chunk_logicals cl WHERE cl.document_id=d.id) AS chunk_count
       FROM documents d LEFT JOIN document_revisions dr ON dr.id=d.current_revision_id
       LEFT JOIN parsed_artifacts pa ON pa.document_revision_id=dr.id
-      WHERE ${clauses.join(' AND ')} ORDER BY d.updated_at DESC LIMIT ? OFFSET ?`, ...params);
+      WHERE ${clauses.join(' AND ')} ORDER BY d.updated_at DESC LIMIT ? OFFSET ?`, ...params, limit, offset);
+    return { items, total, limit, offset };
   }
 
   parseInWorker(buffer, filename) {
@@ -512,9 +513,11 @@ class KnowledgeService {
     if (type) { clauses.push('cr.type=?'); params.push(type); }
     if (warning) clauses.push("cr.warnings_json!='[]'");
     if (query) { clauses.push('(cr.content_text LIKE ? OR cr.id LIKE ? OR cr.chunk_logical_id LIKE ?)'); params.push(`%${query}%`, `%${query}%`, `%${query}%`); }
-    params.push(limit, offset);
-    return this.db.all(`SELECT cr.*,d.title AS document_title FROM chunk_revisions cr JOIN documents d ON d.id=cr.document_id
-      WHERE ${clauses.join(' AND ')} ORDER BY d.title,cr.created_at LIMIT ? OFFSET ?`, ...params);
+    const from = 'FROM chunk_revisions cr JOIN documents d ON d.id=cr.document_id';
+    const total = this.db.one(`SELECT COUNT(*) AS count ${from} WHERE ${clauses.join(' AND ')}`, ...params)?.count || 0;
+    const items = this.db.all(`SELECT cr.*,d.title AS document_title ${from}
+      WHERE ${clauses.join(' AND ')} ORDER BY d.title,cr.created_at LIMIT ? OFFSET ?`, ...params, limit, offset);
+    return { items, total, limit, offset };
   }
 
   getChunk(chunkRevisionId, workspaceId = this.workspaceId()) {

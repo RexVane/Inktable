@@ -103,6 +103,11 @@
     parsingZoom: 90,
     parsingHighlightDiff: true,
     parsingWarningExpanded: true,
+    registryPage: 1,
+    registryPageSize: 10,
+    registrySelectedKbId: null,
+    registrySelectedDatasetId: null,
+    indexSelectedChunkIds: [],
 
     // Assistants Interactive State
     assistants: [
@@ -205,6 +210,19 @@
     csrfToken: null,
     workspaceId: null,
     connected: false,
+
+    collection(value, meta = null) {
+      const items = Array.isArray(value) ? value : (Array.isArray(value?.items) ? value.items : []);
+      const source = value && !Array.isArray(value) ? value : {};
+      const pagination = meta || source.meta || {
+        total: Number(source.total ?? items.length),
+        limit: Number(source.limit ?? items.length),
+        offset: Number(source.offset ?? 0),
+        hasMore: Number(source.offset ?? 0) + items.length < Number(source.total ?? items.length)
+      };
+      Object.defineProperty(items, 'meta', { value: pagination, configurable: true });
+      return items;
+    },
 
     async bootstrap() {
       try {
@@ -335,9 +353,14 @@
     async createKnowledgeBase(payload) { return (await this.request('/api/v1/knowledge-bases', { method: 'POST', body: JSON.stringify(payload) }))?.data; },
     async getKnowledgeBase(kbId) { return (await this.request(`/api/v1/knowledge-bases/${kbId}`))?.data; },
     async getDatasets(kbId) { return (await this.request(`/api/v1/knowledge-bases/${kbId}/datasets`))?.data; },
+    async getSources(dsId) {
+      const response = await this.request(`/api/v1/datasets/${dsId}/sources`);
+      return this.collection(response?.data, response?.meta);
+    },
     async getDocuments(dsId, params = {}) {
       const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')).toString();
-      return (await this.request(`/api/v1/datasets/${dsId}/documents${qs ? `?${qs}` : ''}`))?.data;
+      const response = await this.request(`/api/v1/datasets/${dsId}/documents${qs ? `?${qs}` : ''}`);
+      return this.collection(response?.data, response?.meta);
     },
     async uploadDocument(dsId, file, sourceId) {
       const formData = new FormData();
@@ -347,13 +370,15 @@
     },
     async getChunks(dsId, params = {}) {
       const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')).toString();
-      return (await this.request(`/api/v1/datasets/${dsId}/chunks${qs ? `?${qs}` : ''}`))?.data;
+      const response = await this.request(`/api/v1/datasets/${dsId}/chunks${qs ? `?${qs}` : ''}`);
+      return this.collection(response?.data, response?.meta);
     },
     async getReleases(dsId) { return (await this.request(`/api/v1/datasets/${dsId}/releases`))?.data; },
     async buildRelease(dsId, payload = {}) { return (await this.request(`/api/v1/datasets/${dsId}/releases`, { method: 'POST', body: JSON.stringify(payload) }))?.data; },
     async getTasks(params = {}) {
       const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')).toString();
-      return (await this.request(`/api/v1/tasks${qs ? `?${qs}` : ''}`))?.data;
+      const response = await this.request(`/api/v1/tasks${qs ? `?${qs}` : ''}`);
+      return this.collection(response?.data, response?.meta);
     },
     async waitTask(taskId, timeoutMs = 20000) { return (await this.request(`/api/v1/tasks/${taskId}/wait?timeoutMs=${timeoutMs}`))?.data; },
     async getModels() { return (await this.request('/api/v1/models'))?.data; },
@@ -361,7 +386,10 @@
     async testModel(modelId) { return (await this.request(`/api/v1/models/${modelId}/test`, { method: 'POST', body: JSON.stringify({}) }))?.data; },
     async getAssistants() { return (await this.request('/api/v1/assistants'))?.data; },
     async updateAssistant(id, payload) { return (await this.request(`/api/v1/assistants/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }))?.data; },
-    async getConversations() { return (await this.request('/api/v1/conversations'))?.data; },
+    async getConversations() {
+      const response = await this.request('/api/v1/conversations');
+      return this.collection(response?.data, response?.meta);
+    },
     async getConversation(convId) { return (await this.request(`/api/v1/conversations/${convId}`))?.data; },
     async createConversation(title, kbId, datasetId) {
       return (await this.request('/api/v1/conversations', { method: 'POST', body: JSON.stringify({ title, knowledgeBaseId: kbId, ...(datasetId ? { datasetId } : {}) }) }))?.data;

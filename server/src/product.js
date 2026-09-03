@@ -109,6 +109,10 @@ class ProductService {
 
   workspaceId() { return this.config.localWorkspaceId; }
 
+  schemaVersion() {
+    return Number(this.db.one('SELECT COALESCE(MAX(version),0) AS version FROM schema_migrations')?.version || 0);
+  }
+
   requireFeature(key, workspaceId = this.workspaceId()) {
     const flag = this.db.one('SELECT key,enabled,config_json FROM feature_flags WHERE key=? AND workspace_id=?', key, workspaceId);
     if (!flag || !flag.enabled) throw new AppError(403, 'FEATURE_DISABLED', `功能“${key}”当前未启用`, { feature: key });
@@ -131,7 +135,7 @@ class ProductService {
       (SELECT COUNT(*) FROM assistants WHERE workspace_id=?) assistants`,
       ...new Array(12).fill(workspaceId));
     const taskSummary = this.db.all('SELECT status,COUNT(*) AS count FROM tasks WHERE workspace_id=? GROUP BY status', workspaceId);
-    const recentTasks = this.tasks.list(workspaceId, { limit: 10 });
+    const recentTasks = this.tasks.list(workspaceId, { limit: 10 }).items;
     const recentKnowledgeBases = this.knowledge.listKnowledgeBases(workspaceId).slice(0, 10);
     const requestTrend = this.db.all(`SELECT substr(created_at,1,10) AS day,COUNT(*) AS count FROM messages
       WHERE workspace_id=? AND role='user' AND created_at>=datetime('now','-6 days') GROUP BY substr(created_at,1,10) ORDER BY day`, workspaceId);
@@ -150,7 +154,11 @@ class ProductService {
 
   health(workspaceId = this.workspaceId()) {
     let database = { status: 'available' };
-    try { this.db.one('SELECT 1 AS ok'); } catch (error) { database = { status: 'unavailable', error: error.message }; }
+    let schemaVersion = null;
+    try {
+      this.db.one('SELECT 1 AS ok');
+      schemaVersion = this.schemaVersion();
+    } catch (error) { database = { status: 'unavailable', error: error.message }; }
     const writeAccess = [this.config.blobRoot, this.config.artifactRoot, this.config.backupRoot].map(directory => ({
       directory: path.basename(directory), writable: fs.existsSync(directory) && Boolean(fs.statSync(directory).mode & 0o200)
     }));
@@ -159,7 +167,7 @@ class ProductService {
       status: database.status === 'available' && writeAccess.every(item => item.writable) ? 'ready' : 'degraded',
       checkedAt: now(),
       components: {
-        metadata: { ...database, provider: 'sqlite', schemaVersion: this.config.schemaVersion },
+        metadata: { ...database, provider: 'sqlite', schemaVersion },
         blob: { status: writeAccess[0].writable ? 'available' : 'unavailable', provider: 'local-managed' },
         artifacts: { status: writeAccess[1].writable ? 'available' : 'unavailable', provider: 'local-managed' },
         fullText: { status: 'available', provider: 'sqlite-fts5' },
@@ -347,7 +355,7 @@ class ProductService {
     let manifestPersisted = false;
     try {
       const manifest = {
-        schemaVersion: this.config.schemaVersion,
+        schemaVersion: this.schemaVersion(),
         appVersion: this.config.appVersion,
         backupId, workspaceId, createdAt: timestamp, label: input.label,
         encryption: this.config.backupEncryptionVersion,
@@ -552,7 +560,7 @@ class ProductService {
 
   diagnostics(workspaceId = this.workspaceId()) {
     return {
-      generatedAt: now(), appVersion: this.config.appVersion, schemaVersion: this.config.schemaVersion,
+      generatedAt: now(), appVersion: this.config.appVersion, schemaVersion: this.schemaVersion(),
       deploymentProfile: this.config.deploymentProfile, platform: this.config.platform,
       health: this.health(workspaceId), dashboard: this.dashboard(workspaceId), audit: this.audit.verify(workspaceId),
       capabilities: {
