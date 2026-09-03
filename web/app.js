@@ -46,6 +46,7 @@
     open: localStorage.getItem('ordo.openRail') || 'qaflow',
     collapsed: localStorage.getItem('ordo.sidebarCollapsed') === 'true',
     currentWorkspace: 'Ordo 企业空间',
+    mobileOpen: false,
     datasetDocs: [
       { id: 'd1', name: 'Ordo 产品快速入门指南.pdf', icon: '📕', type: 'PDF', status: '已完成', chunks: 256, time: '2025-05-20 10:21' },
       { id: 'd2', name: 'Ordo 安装部署手册.pdf', icon: '📕', type: 'PDF', status: '已完成', chunks: 312, time: '2025-05-20 10:18' },
@@ -402,8 +403,15 @@
       const qs = knowledgeBaseId ? `?knowledgeBaseId=${encodeURIComponent(knowledgeBaseId)}` : '';
       return (await this.request(`/api/v1/wiki${qs}`))?.data;
     },
+    async createWiki(payload) { return (await this.request('/api/v1/wiki', { method: 'POST', body: JSON.stringify(payload) }))?.data; },
     async getWikiPage(pageId) { return (await this.request(`/api/v1/wiki/${pageId}`))?.data; },
     async getGraph(dsId) { return (await this.request(`/api/v1/datasets/${dsId}/graph`))?.data; },
+    async getOntologies(knowledgeBaseId) { return (await this.request(`/api/v1/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/ontologies`))?.data; },
+    async getGraphEntities(dsId, params = {}) {
+      const qs = new URLSearchParams(Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== '')).toString();
+      return (await this.request(`/api/v1/datasets/${encodeURIComponent(dsId)}/graph/entities${qs ? `?${qs}` : ''}`))?.data;
+    },
+    async createGraphEntity(dsId, payload) { return (await this.request(`/api/v1/datasets/${encodeURIComponent(dsId)}/graph/entities`, { method: 'POST', body: JSON.stringify(payload) }))?.data; },
     async getTasks(params = {}) {
       const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')).toString();
       const response = await this.request(`/api/v1/tasks${qs ? `?${qs}` : ''}`);
@@ -641,6 +649,34 @@
   }
 
   // Mount core navigation, modals, and toast utilities on window for inline HTML onclick handlers
+  const overlayState = { opener: null, focusables: [], keydown: null };
+  const focusableSelector = 'a[href], area[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  function focusOverlayFirst(overlay) {
+    const dialog = overlay?.querySelector('[role="dialog"], .modal-box, .modal, .search-palette');
+    if (!dialog) return;
+    overlayState.focusables = Array.from(dialog.querySelectorAll(focusableSelector));
+    const target = dialog.querySelector('[autofocus]') || overlayState.focusables[0] || dialog;
+    if (target === dialog && !dialog.hasAttribute('tabindex')) dialog.setAttribute('tabindex', '-1');
+    requestAnimationFrame(() => target.focus());
+  }
+  function wireOverlayA11y(overlay) {
+    const dialog = overlay.querySelector('[role="dialog"], .modal-box, .modal, .search-palette');
+    if (!dialog) return;
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    if (!dialog.getAttribute('aria-labelledby')) {
+      const heading = dialog.querySelector('.modal-header h1,.modal-header h2,.modal-header h3,.modal-header b,.modal-header strong,.modal-header,[data-dialog-title]');
+      if (heading) { if (!heading.id) heading.id = `ordo-dialog-title-${Date.now()}`; dialog.setAttribute('aria-labelledby', heading.id); }
+    }
+    overlay.setAttribute('aria-hidden', 'false');
+    overlay.onclick = (event) => { if (event.target === overlay) window.closeOverlay(); };
+    overlay.querySelectorAll('[data-close]').forEach(button => {
+      button.type = button.type || 'button';
+      button.setAttribute('aria-label', button.getAttribute('aria-label') || '关闭');
+      button.onclick = window.closeOverlay;
+    });
+    focusOverlayFirst(overlay);
+  }
   window.go = function(page, params = {}) {
     const qs = new URLSearchParams(params).toString();
     window.location.hash = '#/' + page + (qs ? '?' + qs : '');
@@ -661,21 +697,25 @@
   window.showOverlay = function(html) {
     const overlay = document.getElementById('overlay');
     if (!overlay) return null;
+    overlayState.opener = document.activeElement && document.activeElement !== document.body ? document.activeElement : null;
     overlay.innerHTML = html;
     overlay.hidden = false;
-    overlay.querySelectorAll('[data-close]').forEach(b => b.onclick = window.closeOverlay);
+    wireOverlayA11y(overlay);
     return overlay;
   };
-  function showOverlay(html) {
-    return window.showOverlay(html);
-  }
+  function showOverlay(html) { return window.showOverlay(html); }
   window.closeOverlay = function() {
     const overlay = document.getElementById('overlay');
-    if (overlay) overlay.hidden = true;
+    if (!overlay || overlay.hidden) return;
+    overlay.hidden = true;
+    overlay.setAttribute('aria-hidden', 'true');
+    overlay.innerHTML = '';
+    const opener = overlayState.opener;
+    overlayState.opener = null;
+    overlayState.focusables = [];
+    if (opener && typeof opener.focus === 'function' && document.contains(opener)) requestAnimationFrame(() => opener.focus());
   };
-  function closeOverlay() {
-    window.closeOverlay();
-  }
+  function closeOverlay() { window.closeOverlay(); }
 
   function go(page, params = {}) {
     const qs = new URLSearchParams(params).toString();
@@ -704,19 +744,6 @@
     setTimeout(() => { toast.className = 'toast'; }, 3000);
   }
 
-  function showOverlay(html) {
-    const overlay = document.getElementById('overlay');
-    if (!overlay) return null;
-    overlay.innerHTML = html;
-    overlay.hidden = false;
-    overlay.querySelectorAll('[data-close]').forEach(b => b.onclick = closeOverlay);
-    return overlay;
-  }
-
-  function closeOverlay() {
-    const overlay = document.getElementById('overlay');
-    if (overlay) overlay.hidden = true;
-  }
 
   function getSvgIcon(name) {
     const icons = {
@@ -806,9 +833,10 @@
       ? `<span>/</span><a href="#/qaflow/parse" style="color:inherit;">问答流程</a><span>/</span><span class="mono" style="font-size:12.5px;">${state.activeTraceId || (state.lastTrace?.id) || 'QA-最新追踪'}</span><span>/</span><b>${meta.label}</b>`
       : `<span>/</span><span>${meta.rail}</span>${meta.rail !== meta.label ? `<span>/</span><b>${meta.label}</b>` : ''}`;
 
-    app.innerHTML = `<aside class="sidebar${state.collapsed ? ' collapsed' : ''}" id="sidebar">
+    app.innerHTML = `<button class="drawer-backdrop${state.mobileOpen ? ' is-visible' : ''}" id="drawerBackdrop" type="button" aria-label="关闭导航"></button>
+    <aside class="sidebar${state.collapsed ? ' collapsed' : ''}${state.mobileOpen ? ' mobile-open' : ''}" id="sidebar" aria-label="主导航">
       <div class="rail-tools">
-        <button class="icon-btn" id="drawer" type="button" title="${state.collapsed ? '展开导航' : '收起导航'}">
+        <button class="icon-btn" id="drawer" type="button" title="${state.collapsed ? '展开导航' : '收起导航'}" aria-label="${state.mobileOpen ? '关闭导航' : (state.collapsed ? '展开导航' : '收起导航')}" aria-expanded="${state.mobileOpen ? 'true' : 'false'}" aria-controls="sidebar">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
         </button>
         <button class="icon-btn" id="searchBtn" type="button" title="全局搜索 (Ctrl+K)">
@@ -825,19 +853,19 @@
             const isOpen = state.open === rail.id;
             const hasActive = rail.children.some(([id]) => id === state.page);
             return `<div class="nav-group ${isOpen ? 'is-open' : ''}" data-rail="${rail.id}">
-              <button class="nav-parent ${hasActive ? 'has-active' : ''}" type="button" data-group="${rail.id}">
+              <button class="nav-parent ${hasActive ? 'has-active' : ''}" type="button" data-group="${rail.id}" aria-expanded="${isOpen}" aria-controls="nav-${rail.id}-children">
                 <span class="nav-ico">${getSvgIcon(rail.icon)}</span>
                 <span class="label">${rail.label}</span>
-                <span class="nav-caret">›</span>
+                <span class="nav-caret" aria-hidden="true">›</span>
               </button>
-              <div class="nav-children">
+              <div class="nav-children" id="nav-${rail.id}-children" role="group" aria-label="${rail.label}子导航">
                 ${rail.children.map(([id, label]) => `
-                  <button class="nav-child ${state.page === id ? 'on' : ''}" type="button" data-page="${id}">${label}</button>
+                  <button class="nav-child ${state.page === id ? 'on' : ''}" type="button" data-page="${id}" aria-current="${state.page === id ? 'page' : 'false'}">${label}</button>
                 `).join('')}
               </div>
             </div>`;
           }
-          return `<button class="nav-parent is-leaf ${state.page === rail.id ? 'on' : ''}" type="button" data-page="${rail.id}">
+          return `<button class="nav-parent is-leaf ${state.page === rail.id ? 'on' : ''}" type="button" data-page="${rail.id}" aria-current="${state.page === rail.id ? 'page' : 'false'}">
             <span class="nav-ico">${getSvgIcon(rail.icon)}</span>
             <span class="label">${rail.label}</span>
           </button>`;
@@ -853,10 +881,11 @@
     </aside>
     <section class="main-column">
       <header class="topbar">
-        <button class="workspace-switcher" type="button" id="workspaceBtn">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6M9 13h6M9 17h6"/></svg>
-          <b>Ordo 企业空间</b>
-          <span>⌄</span>
+        <button class="mobile-drawer-toggle" id="mobileDrawerBtn" type="button" aria-label="打开导航" aria-expanded="${state.mobileOpen}" aria-controls="sidebar">☰</button>
+        <button class="workspace-switcher" type="button" id="workspaceBtn" aria-haspopup="menu" aria-expanded="false" aria-controls="ordoWorkspacePopover">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6M9 13h6M9 17h6"/></svg>
+          <b class="workspace-title">${esc(state.currentWorkspace)}</b>
+          <span aria-hidden="true">⌄</span>
         </button>
         <div class="breadcrumbs">${breadcrumbHtml}</div>
         <div class="topbar-spacer"></div>
@@ -882,23 +911,34 @@
       </div>
     </section>`;
 
-    document.querySelectorAll('[data-page]').forEach(n => n.onclick = () => go(n.dataset.page));
+    document.querySelectorAll('[data-page]').forEach(n => n.onclick = () => { go(n.dataset.page); state.mobileOpen = false; });
     document.querySelectorAll('[data-group]').forEach(n => {
+      const rail = n.dataset.group;
+      const children = n.closest('.nav-group')?.querySelector('.nav-children');
+      n.setAttribute('aria-expanded', String(state.open === rail));
+      if (children) { if (!children.id) children.id = `nav-${rail}-children`; n.setAttribute('aria-controls', children.id); }
       n.onclick = () => {
-        const rail = n.dataset.group;
         state.open = state.open === rail ? '' : rail;
         localStorage.setItem('ordo.openRail', state.open);
         renderShell();
       };
     });
-    document.getElementById('drawer').onclick = () => {
-      state.collapsed = !state.collapsed;
+    const drawer = document.getElementById('drawer');
+    const drawerBackdrop = document.getElementById('drawerBackdrop');
+    const toggleDrawer = () => {
+      if (window.matchMedia && window.matchMedia('(max-width: 760px)').matches) state.mobileOpen = !state.mobileOpen;
+      else state.collapsed = !state.collapsed;
       localStorage.setItem('ordo.sidebarCollapsed', String(state.collapsed));
       renderShell();
     };
+    if (drawer) drawer.onclick = toggleDrawer;
+    const mobileDrawerBtn = document.getElementById('mobileDrawerBtn');
+    if (mobileDrawerBtn) mobileDrawerBtn.onclick = toggleDrawer;
+    if (drawerBackdrop) drawerBackdrop.onclick = () => { state.mobileOpen = false; renderShell(); };
     document.getElementById('searchBtn').onclick = openSearchModal;
     document.getElementById('newChat').onclick = openNewChatModal;
     document.getElementById('workspaceBtn').onclick = () => toggleWorkspaceSwitcher();
+    document.getElementById('workspaceBtn')?.setAttribute?.('aria-expanded', String(Boolean(document.getElementById('ordoWorkspacePopover'))));
   }
 
 /* Global Native File & OS Interaction Handlers */
@@ -1748,7 +1788,7 @@
             <div class="muted" style="font-size:11.5px;margin-top:2px;">${esc(kb.description || '无描述')}</div>
           </div>
           <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
-            <span class="badge ok" style="font-size:11px;">正常</span>
+            <span class="badge ${kb.status === 'active' || !kb.status ? 'ok' : 'warn'}" style="font-size:11px;">${esc(kb.status === 'active' || !kb.status ? '正常' : kb.status)}</span>
             <button class="btn sm" style="padding:2px 6px;font-size:11px;color:var(--danger);border:1px solid #fecaca;background:var(--card-bg);" onclick="event.stopPropagation();window.handleDeleteKbWithImpact('${esc(kb.id)}', '${esc(kb.name)}')">删除</button>
           </div>
         </div>
@@ -1766,7 +1806,7 @@
         <div class="card" style="background:var(--card-bg);border:1px solid var(--line);border-radius:var(--radius-card);">
           <div class="card-head" style="padding:14px 18px;font-size:14.5px;font-weight:700;color:var(--ink-strong);border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;">
             <span>已有知识库 (${kbs.length})</span>
-            <span class="badge" style="font-size:11.5px;">真实数据</span>
+            <span class="badge" style="font-size:11.5px;">${api && api.connected ? '真实数据' : '演示数据'}</span>
           </div>
           <div class="card-body" style="padding:14px;">
             ${kbsListHtml}
@@ -2007,6 +2047,20 @@
       datasetAssistants = Array.isArray(assistantResult) ? assistantResult.filter(a => a.dataset_id === activeDs.id) : [];
     }
     const selectedWiki = wikiPages.find(p => p.id === state.datasetWikiId) || wikiPages[0] || null;
+    const graphEntities = Array.isArray(graphData?.entities) ? graphData.entities : [];
+    const graphRelations = Array.isArray(graphData?.relations) ? graphData.relations : [];
+    const graphHasData = graphEntities.length > 0 || graphRelations.length > 0;
+    const graphPositions = graphEntities.slice(0, 8).map((entity, index, list) => {
+      const angle = list.length === 1 ? 0 : (Math.PI * 2 * index / list.length) - Math.PI / 2;
+      return { entity, x: 360 + Math.cos(angle) * (list.length > 2 ? 230 : 150), y: 125 + Math.sin(angle) * (list.length > 2 ? 82 : 0) };
+    });
+    const graphPositionById = new Map(graphPositions.map(item => [item.entity.id, item]));
+    const graphEdgesSvg = graphRelations.map(relation => {
+      const source = graphPositionById.get(relation.source_entity_id);
+      const target = graphPositionById.get(relation.target_entity_id);
+      return source && target ? `<line class="graph-edge" x1="${source.x}" y1="${source.y}" x2="${target.x}" y2="${target.y}" />` : '';
+    }).join('');
+    const graphNodesSvg = graphPositions.map((item, index) => `<g><circle class="graph-node ${index === 0 ? 'main' : ''}" cx="${item.x}" cy="${item.y}" r="${index === 0 ? 42 : 34}"/><text x="${item.x}" y="${item.y}">${esc(item.entity.name || item.entity.id || '未命名')}</text></g>`).join('');
 
     // Build Tab content
     let tabContentHtml = '';
@@ -2073,16 +2127,17 @@
                 ` : documentRows.map((doc, idx) => {
                   const docTitle = doc.title || doc.name;
                   const docId = doc.id;
-                  const docType = doc.media_type ? doc.media_type.split('/').pop().toUpperCase() : (doc.type || 'PDF');
-                  const docChunks = doc.chunk_count ?? doc.chunks ?? 0;
+                  const docType = doc.media_type ? doc.media_type.split('/').pop().toUpperCase() : (doc.type || '未记录');
+                  const docChunks = doc.chunk_count ?? doc.chunks ?? '—';
                   const docStatus = doc.status || '未记录';
                   const docIcon = doc.media_type?.includes('pdf') ? '📕' : doc.media_type?.includes('word') ? '📘' : '📄';
+                  const docStatusClass = ['succeeded', 'ready', 'completed'].includes(String(docStatus).toLowerCase()) ? 'ok-text' : ['failed', 'error'].includes(String(docStatus).toLowerCase()) ? 'warn-text' : 'muted';
                   return `
                     <tr class="${idx === 0 ? 'selected' : ''}" style="cursor:pointer;" onclick="showToast('已选中：' + '${esc(docTitle)}');">
                       <td><input type="checkbox" ${idx === 0 ? 'checked' : ''} onclick="event.stopPropagation();"></td>
                       <td><span style="margin-right:4px;">${doc.icon || docIcon}</span> ${idx === 0 ? `<b>${esc(docTitle)}</b>` : esc(docTitle)}</td>
                       <td>${esc(docType)}</td>
-                      <td><span class="ok-text" style="font-size:12px;">● ${esc(docStatus)}</span></td>
+                      <td><span class="${docStatusClass}" style="font-size:12px;">● ${esc(docStatus)}</span></td>
                       <td>${docChunks}</td>
                       <td>
                         <button class="btn sm" style="padding:2px 8px;font-size:11.5px;color:var(--danger);border:1px solid #fca5a5;background:var(--card-bg);" onclick="event.stopPropagation();window.handleDeleteDocument('${esc(docId)}')">删除</button>
@@ -2106,10 +2161,8 @@
               <span>共 ${totalDocs} 条文档${state.datasetSearchQuery ? ` · 当前显示 ${documentRows.length} 条` : ''}</span>
               <div class="pagination-controls">
                 <button class="page-arrow ${page <= 1 ? 'disabled' : ''}" type="button" onclick="if(${page}>1)window.handleDatasetPageChange(${page - 1})">&lt;</button>
-                <button class="page-num ${page === 1 ? 'active' : ''}" type="button" onclick="window.handleDatasetPageChange(1)">1</button>
-                <button class="page-num ${page === 2 ? 'active' : ''}" type="button" onclick="window.handleDatasetPageChange(2)">2</button>
-                <button class="page-num ${page === 3 ? 'active' : ''}" type="button" onclick="window.handleDatasetPageChange(3)">3</button>
-                <button class="page-arrow" type="button" onclick="window.handleDatasetPageChange(${page + 1})">&gt;</button>
+                ${pageButtonHtml}
+                <button class="page-arrow ${page >= datasetPageCount ? 'disabled' : ''}" type="button" onclick="if(${page}<${datasetPageCount})window.handleDatasetPageChange(${page + 1})">&gt;</button>
               </div>
             </div>
           </div>
@@ -2201,7 +2254,7 @@
     } else if (currentTab === 'wiki') {
       tabContentHtml = `
         <div class="dataset-wiki-panel">
-          <aside class="dataset-wiki-list"><div class="dataset-panel-heading small"><b>Wiki / 笔记</b><button class="btn sm primary" onclick="window.openCreateWikiModal && window.openCreateWikiModal('${esc(kbId || '')}')">新建</button></div>${wikiPages.length ? wikiPages.map((p, i) => `<button class="dataset-wiki-item ${i === 0 ? 'active' : ''}" onclick="window.handleWikiSelect('${esc(p.id)}')"><b>${esc(p.title || '未命名页面')}</b><span>${esc((p.updated_at || p.created_at || '未记录').replace('T', ' ').slice(0, 16))}</span></button>`).join('') : '<div class="dataset-empty">暂无 Wiki 页面<br><small>问答整理或新建后会显示在这里</small></div>'}</aside>
+          <aside class="dataset-wiki-list"><div class="dataset-panel-heading small"><b>Wiki / 笔记</b><button class="btn sm primary" onclick="window.openCreateWikiModal('${esc(kbId || '')}')">新建</button></div>${wikiPages.length ? wikiPages.map(p => `<button class="dataset-wiki-item ${p.id === selectedWiki?.id ? 'active' : ''}" onclick="window.handleWikiSelect('${esc(p.id)}')"><b>${esc(p.title || '未命名页面')}</b><span>${esc((p.updated_at || p.created_at || '未记录').replace('T', ' ').slice(0, 16))}</span></button>`).join('') : '<div class="dataset-empty">暂无 Wiki 页面<br><small>问答整理或新建后会显示在这里</small></div>'}</aside>
           <article class="dataset-wiki-editor">${selectedWiki ? `<div class="dataset-panel-heading"><div><b>${esc(selectedWiki.title || '未命名页面')}</b><span class="muted">${selectedWiki.revision_count ?? '—'} 次修订 · ${esc(selectedWiki.status || '未记录')}</span></div><button class="btn" onclick="window.handleWikiEdit('${esc(selectedWiki.id)}')">编辑</button></div><div class="wiki-content-preview">${esc(String(selectedWiki.content_md || selectedWiki.content || '暂无正文内容')).replace(/\n/g, '<br>')}</div><div class="dataset-source-strip"><b>来源与版本</b><span>${esc(selectedWiki.source || '服务端 Wiki 记录')}</span><span>${esc(selectedWiki.updated_at || selectedWiki.created_at || '未记录')}</span></div>` : `<div class="dataset-empty large">📝<b>暂无 Wiki / 笔记</b><span>当前数据集还没有结构化笔记，创建后将参与下一次索引构建。</span></div>`}</article>
           <aside class="dataset-wiki-info"><b>知识库关联</b><dl><dt>所属知识库</dt><dd>${esc((api?.context?.knowledgeBases || []).find(k => k.id === kbId)?.name || kbId || '未记录')}</dd><dt>页面数量</dt><dd>${wikiPages.length}</dd><dt>索引参与</dt><dd>${wikiPages.length ? '<span class="ok-text">● 下次发布时纳入</span>' : '未记录'}</dd></dl><button class="btn" onclick="window.go('apps/chat')">从问答整理</button></aside>
         </div>
@@ -2209,8 +2262,8 @@
     } else if (currentTab === 'graph') {
       tabContentHtml = `
         <div class="dataset-graph-panel">
-          <div class="dataset-panel-heading"><div><b>知识图谱</b><span class="muted">${graphData ? `${graphData.entities?.length || 0} 个实体 · ${graphData.relations?.length || 0} 条关系` : '服务端未返回图谱数据'}</span></div><div><button class="btn" onclick="window.handleGraphRefresh()">刷新</button><button class="btn primary" onclick="window.openCreateGraphEntityModal && window.openCreateGraphEntityModal('${esc(activeDs.id)}')">新增实体</button></div></div>
-          ${graphData ? `<div class="graph-canvas"><svg viewBox="0 0 720 250" role="img" aria-label="知识图谱关系图"><path class="graph-edge" d="M130 125 L350 72 L580 125 M130 125 L350 180 L580 125"/><circle class="graph-node main" cx="130" cy="125" r="42"/><circle class="graph-node" cx="350" cy="72" r="36"/><circle class="graph-node" cx="350" cy="180" r="36"/><circle class="graph-node" cx="580" cy="125" r="42"/><text x="130" y="130">${esc((graphData.entities || [])[0]?.name || '实体')}</text><text x="350" y="77">${esc((graphData.entities || [])[1]?.name || '实体')}</text><text x="350" y="185">${esc((graphData.entities || [])[2]?.name || '实体')}</text><text x="580" y="130">${esc((graphData.entities || [])[3]?.name || '实体')}</text></svg></div><table class="dataset-table"><thead><tr><th>实体</th><th>类型</th><th>描述</th><th>来源</th></tr></thead><tbody>${(graphData.entities || []).slice(0, 12).map(e => `<tr><td><b>${esc(e.name || '未命名')}</b></td><td>${esc(e.type || '未记录')}</td><td>${esc(e.description || '—')}</td><td>${esc(e.source_chunk_id || '未记录')}</td></tr>`).join('') || '<tr><td colspan="4" class="dataset-empty">暂无实体</td></tr>'}</tbody></table>` : `<div class="dataset-empty large">🕸<b>知识图谱未启用或暂无数据</b><span>页面已接入图谱接口；服务端未返回实体时不显示示例节点。</span><span class="badge">状态：未记录</span></div>`}
+          <div class="dataset-panel-heading"><div><b>知识图谱</b><span class="muted">${graphData ? `${graphEntities.length} 个实体 · ${graphRelations.length} 条关系` : '服务端未返回图谱数据'}</span></div><div><button class="btn" onclick="window.handleGraphRefresh()">刷新</button><button class="btn primary" onclick="window.openCreateGraphEntityModal('${esc(activeDs.id)}')">新增实体</button></div></div>
+          ${graphHasData ? `<div class="graph-canvas"><svg viewBox="0 0 720 250" role="img" aria-label="知识图谱关系图">${graphEdgesSvg}${graphNodesSvg}</svg></div><table class="dataset-table"><thead><tr><th>实体</th><th>类型</th><th>描述</th><th>来源</th></tr></thead><tbody>${graphEntities.slice(0, 12).map(e => `<tr><td><b>${esc(e.name || '未命名')}</b></td><td>${esc(e.entity_type || e.type || '未记录')}</td><td>${esc(e.description || '—')}</td><td>${esc(e.source_chunk_id || '未记录')}</td></tr>`).join('') || '<tr><td colspan="4" class="dataset-empty">暂无实体</td></tr>'}</tbody></table>` : `<div class="dataset-empty large">🕸<b>${graphData ? '暂无知识图谱数据' : '知识图谱接口不可用'}</b><span>页面已接入图谱接口；服务端未返回实体或关系时不显示示例节点。</span><span class="badge">状态：${graphData ? '暂无记录' : '未记录'}</span></div>`}
         </div>
       `;
     } else if (currentTab === 'auth') {
@@ -2308,8 +2361,56 @@
     closeOverlay(); showToast('Wiki 修订已保存', 'ok'); render();
   };
 
+  window.openCreateWikiModal = function (knowledgeBaseId) {
+    if (!api || !api.connected) { showToast('离线演示模式不可创建服务端 Wiki', 'warn'); return; }
+    showOverlay(`<div class="modal-box" style="max-width:620px;"><div class="modal-header"><b>新建 Wiki / 笔记</b><button class="btn sm" data-close>✕</button></div><div class="modal-body"><label class="muted">标题</label><input class="input" id="wikiCreateTitle" placeholder="输入页面标题"><label class="muted" style="display:block;margin-top:12px;">正文 Markdown</label><textarea class="textarea" id="wikiCreateContent" placeholder="输入页面内容" style="min-height:260px;"></textarea></div><div class="modal-footer"><button class="btn" data-close>取消</button><button class="btn primary" onclick="window.handleCreateWiki('${esc(knowledgeBaseId || '')}')">创建页面</button></div></div>`);
+  };
+
+  window.handleCreateWiki = async function (knowledgeBaseId) {
+    const title = document.getElementById('wikiCreateTitle')?.value?.trim();
+    const contentMd = document.getElementById('wikiCreateContent')?.value || '';
+    if (!knowledgeBaseId || !title) { showToast('知识库和 Wiki 标题不能为空', 'warn'); return; }
+    const created = await api.createWiki({ knowledgeBaseId, title, contentMd });
+    if (!created) { showToast(api.lastError?.message || 'Wiki 创建失败', 'error'); return; }
+    closeOverlay(); state.datasetWikiId = created.id; showToast('Wiki 页面已创建', 'ok'); render();
+  };
+
+  window.openCreateGraphEntityModal = async function (datasetId) {
+    if (!api || !api.connected) { showToast('离线演示模式不可创建服务端图谱实体', 'warn'); return; }
+    const dataset = (state.currentDatasets || []).find(item => item.id === datasetId);
+    const knowledgeBaseId = dataset?.knowledge_base_id || api.context?.defaultKbId;
+    if (!knowledgeBaseId) { showToast('当前数据集未返回所属知识库，无法创建实体', 'warn'); return; }
+    showOverlay('<div class="modal-box"><div class="modal-header"><b>新增图谱实体</b><button class="btn sm" data-close>✕</button></div><div class="modal-body"><div class="muted">正在读取本体和知识块…</div></div></div>');
+    const [ontologyResult, chunkResult] = await Promise.all([api.getOntologies(knowledgeBaseId), api.getChunks(datasetId, { limit: 200 })]);
+    const ontologies = Array.isArray(ontologyResult) ? ontologyResult : [];
+    const chunks = Array.isArray(chunkResult) ? chunkResult : [];
+    const activeOntology = ontologies.find(item => item.status === 'active') || ontologies[0];
+    if (!activeOntology || !chunks.length) {
+      showOverlay(`<div class="modal-box"><div class="modal-header"><b>新增图谱实体</b><button class="btn sm" data-close>✕</button></div><div class="modal-body"><div class="dataset-empty">${!activeOntology ? '当前知识库尚无可用本体版本。' : '当前数据集尚无知识块可作为实体来源。'}<br><small>请先创建并发布本体，或完成文档解析。</small></div></div><div class="modal-footer"><button class="btn" data-close>关闭</button></div></div>`);
+      return;
+    }
+    let schema = activeOntology.schema_json || activeOntology.schema || {};
+    try { if (typeof schema === 'string') schema = JSON.parse(schema); } catch (e) { schema = {}; }
+    const entityTypes = (schema.entityTypes || []).map(item => typeof item === 'string' ? item : item?.name).filter(Boolean);
+    const typeOptions = (entityTypes.length ? entityTypes : ['Entity']).map(type => `<option value="${esc(type)}">${esc(type)}</option>`).join('');
+    const chunkOptions = chunks.map(chunk => `<option value="${esc(chunk.id)}">${esc(`${chunk.id} · ${(chunk.content_text || '').slice(0, 80)}`)}</option>`).join('');
+    showOverlay(`<div class="modal-box" style="max-width:620px;"><div class="modal-header"><b>新增图谱实体</b><button class="btn sm" data-close>✕</button></div><div class="modal-body"><label class="muted">实体名称</label><input class="input" id="graphEntityName" placeholder="输入实体名称"><label class="muted" style="display:block;margin-top:12px;">实体类型</label><select class="input" id="graphEntityType">${typeOptions}</select><label class="muted" style="display:block;margin-top:12px;">来源知识块</label><select class="input" id="graphEntityChunk">${chunkOptions}</select><div class="muted" style="font-size:11.5px;margin-top:8px;">本体：${esc(activeOntology.name || activeOntology.id)} · 记录会关联当前数据集。</div></div><div class="modal-footer"><button class="btn" data-close>取消</button><button class="btn primary" onclick="window.handleCreateGraphEntity('${esc(datasetId)}','${esc(activeOntology.id)}')">创建实体</button></div></div>`);
+  };
+
+  window.handleCreateGraphEntity = async function (datasetId, ontologyVersionId) {
+    const name = document.getElementById('graphEntityName')?.value?.trim();
+    const entityType = document.getElementById('graphEntityType')?.value;
+    const sourceChunkId = document.getElementById('graphEntityChunk')?.value;
+    if (!name || !entityType || !sourceChunkId) { showToast('请完整填写实体名称、类型和来源知识块', 'warn'); return; }
+    const created = await api.createGraphEntity(datasetId, { ontologyVersionId, entityType, name, sourceChunkId });
+    if (!created) { showToast(api.lastError?.message || '图谱实体创建失败', 'error'); return; }
+    closeOverlay(); showToast('图谱实体已创建', 'ok'); render();
+  };
+
   /* Interactive Database Connection Modal */
   window.openAddDatabaseModal = function() {
+    window._dbConnectorId = null;
+    window._dbConnectorFingerprint = null;
     const html = `
     <div class="modal-box" style="max-width:560px;">
       <div class="modal-header">
@@ -6735,6 +6836,8 @@
     const totalPub = asts.filter(a => a.status === 'published').length;
     const totalReqValue = asts.reduce((sum, a) => sum + (Number(a.requestsToday) || 0), 0);
     const totalReq = api?.connected ? totalReqValue : (totalReqValue || 86);
+    const assistantSuccessRate = api?.connected ? '未统计' : '98.2%';
+    const assistantRuntimeLabel = api?.connected ? (totalPub > 0 ? '有已发布助手' : '无已发布助手') : '演示运行中';
 
     const currentTab = state.assistantTab || 'basic';
 
@@ -6753,11 +6856,11 @@
               <div class="card-head" style="padding:0 0 10px;font-weight:600;">运行健康状态</div>
               <div class="card-body" style="padding:0;">
                 <div style="font-size:13px;color:var(--ink-dim);line-height:1.6;">
-                  当前助手运行于工作空间安全隔离环境中，问答交互经过不可变证据链校验与拒绝机制保护。
+                  ${api?.connected ? '服务端未提供独立助手运行指标；当前页面仅展示助手状态、数据集和发布记录。' : '演示模式：助手运行状态与安全能力为示例数据。'}
                 </div>
                 <div style="margin-top:12px;display:flex;gap:8px;">
-                  <span class="badge ok">✓ 证据校验开启</span>
-                  <span class="badge ok">✓ CORS 沙箱启用</span>
+                  <span class="badge ${cur.status === 'published' ? 'ok' : ''}">${cur.status === 'published' ? '✓ 已发布' : '未发布'}</span>
+                  <span class="badge">${api?.connected ? '运行指标未记录' : '演示数据'}</span>
                 </div>
               </div>
             </div>
@@ -6828,8 +6931,8 @@
           <div class="muted" style="font-size:12.5px;margin-bottom:12px;">此助手仅在指定知识库边界内进行多路召回与证据引用，禁止跨库越权检索。</div>
           <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--inset);border-radius:6px;border:1px solid var(--line);">
             <span>📁</span>
-            <b>${esc(cur.kb || '默认核心知识库')}</b>
-            <span class="badge ok" style="margin-left:auto;">已绑定</span>
+            <b>${esc(cur.kb || '未记录')}</b>
+            <span class="badge ${cur.datasetId ? 'ok' : ''}" style="margin-left:auto;">${cur.datasetId ? '已绑定' : '未绑定'}</span>
           </div>
         </div>
       `;
@@ -6846,13 +6949,13 @@
       ${statCard('bot', '助手总数', String(asts.length))}
       ${statCard('flow', '已发布', String(totalPub))}
       ${statCard('chart', '今日请求', String(totalReq))}
-      ${statCard('stack', '成功率', '98.2%', '<span class="ok-text">稳定</span>')}
+      ${statCard('stack', '成功率', assistantSuccessRate, api?.connected ? '<span class="muted">服务端未统计</span>' : '<span class="ok-text">演示</span>')}
     </div>
     <div class="workspace-layout-3 section-gap">
       <div class="card">
         <div class="card-head" style="display:flex;justify-content:space-between;align-items:center;">
           <span>智能助手 (${asts.length})</span>
-          <span class="badge ok">运行中</span>
+          <span class="badge ${totalPub > 0 ? 'ok' : ''}">${esc(assistantRuntimeLabel)}</span>
         </div>
         <div class="card-body" style="padding:8px;">
           <input class="input" placeholder="🔍 搜索助手名称" style="margin-bottom:10px;width:100%;height:32px;">
@@ -6876,7 +6979,7 @@
           <div style="display:flex;align-items:center;gap:12px;">
             <div class="stat-icon" style="width:40px;height:40px;flex:0 0 40px;font-size:22px;">🤖</div>
             <div>
-              <h3 style="font-size:16px;margin:0;">${esc(cur.name)} <span class="badge ${cur.status === 'published' ? 'ok' : ''}">${esc(cur.statusText || '已就绪')}</span> <span class="badge">${esc(cur.version || 'v1.0')} ⌄</span></h3>
+              <h3 style="font-size:16px;margin:0;">${esc(cur.name)} <span class="badge ${cur.status === 'published' ? 'ok' : ''}">${esc(cur.statusText || '未记录')}</span> <span class="badge">${esc(cur.version || '未发布')} ⌄</span></h3>
               <div class="muted" style="font-size:12px;margin-top:2px;">所属数据集: ${esc(cur.datasetName || cur.kb || '—')} · Release: ${esc(cur.releaseId ? (cur.version || '已发布') : '未发布')}</div>
             </div>
           </div>
@@ -7975,15 +8078,77 @@
   }
   window.openSearchModal = openSearchModal;
 
-    document.addEventListener('keydown', e => {
+  document.addEventListener('keydown', e => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
       e.preventDefault();
       openSearchModal();
+      return;
     }
     if (e.key === 'Escape') {
+      const workspacePopover = document.getElementById('ordoWorkspacePopover');
+      if (workspacePopover) { workspacePopover.remove(); document.getElementById('workspaceBtn')?.setAttribute('aria-expanded', 'false'); return; }
+      if (state.mobileOpen) { state.mobileOpen = false; renderShell(); return; }
       closeOverlay();
+      return;
+    }
+    if (e.key === 'Tab' && !document.getElementById('overlay')?.hidden) {
+      const overlay = document.getElementById('overlay');
+      const dialog = overlay?.querySelector('[role="dialog"]');
+      if (!dialog) return;
+      const focusables = Array.from(dialog.querySelectorAll(focusableSelector));
+      if (!focusables.length) { e.preventDefault(); dialog.focus(); return; }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
     }
   });
+
+  function enhanceRenderedA11y() {
+    const body = document.getElementById('body');
+    if (!body || typeof body.querySelectorAll !== 'function') return;
+    body.querySelectorAll('.dataset-tabs').forEach(tablist => {
+      tablist.setAttribute('role', 'tablist');
+      const tabs = Array.from(tablist.querySelectorAll('.dataset-tab-item'));
+      tabs.forEach((tab, index) => {
+        tab.setAttribute('role', 'tab');
+        tab.setAttribute('tabindex', tab.classList.contains('active') ? '0' : '-1');
+        tab.setAttribute('aria-selected', String(tab.classList.contains('active')));
+        tab.onclick = () => { state.datasetTab = ['data', 'wiki', 'graph', 'versions', 'index', 'auth'][index] || 'data'; render(); };
+        tab.onkeydown = event => {
+          if (!['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return;
+          event.preventDefault();
+          const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+          tabs[next].focus();
+        };
+      });
+    });
+    body.querySelectorAll('.model-underline-tabs').forEach(tablist => {
+      tablist.setAttribute('role', 'tablist');
+      tablist.querySelectorAll('.model-tab-btn').forEach(tab => {
+        tab.setAttribute('role', 'tab');
+        tab.setAttribute('tabindex', tab.classList.contains('active') ? '0' : '-1');
+        tab.setAttribute('aria-selected', String(tab.classList.contains('active')));
+      });
+    });
+    body.querySelectorAll('.progress-bar-wrap').forEach(track => {
+      const fill = track.querySelector('.progress-bar-fill');
+      const width = fill?.style.width || '0%';
+      track.setAttribute('role', 'progressbar');
+      track.setAttribute('aria-valuemin', '0');
+      track.setAttribute('aria-valuemax', '100');
+      track.setAttribute('aria-valuenow', String(parseFloat(width) || 0));
+      track.setAttribute('aria-label', track.getAttribute('aria-label') || '进度');
+    });
+    body.querySelectorAll('table').forEach(table => {
+      table.setAttribute('role', 'table');
+      if (!table.getAttribute('aria-label')) {
+        const heading = table.closest('.card,.dataset-graph-panel,.dataset-auth-panel')?.querySelector('.card-head,.dataset-panel-heading b');
+        if (heading) table.setAttribute('aria-label', heading.textContent.trim());
+      }
+      table.querySelectorAll('th').forEach(th => th.setAttribute('scope', 'col'));
+    });
+  }
 
   async function render() {
     state.page = readPage();
@@ -8021,6 +8186,7 @@
       descEl.style.display = res.desc ? 'block' : 'none';
       document.getElementById('actions').innerHTML = res.actions || '';
       document.getElementById('body').innerHTML = res.html || '';
+      enhanceRenderedA11y();
     } catch (err) {
       console.error('Page render error on ' + state.page + ':', err);
       document.getElementById('body').innerHTML = `
@@ -8104,22 +8270,34 @@
     document.body.appendChild(pop);
   };
 
+  window.handleWorkspaceSelect = function (workspaceName) {
+    state.currentWorkspace = workspaceName;
+    const title = document.getElementById('workspaceBtn')?.querySelector?.('.workspace-title');
+    if (title) title.textContent = workspaceName;
+    document.getElementById('workspaceBtn')?.setAttribute?.('aria-expanded', 'false');
+    document.getElementById('ordoWorkspacePopover')?.remove?.();
+    showToast(`已切换至：${workspaceName}`, 'ok');
+  };
+
   window.toggleWorkspaceSwitcher = function() {
     let pop = document.getElementById('ordoWorkspacePopover');
     if (pop) {
       pop.remove();
+      document.getElementById('workspaceBtn')?.setAttribute('aria-expanded', 'false');
       return;
     }
     pop = document.createElement('div');
     pop.id = 'ordoWorkspacePopover';
+    pop.setAttribute('role', 'menu');
+    document.getElementById('workspaceBtn')?.setAttribute('aria-expanded', 'true');
     pop.style.cssText = 'position:fixed;top:48px;left:210px;width:240px;background:var(--card-bg);border:1px solid var(--line);box-shadow:0 10px 25px rgba(0,0,0,0.1);border-radius:8px;z-index:9999;padding:8px;';
     pop.innerHTML = `
       <div style="font-size:11px;color:var(--ink-dim);padding:4px 8px;">切换工作空间</div>
-      <div class="list-item-row" style="padding:8px;border-radius:6px;cursor:pointer;background:var(--accent-soft);" onclick="state.currentWorkspace='Ordo 企业空间';document.getElementById('workspaceBtn').querySelector('.workspace-title').textContent='Ordo 企业空间';this.closest('#ordoWorkspacePopover').remove();showToast('已切换至：Ordo 企业空间','ok');">
+      <div class="list-item-row" style="padding:8px;border-radius:6px;cursor:pointer;background:var(--accent-soft);" onclick="window.handleWorkspaceSelect('Ordo 企业空间')" role="menuitem" tabindex="0">
         <div><b style="font-size:12.5px;color:var(--accent);">🏢 Ordo 企业空间</b><div class="muted" style="font-size:10.5px;">当前激活 · 12 个成员</div></div>
         <span style="color:var(--accent);font-weight:700;">✓</span>
       </div>
-      <div class="list-item-row" style="padding:8px;border-radius:6px;cursor:pointer;margin-top:4px;" onclick="state.currentWorkspace='个人知识空间';document.getElementById('workspaceBtn').querySelector('.workspace-title').textContent='个人知识空间';this.closest('#ordoWorkspacePopover').remove();showToast('已切换至：个人知识空间','ok');">
+      <div class="list-item-row" style="padding:8px;border-radius:6px;cursor:pointer;margin-top:4px;" onclick="window.handleWorkspaceSelect('个人知识空间')" role="menuitem" tabindex="0">
         <div><b style="font-size:12.5px;">👤 个人知识空间</b><div class="muted" style="font-size:10.5px;">本地私有 · 原位索引</div></div>
       </div>
     `;

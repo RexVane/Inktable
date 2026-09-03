@@ -1,6 +1,6 @@
 'use strict';
 
-const { id, now, required, AppError } = require('./core');
+const { id, now, required, AppError, parseJson, stableJson } = require('./core');
 const { formatLocator } = require('./models');
 
 class QueryService {
@@ -68,13 +68,19 @@ class QueryService {
     return { deleted: true };
   }
 
-  async ask(conversationId, input, workspaceId = this.config.localWorkspaceId, requestId) {
-    return this.askStream(conversationId, input, workspaceId, requestId, null);
+  async ask(conversationId, input, workspaceId = this.config.localWorkspaceId, requestId, traceMetadata = {}) {
+    return this.askStream(conversationId, input, workspaceId, requestId, null, traceMetadata);
   }
 
-  async askStream(conversationId, input, workspaceId = this.config.localWorkspaceId, requestId, onEvent = null) {
+  async askStream(conversationId, input, workspaceId = this.config.localWorkspaceId, requestId, onEvent = null, traceMetadata = {}) {
     const conversation = this.getConversation(conversationId, workspaceId);
     if (conversation.status !== 'active') throw new AppError(409, 'INVALID_STATE', '当前会话不可继续问答');
+    const metadataConfig = traceMetadata.configSnapshot || {};
+    if (metadataConfig.modelConnectionId !== undefined && metadataConfig.modelConnectionId !== null) {
+      this.models.get(metadataConfig.modelConnectionId, workspaceId);
+      conversation.model_connection_id = metadataConfig.modelConnectionId;
+    }
+    if (metadataConfig.strictEvidence !== undefined) conversation.strict_evidence = metadataConfig.strictEvidence ? 1 : 0;
     const question = required(input.question ?? input.query, 'question');
     // Delay persistence until generation and citation validation succeed. This
     // prevents a failed request from leaving a half-finished user message.
@@ -212,9 +218,18 @@ class QueryService {
       this.db.run("INSERT INTO messages(id,workspace_id,conversation_id,role,content,evidence_status,trace_id,metadata_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
         assistantMessageId, workspaceId, conversationId, 'assistant', generated.content, evidenceStatus, traceId,
         JSON.stringify({ provider: generated.provider, modelId: generated.modelId, degraded }), finished);
-      this.db.run(`INSERT INTO query_traces(id,workspace_id,conversation_id,message_id,release_id,query,status,evidence_status,stages_json,metrics_json,created_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?)`, traceId, workspaceId, conversationId, assistantMessageId, conversation.release_id, question,
-        degraded ? 'degraded' : 'succeeded', evidenceStatus, JSON.stringify(stages), JSON.stringify({ totalMs: Math.round(performance.now() - started), candidateCount: candidates.length, selectedEvidence: selected.length }), finished);
+      const configSnapshot = traceMetadata.configSnapshot || {
+        modelConnectionId: conversation.model_connection_id || null,
+        strictEvidence: Boolean(conversation.strict_evidence),
+        topK: input.topK || 8
+      };
+      const inputSnapshot = traceMetadata.inputSnapshot || { question, topK: input.topK || 8, ...(traceMetadata.idempotencyKey ? { idempotencyKey: traceMetadata.idempotencyKey } : {}) };
+      const permissionSnapshot = traceMetadata.permissionSnapshot || { workspaceId, conversationId, datasetId: conversation.dataset_id, releaseId: conversation.release_id };
+      this.db.run(`INSERT INTO query_traces(id,workspace_id,conversation_id,message_id,release_id,query,status,evidence_status,stages_json,metrics_json,created_at,parent,root,trace_type,replay_from_stage,config_snapshot,input_snapshot,permission_snapshot,retention)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, traceId, workspaceId, conversationId, assistantMessageId, conversation.release_id, question,
+        degraded ? 'degraded' : 'succeeded', evidenceStatus, JSON.stringify(stages), JSON.stringify({ totalMs: Math.round(performance.now() - started), candidateCount: candidates.length, selectedEvidence: selected.length }), finished,
+        traceMetadata.parentTraceId || null, traceMetadata.rootTraceId || traceId, traceMetadata.traceType || 'original', traceMetadata.replayFromStage || null,
+        JSON.stringify(configSnapshot), JSON.stringify(inputSnapshot), JSON.stringify(permissionSnapshot), traceMetadata.retention || 'standard');
       validOrdinals.forEach((ordinal, index) => {
         const item = selected[ordinal - 1];
         this.db.run(`INSERT INTO citations(id,workspace_id,trace_id,message_id,release_id,document_id,document_revision_id,chunk_revision_id,title,locator_json,excerpt,ordinal,created_at)
@@ -244,6 +259,10 @@ class QueryService {
   getTrace(traceId, workspaceId = this.config.localWorkspaceId) {
     const trace = this.db.one('SELECT * FROM query_traces WHERE id=? AND workspace_id=?', traceId, workspaceId);
     if (!trace) throw new AppError(404, 'NOT_FOUND', '问答 Trace 不存在或不可访问');
+    // Snapshot columns were added after the original trace schema. Parse them
+    // explicitly so old rows (and new rows) have the same public shape.
+    for (const field of ['config_snapshot', 'input_snapshot', 'permission_snapshot']) trace[field] = parseJson(trace[field], {});
+    if (!trace.root) trace.root = trace.id;
     trace.citations = this.db.all('SELECT id,title,locator_json,excerpt,ordinal,document_id,document_revision_id,chunk_revision_id,release_id FROM citations WHERE trace_id=? AND workspace_id=? ORDER BY ordinal', traceId, workspaceId);
     return trace;
   }
@@ -255,6 +274,94 @@ class QueryService {
     const total = this.db.one(`SELECT COUNT(*) AS count FROM query_traces WHERE ${clauses.join(' AND ')}`, ...params)?.count || 0;
     const items = this.db.all(`SELECT * FROM query_traces WHERE ${clauses.join(' AND ')} ORDER BY created_at DESC LIMIT ? OFFSET ?`, ...params, limit, offset);
     return { items, total, limit, offset };
+  }
+
+  async replayTrace(traceId, input = {}, workspaceId = this.config.localWorkspaceId, requestId, idempotencyKey = null) {
+    const source = this.getTrace(traceId, workspaceId);
+    const body = input && typeof input === 'object' ? input : {};
+    const fromStage = body.fromStage === undefined || body.fromStage === null || body.fromStage === '' ? null : String(body.fromStage);
+    // The query pipeline currently persists all stage inputs together. Only a
+    // replay from the pipeline boundary is therefore a real replay; claiming
+    // that a later stage can be resumed would silently fabricate state.
+    const supported = new Set(['问题解析', 'question_parse', 'parse', 'start', 'all']);
+    if (fromStage && !supported.has(fromStage)) {
+      throw new AppError(422, 'REPLAY_UNSUPPORTED', `不支持从阶段“${fromStage}”重放：当前仅支持从问题解析阶段重新执行完整问答流水线`, { fromStage, supportedFromStages: [...supported] });
+    }
+    const overrides = body.overrides && typeof body.overrides === 'object' && !Array.isArray(body.overrides) ? body.overrides : {};
+    const allowed = ['question', 'query', 'topK', 'modelConnectionId', 'strictEvidence'];
+    const unknown = Object.keys(overrides).filter(key => !allowed.includes(key));
+    if (unknown.length) throw new AppError(400, 'VALIDATION_ERROR', 'replay overrides 包含不支持的字段', { fields: unknown });
+    const replayInput = {
+      question: overrides.question ?? overrides.query ?? source.query,
+      ...(overrides.topK === undefined ? {} : { topK: overrides.topK }),
+      ...(overrides.modelConnectionId === undefined ? {} : { modelConnectionId: overrides.modelConnectionId }),
+      ...(overrides.strictEvidence === undefined ? {} : { strictEvidence: overrides.strictEvidence })
+    };
+    const requestFingerprint = stableJson({ sourceTraceId: traceId, fromStage, overrides: replayInput });
+    if (idempotencyKey) {
+      const existing = this.db.one("SELECT * FROM query_traces WHERE workspace_id=? AND trace_type='replay' AND json_extract(input_snapshot,'$.idempotencyKey')=? ORDER BY created_at LIMIT 1", workspaceId, String(idempotencyKey));
+      if (existing) {
+        const existingInput = parseJson(existing.input_snapshot, {});
+        if (existingInput.requestFingerprint !== requestFingerprint) throw new AppError(409, 'IDEMPOTENCY_CONFLICT', '相同幂等键对应了不同的 Trace 重放输入');
+        const existingTrace = this.getTrace(existing.id, workspaceId);
+        return { trace: existingTrace, assistantMessage: existingTrace.message_id ? this.db.one('SELECT * FROM messages WHERE id=? AND workspace_id=?', existingTrace.message_id, workspaceId) : null, replayed: false, idempotent: true };
+      }
+    }
+    const configSnapshot = {
+      modelConnectionId: overrides.modelConnectionId !== undefined ? overrides.modelConnectionId : source.config_snapshot?.modelConnectionId ?? null,
+      strictEvidence: overrides.strictEvidence !== undefined ? Boolean(overrides.strictEvidence) : source.config_snapshot?.strictEvidence ?? true,
+      topK: overrides.topK !== undefined ? overrides.topK : source.config_snapshot?.topK ?? 8
+    };
+    const result = await this.ask(source.conversation_id, replayInput, workspaceId, requestId, {
+      parentTraceId: traceId,
+      rootTraceId: source.root || source.id,
+      traceType: 'replay',
+      replayFromStage: fromStage || '问题解析',
+      configSnapshot,
+      inputSnapshot: { sourceTraceId: traceId, fromStage: fromStage || '问题解析', overrides: replayInput, idempotencyKey: idempotencyKey ? String(idempotencyKey) : null, requestFingerprint },
+      permissionSnapshot: source.permission_snapshot || { workspaceId, conversationId: source.conversation_id, releaseId: source.release_id },
+      retention: source.retention || 'standard',
+      idempotencyKey: idempotencyKey ? String(idempotencyKey) : null
+    });
+    return { trace: result.trace, userMessage: result.userMessage, assistantMessage: result.assistantMessage, replayed: true, idempotent: false };
+  }
+
+  compareTraces(traceId, otherTraceId, workspaceId = this.config.localWorkspaceId) {
+    const left = this.getTrace(traceId, workspaceId);
+    const right = this.getTrace(otherTraceId, workspaceId);
+    const parseStages = trace => Array.isArray(trace.stages) ? trace.stages : parseJson(trace.stages_json, []);
+    const leftStages = parseStages(left);
+    const rightStages = parseStages(right);
+    const stageNames = [...new Set([...leftStages, ...rightStages].map(stage => stage.name))];
+    const stages = stageNames.map(name => {
+      const a = leftStages.find(stage => stage.name === name) || null;
+      const b = rightStages.find(stage => stage.name === name) || null;
+      return { name, left: a, right: b, durationDiffMs: (b?.durationMs || 0) - (a?.durationMs || 0), statusChanged: (a?.status || null) !== (b?.status || null) };
+    });
+    const candidatesFrom = trace => {
+      const stage = parseStages(trace).find(item => item.name === '多路召回');
+      const output = stage?.output || {};
+      return Array.isArray(output.fusion) ? output.fusion : [];
+    };
+    const leftCandidates = candidatesFrom(left);
+    const rightCandidates = candidatesFrom(right);
+    const key = candidate => candidate.chunkRevisionId || candidate.documentId || candidate.title;
+    const leftKeys = new Set(leftCandidates.map(key));
+    const rightKeys = new Set(rightCandidates.map(key));
+    const candidates = {
+      left: leftCandidates, right: rightCandidates,
+      added: rightCandidates.filter(item => !leftKeys.has(key(item))),
+      removed: leftCandidates.filter(item => !rightKeys.has(key(item))),
+      common: rightCandidates.filter(item => leftKeys.has(key(item)))
+    };
+    const answerFrom = trace => trace.message_id ? this.db.one("SELECT id,content,evidence_status FROM messages WHERE id=? AND workspace_id=? AND role='assistant'", trace.message_id, workspaceId) : null;
+    const leftAnswer = answerFrom(left);
+    const rightAnswer = answerFrom(right);
+    const leftMs = Number(left.metrics?.totalMs || 0);
+    const rightMs = Number(right.metrics?.totalMs || 0);
+    const answer = { left: leftAnswer, right: rightAnswer, changed: (leftAnswer?.content || '') !== (rightAnswer?.content || ''), contentChanged: (leftAnswer?.content || '') !== (rightAnswer?.content || '') };
+    const timing = { leftMs, rightMs, deltaMs: rightMs - leftMs };
+    return { traceId, otherTraceId, stages, stageDiffs: stages, candidates, candidateDiff: candidates, answer, answers: answer, timing, durationDiffMs: timing.deltaMs };
   }
 
   openCitation(citationId, workspaceId = this.config.localWorkspaceId) {

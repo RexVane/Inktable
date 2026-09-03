@@ -114,6 +114,23 @@ test('all P1, P2 and P3 wired endpoints, handlers and security contracts are ver
   assert.match(app, /home-bottom-card/);
 });
 
+test('stage 1 accessibility and responsive interaction contracts are wired', () => {
+  assert.match(app, /class="workspace-title"/);
+  assert.match(app, /handleWorkspaceSelect/);
+  assert.match(app, /mobile-open/);
+  assert.match(app, /drawer-backdrop/);
+  assert.match(app, /state\.mobileOpen = false/);
+  assert.match(app, /aria-modal/);
+  assert.match(app, /aria-labelledby/);
+  assert.match(app, /focusOverlayFirst/);
+  assert.match(app, /e\.key === 'Tab'/);
+  assert.match(app, /requestAnimationFrame\(\(\) => opener\.focus\(\)\)/);
+  assert.match(app, /setAttribute\('role', 'tablist'\)/);
+  assert.match(app, /setAttribute\('role', 'progressbar'\)/);
+  assert.match(css, /drawer-backdrop\.is-visible/);
+  assert.match(css, /overflow-wrap: anywhere/);
+});
+
 test('online management views use real entities, task outcomes, routes and honest fallbacks', () => {
   assert.match(app, /async getAssistant\(id\)/);
   assert.match(app, /async getDataset\(dsId\)/);

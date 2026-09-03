@@ -571,6 +571,23 @@ CREATE TABLE handoff_requests (
     sql: `
 ALTER TABLE knowledge_bases ADD COLUMN default_index_profile_id TEXT;
 `
+  },
+  {
+    version: 4,
+    name: 'trace_replay_metadata',
+    sql: `
+ALTER TABLE query_traces ADD COLUMN parent TEXT REFERENCES query_traces(id);
+ALTER TABLE query_traces ADD COLUMN root TEXT REFERENCES query_traces(id);
+ALTER TABLE query_traces ADD COLUMN trace_type TEXT NOT NULL DEFAULT 'original';
+ALTER TABLE query_traces ADD COLUMN replay_from_stage TEXT;
+ALTER TABLE query_traces ADD COLUMN config_snapshot TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE query_traces ADD COLUMN input_snapshot TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE query_traces ADD COLUMN permission_snapshot TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE query_traces ADD COLUMN retention TEXT NOT NULL DEFAULT 'standard';
+UPDATE query_traces SET root=id WHERE root IS NULL;
+CREATE INDEX idx_query_traces_parent ON query_traces(workspace_id,parent,created_at);
+CREATE INDEX idx_query_traces_root ON query_traces(workspace_id,root,created_at);
+`
   }
 ];
 

@@ -99,6 +99,49 @@ test('R1 product loop persists source, release, query trace, citation and backup
   assert.ok(audit.count > 10);
 });
 
+test('trace replay creates an immutable child, supports idempotency, and compares runs', async t => {
+  const { request } = await fixture(t);
+  const kb = (await request('POST', '/api/v1/knowledge-bases', { name: 'Trace 重放测试库' })).json().data;
+  const dataset = kb.datasets[0];
+  const source = (await request('POST', `/api/v1/datasets/${dataset.id}/sources`, { type: 'upload', name: 'Trace 依据' })).json().data;
+  const upload = multipart('trace-replay.md', '# Trace 重放\n\n运行 npm start 启动服务。', { sourceId: source.id });
+  const registered = (await request('POST', `/api/v1/datasets/${dataset.id}/files`, upload.payload, upload.headers)).json().data;
+  await waitTask(request, registered.task.id);
+  const release = (await request('POST', `/api/v1/datasets/${dataset.id}/releases`, { activate: true })).json().data;
+  await waitTask(request, release.id);
+  const conversation = (await request('POST', '/api/v1/conversations', { knowledgeBaseId: kb.id, datasetId: dataset.id })).json().data;
+  const original = (await request('POST', `/api/v1/conversations/${conversation.id}/messages`, { question: '如何启动 Ordo？' })).json().data.trace;
+  const originalBefore = JSON.stringify(original);
+
+  const replayResponse = await request('POST', `/api/v1/traces/${original.id}/replay`, { fromStage: '问题解析', overrides: { topK: 4 } }, { 'idempotency-key': 'trace-replay-e2e-1' });
+  const replay = replayResponse.json().data;
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.trace.trace_type, 'replay');
+  assert.equal(replay.trace.parent, original.id);
+  assert.equal(replay.trace.root, original.id);
+  assert.equal(replay.trace.replay_from_stage, '问题解析');
+  assert.equal(replay.trace.input_snapshot.sourceTraceId, original.id);
+  assert.equal(replay.trace.config_snapshot.topK, 4);
+
+  const originalAfter = (await request('GET', `/api/v1/traces/${original.id}`)).json().data;
+  assert.equal(JSON.stringify(originalAfter), originalBefore);
+
+  const repeated = (await request('POST', `/api/v1/traces/${original.id}/replay`, { fromStage: '问题解析', overrides: { topK: 4 } }, { 'idempotency-key': 'trace-replay-e2e-1' })).json().data;
+  assert.equal(repeated.idempotent, true);
+  assert.equal(repeated.trace.id, replay.trace.id);
+
+  const compared = (await request('GET', `/api/v1/traces/${original.id}/compare/${replay.trace.id}`)).json().data;
+  assert.equal(compared.traceId, original.id);
+  assert.equal(compared.otherTraceId, replay.trace.id);
+  assert.equal(Array.isArray(compared.stages), true);
+  assert.equal(compared.stages.length, 8);
+  assert.equal(typeof compared.timing.deltaMs, 'number');
+
+  const unsupported = await requestError(request, 'POST', `/api/v1/traces/${original.id}/replay`, { fromStage: '回答生成' });
+  assert.equal(unsupported.statusCode, 422);
+  assert.equal(unsupported.json().error.code, 'REPLAY_UNSUPPORTED');
+});
+
 test('security boundaries reject unauthenticated writes, CSRF bypass and unsupported files', async t => {
   const { app, request } = await fixture(t);
   const unauthorized = await app.inject({ method: 'POST', url: '/api/v1/knowledge-bases', payload: { name: 'blocked' } });
@@ -429,6 +472,17 @@ test('runtime schema version and list pagination metadata come from persisted da
   assert.ok(manifest);
   assert.equal(manifest.schemaVersion, expectedSchemaVersion);
 });
+
+async function requestError(request, method, url, payload, headers = {}) {
+  try {
+    await request(method, url, payload, headers);
+    throw new Error(`${method} ${url} unexpectedly succeeded`);
+  } catch (error) {
+    const match = String(error.message || '').match(/-> (\d+): (\{.*\})$/s);
+    if (!match) throw error;
+    return { statusCode: Number(match[1]), json: () => JSON.parse(match[2]) };
+  }
+}
 
 async function authHeaders(app) {
   const bootstrap = await app.inject({ method: 'GET', url: '/api/v1/session/bootstrap' });
