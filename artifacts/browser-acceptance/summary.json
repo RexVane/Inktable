@@ -1,0 +1,14 @@
+{
+  "generatedAt": "2026-09-03",
+  "routeCount": 20,
+  "viewportCount": 5,
+  "passCount": 100,
+  "failCount": 0,
+  "modalJourneys": {
+    "count": 2,
+    "viewportCount": 2,
+    "passCount": 4,
+    "failCount": 0
+  },
+  "rule": "final DOM title non-empty, no render error, root/page scroll width within viewport"
+}

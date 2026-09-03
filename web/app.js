@@ -649,7 +649,7 @@
   }
 
   // Mount core navigation, modals, and toast utilities on window for inline HTML onclick handlers
-  const overlayState = { opener: null, focusables: [], keydown: null };
+  const overlayState = { opener: null, openerId: null, focusables: [], keydown: null };
   const focusableSelector = 'a[href], area[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
   function focusOverlayFirst(overlay) {
     const dialog = overlay?.querySelector('[role="dialog"], .modal-box, .modal, .search-palette');
@@ -657,13 +657,20 @@
     overlayState.focusables = Array.from(dialog.querySelectorAll(focusableSelector));
     const target = dialog.querySelector('[autofocus]') || overlayState.focusables[0] || dialog;
     if (target === dialog && !dialog.hasAttribute('tabindex')) dialog.setAttribute('tabindex', '-1');
-    requestAnimationFrame(() => target.focus());
+    // Focus synchronously so keyboard users enter the dialog before the next event.
+    target.focus();
+    requestAnimationFrame(() => {
+      if (document.activeElement !== target && document.contains(target)) target.focus();
+    });
   }
   function wireOverlayA11y(overlay) {
     const dialog = overlay.querySelector('[role="dialog"], .modal-box, .modal, .search-palette');
     if (!dialog) return;
     dialog.setAttribute('role', 'dialog');
     dialog.setAttribute('aria-modal', 'true');
+    if (!dialog.getAttribute('aria-label') && !dialog.getAttribute('aria-labelledby')) {
+      dialog.setAttribute('aria-label', dialog.classList.contains('search-palette') ? '全局搜索' : '对话框');
+    }
     if (!dialog.getAttribute('aria-labelledby')) {
       const heading = dialog.querySelector('.modal-header h1,.modal-header h2,.modal-header h3,.modal-header b,.modal-header strong,.modal-header,[data-dialog-title]');
       if (heading) { if (!heading.id) heading.id = `ordo-dialog-title-${Date.now()}`; dialog.setAttribute('aria-labelledby', heading.id); }
@@ -671,9 +678,32 @@
     overlay.setAttribute('aria-hidden', 'false');
     overlay.onclick = (event) => { if (event.target === overlay) window.closeOverlay(); };
     overlay.querySelectorAll('[data-close]').forEach(button => {
-      button.type = button.type || 'button';
+      button.setAttribute('type', 'button');
       button.setAttribute('aria-label', button.getAttribute('aria-label') || '关闭');
       button.onclick = window.closeOverlay;
+    });
+    dialog.addEventListener('keydown', event => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        window.closeOverlay();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusables = Array.from(dialog.querySelectorAll(focusableSelector));
+      if (!focusables.length) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     });
     focusOverlayFirst(overlay);
   }
@@ -698,6 +728,7 @@
     const overlay = document.getElementById('overlay');
     if (!overlay) return null;
     overlayState.opener = document.activeElement && document.activeElement !== document.body ? document.activeElement : null;
+    overlayState.openerId = overlayState.opener?.id || null;
     overlay.innerHTML = html;
     overlay.hidden = false;
     wireOverlayA11y(overlay);
@@ -711,9 +742,19 @@
     overlay.setAttribute('aria-hidden', 'true');
     overlay.innerHTML = '';
     const opener = overlayState.opener;
+    const openerId = overlayState.openerId;
     overlayState.opener = null;
+    overlayState.openerId = null;
     overlayState.focusables = [];
-    if (opener && typeof opener.focus === 'function' && document.contains(opener)) requestAnimationFrame(() => opener.focus());
+    const restoreFocus = () => {
+      const target = opener && document.contains(opener)
+        ? opener
+        : (openerId ? document.getElementById(openerId) : null);
+      if (target && typeof target.focus === 'function') target.focus();
+      return target;
+    };
+    restoreFocus();
+    requestAnimationFrame(restoreFocus);
   };
   function closeOverlay() { window.closeOverlay(); }
 
@@ -791,7 +832,7 @@
       }
 
       itemsHtml += `
-        <div style="display: flex; align-items: center; gap: 6px; cursor: pointer; flex-shrink: 0;" onclick="window.location.hash='#/qaflow/${flowRoutes[i]}'">
+        <div class="qa-trace-item" style="display: flex; align-items: center; gap: 6px; cursor: pointer; flex-shrink: 1; min-width: 0;" onclick="window.location.hash='#/qaflow/${flowRoutes[i]}'">
           <div style="width: 22px; height: 22px; border-radius: 50%; ${circleStyle} display: flex; align-items: center; justify-content: center; font-size: 11.5px;">
             ${i + 1}
           </div>
@@ -807,8 +848,8 @@
     }
 
     return `
-    <div style="margin-bottom: 20px; width: 100%;">
-      <div style="display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 6px 4px 14px; border-bottom: 1.5px solid #f1f5f9;">
+    <div class="qa-trace-header" style="margin-bottom: 20px; width: 100%;">
+      <div class="qa-trace-header-row" style="display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 6px 4px 14px; border-bottom: 1.5px solid #f1f5f9;">
         ${itemsHtml}
       </div>
     </div>`;
@@ -839,11 +880,11 @@
         <button class="icon-btn" id="drawer" type="button" title="${state.collapsed ? '展开导航' : '收起导航'}" aria-label="${state.mobileOpen ? '关闭导航' : (state.collapsed ? '展开导航' : '收起导航')}" aria-expanded="${state.mobileOpen ? 'true' : 'false'}" aria-controls="sidebar">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
         </button>
-        <button class="icon-btn" id="searchBtn" type="button" title="全局搜索 (Ctrl+K)">
+        <button class="icon-btn" id="searchBtn" type="button" title="全局搜索 (Ctrl+K)" onclick="openSearchModal()">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         </button>
       </div>
-      <button class="new-chat" id="newChat" type="button">
+      <button class="new-chat" id="newChat" type="button" onclick="openNewChatModal()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         <span class="label">＋ 新对话</span>
       </button>
@@ -6794,7 +6835,10 @@
 
   /* 16 AI应用 > 智能助手 - 100% 对应 16-AI应用-智能助手.png */
   async function pageAssistants() {
-    let asts = (state.assistants && state.assistants.length) ? state.assistants : [];
+    const normalizedAssistants = Array.isArray(state.assistants)
+      ? state.assistants.filter(a => a && typeof a === 'object' && a.id)
+      : [];
+    let asts = normalizedAssistants.length ? normalizedAssistants : [];
     if (!asts.length && (!api || !api.connected)) {
       asts = [
         { id: 'ast-1', name: '产品问答助手 (演示)', status: 'published', statusText: '已发布', kb: '产品文档库', version: 'v1.2.3', desc: '面向网站访客的产品信息问答助手。', requestsToday: 86 },
@@ -6814,7 +6858,7 @@
     if (api && api.connected && cur.backendId) {
       assistantDetail = await api.getAssistant(cur.backendId);
       if (assistantDetail) {
-        const activeRelease = (assistantDetail.releases || []).find(r => r.id === assistantDetail.active_release_id) || null;
+        const activeRelease = (Array.isArray(assistantDetail.releases) ? assistantDetail.releases : []).find(r => r && r.id === assistantDetail.active_release_id) || null;
         let dataset = null;
         if (assistantDetail.dataset_id) dataset = await api.getDataset(assistantDetail.dataset_id);
         cur = { ...cur,
@@ -6829,7 +6873,7 @@
           releaseStatus: activeRelease?.status || null,
           releaseCreatedAt: activeRelease?.created_at || null
         };
-        state.assistants = state.assistants.map(item => item.id === cur.id ? { ...item, ...cur } : item);
+        state.assistants = (Array.isArray(state.assistants) ? state.assistants : []).filter(item => item && typeof item === 'object').map(item => item.id === cur.id ? { ...item, ...cur } : item);
       }
     }
 
@@ -8063,7 +8107,7 @@
       <div class="search-palette-top">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         <input id="spotlightInput" placeholder="搜索页面、知识库、文件、Wiki、会话或助手..." autofocus oninput="filterSearchModal(this.value);">
-        <span class="muted" style="font-size:11px;">Esc 关闭</span>
+        <button class="btn sm" type="button" data-close aria-label="关闭">Esc 关闭</button>
       </div>
       <div class="search-results-list" id="spotlightResults">
       </div>

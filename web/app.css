@@ -637,11 +637,13 @@ pre, code { max-width: 100%; overflow-x: auto; white-space: pre-wrap; overflow-w
 /* 03 数据集 Exact Replica from 03-知识库-数据集.png */
 .dataset-layout-root {
   display: grid;
-  grid-template-columns: 260px 1fr;
+  grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
   gap: 18px;
   width: 100%;
+  min-width: 0;
   align-items: start;
 }
+.dataset-layout-root > *, .dataset-main-card, .dataset-content-grid, .dataset-table-col { min-width: 0; max-width: 100%; }
 .dataset-left-card {
   background: var(--card-bg);
   border: 1px solid var(--line);
@@ -1932,8 +1934,11 @@ pre, code { max-width: 100%; overflow-x: auto; white-space: pre-wrap; overflow-w
   .sidebar.mobile-open { transform: translateX(0); }
   .drawer-backdrop { position: fixed; inset: 0; display: block; visibility: hidden; opacity: 0; background: rgba(15,23,42,.42); z-index: 55; transition: opacity 200ms var(--ease), visibility 200ms var(--ease); }
   .drawer-backdrop.is-visible { visibility: visible; opacity: 1; }
-  .workspace-layout-3, .workspace-layout-dataset, .dataset-layout-root, .registry-columns-layout, .parsing-three-columns, .model-workspace-layout, .chat-page-layout, .qa-router-diagram-wrap, .qa-fusion-layout, .workspace-layout-indexing { grid-template-columns: 1fr; }
-  .workspace-layout-3 > *, .registry-columns-layout > *, .parsing-three-columns > *, .model-workspace-layout > *, .chat-page-layout > * { min-width: 0; }
+  .workspace-layout-3, .workspace-layout-dataset, .dataset-layout-root, .registry-columns-layout, .parsing-three-columns, .model-workspace-layout, .chat-page-layout, .qa-router-diagram-wrap, .qa-fusion-layout, .workspace-layout-indexing { grid-template-columns: minmax(0, 1fr); }
+  .workspace-layout-3 > *, .registry-columns-layout > *, .parsing-three-columns > *, .model-workspace-layout > *, .chat-page-layout > *, .dataset-layout-root > * { min-width: 0; max-width: 100%; }
+  .dataset-layout-root, .parsing-three-columns, .model-workspace-layout, .chat-page-layout { min-width: 0; overflow: hidden; }
+  .dataset-layout-root .dataset-table-col, .parsing-three-columns .parsing-col-preview, .model-workspace-layout .card, .chat-page-layout .chat-messages-pane { min-width: 0; max-width: 100%; overflow-x: hidden; }
+  .chat-msg, .chat-bubble { min-width: 0; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
   .topbar { padding: 0 14px; gap: 8px; }
   .breadcrumbs { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .page-scroll-container { padding: 16px 14px 36px; }
@@ -1946,7 +1951,25 @@ pre, code { max-width: 100%; overflow-x: auto; white-space: pre-wrap; overflow-w
   .dataset-table-col, .dataset-inspector-col, .dataset-wiki-info { min-width: 0; }
   .dataset-tabs, .filter-pills { gap: 16px; overflow-x: auto; white-space: nowrap; }
   .qa-stepper-bar, .qa-full-trace-track { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .qa-trace-header-row { flex-wrap: wrap; justify-content: flex-start !important; gap: 8px; overflow: hidden; }
+  .qa-trace-header-row > div[style*="flex: 1"] { display: none; }
+  .qa-trace-header-row > div { min-width: 0; }
   .parsing-pipeline-row, .pipeline-nodes-card, .parsing-pipeline-grid { grid-template-columns: 1fr; gap: 8px; }
+  .dataset-content-grid { min-width: 0; }
+  .dataset-content-grid > * { min-width: 0; }
+  .dataset-table-col { overflow-x: auto; }
+  .dataset-table { min-width: 640px; }
+  .registry-columns-layout .data-table, .registry-columns-layout table { min-width: 520px; }
+  .registry-columns-layout .card-body { overflow-x: auto; }
+  .model-workspace-layout > .card { min-width: 0; }
+  .model-underline-tabs { min-width: 0; overflow-x: auto; }
+  .model-underline-tabs > * { flex: 0 0 auto; }
+  .page-body > [style*="grid-template-columns:360px"] { grid-template-columns: minmax(0, 1fr) !important; }
+  .page-body > [style*="grid-template-columns:360px"] > * { min-width: 0; }
+  .page-body input, .page-body select, .page-body textarea { max-width: 100%; }
+  .breadcrumbs { flex: 1 1 0; }
+  .topbar-spacer { min-width: 0; }
+  .topbar-actions { flex: 0 0 auto; }
   .parsing-arrow-divider { display: none; }
   .qa-footer-toolbar, .version-hero-card { flex-wrap: wrap; gap: 12px; }
   .modal-box { max-height: calc(100vh - 24px); }

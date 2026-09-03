@@ -124,7 +124,8 @@ test('stage 1 accessibility and responsive interaction contracts are wired', () 
   assert.match(app, /aria-labelledby/);
   assert.match(app, /focusOverlayFirst/);
   assert.match(app, /e\.key === 'Tab'/);
-  assert.match(app, /requestAnimationFrame\(\(\) => opener\.focus\(\)\)/);
+  assert.match(app, /const restoreFocus = \(\) =>/);
+  assert.match(app, /restoreFocus\(\);\s*requestAnimationFrame\(restoreFocus\)/);
   assert.match(app, /setAttribute\('role', 'tablist'\)/);
   assert.match(app, /setAttribute\('role', 'progressbar'\)/);
   assert.match(css, /drawer-backdrop\.is-visible/);
