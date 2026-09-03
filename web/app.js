@@ -60,6 +60,7 @@
     selectedChatDatasetId: null,
     selectedChatReleaseVersion: null,
     chatConversationsLoaded: false,
+    chatRouteConversationId: null,
     chatConversations: [
       { id: 'c1', title: '如何为企业网站安装产品问答助手？', time: '10:24', active: true },
       { id: 'c2', title: '产品问答助手支持哪些网站平台？', time: '09:58', active: false }
@@ -210,6 +211,8 @@
     notificationInitialized: false,
     routeParams: {}
   };
+  // 模板中的内联事件处理器运行在全局作用域；暴露同一份 UI 状态，确保页签等交互调用真实渲染函数。
+  window.state = state;
 
   /* Ordo Local-First REST API Client */
   const api = {
@@ -315,6 +318,7 @@
           proxy: m.config?.proxy || '',
           notes: m.config?.notes || '',
           secretMask: m.secret_mask || '',
+          lastError: m.last_error || '',
           status: m.status === 'available' ? 'ok' : (m.status === 'unverified' ? 'pending' : 'danger'),
           statusText: m.status === 'available' ? '可用' : (m.status === 'unverified' ? '未验证' : (m.status || '未测试')),
           latency: m.last_latency_ms != null ? `${m.last_latency_ms} ms` : '—',
@@ -564,6 +568,12 @@
     }
   };
 
+  // Shared task status helpers must exist before bootstrap can refresh notifications.
+  // Paused is resumable state, not a terminal task outcome.
+  const taskTerminalStatuses = new Set(['succeeded', 'partial', 'failed', 'cancelled']);
+  const taskStatusLabel = status => ({ queued: '待处理', running: '处理中', paused: '已暂停', succeeded: '已完成', partial: '部分完成', failed: '失败', cancelled: '已取消' }[status] || status || '未知');
+  const formatDateTime = value => value ? String(value).replace('T', ' ').slice(0, 19) : '—';
+
   // 页面加载即建立本机会话（CSRF + Cookie）；未连接时页面保持离线演示模式
   api.bootstrap();
 
@@ -576,9 +586,6 @@
 
   const app = document.getElementById('app');
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
-  const taskTerminalStatuses = new Set(['succeeded', 'partial', 'failed', 'cancelled', 'paused']);
-  const taskStatusLabel = status => ({ queued: '待处理', running: '处理中', paused: '已暂停', succeeded: '已完成', partial: '部分完成', failed: '失败', cancelled: '已取消' }[status] || status || '未知');
-  const formatDateTime = value => value ? String(value).replace('T', ' ').slice(0, 19) : '—';
   function getReadNotificationIds() {
     try { return new Set(JSON.parse(localStorage.getItem('ordo.notificationRead') || '[]')); } catch (e) { return new Set(); }
   }
@@ -2208,7 +2215,7 @@
               <div class="dataset-list-item ${isActive ? 'active' : ''}" onclick="window.handleSwitchDataset('${esc(ds.id)}')">
                 <div style="min-width:0;">
                   <b style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(ds.name)}</b>
-                  <div class="muted" style="font-size:12px;margin-top:2px;">${ds.counts?.documents ?? 0} 文件 · ${ds.active_release_id ? '已发布' : '未发布'}</div>
+                  <div class="muted" style="font-size:12px;margin-top:2px;">${ds.document_count ?? ds.counts?.documents ?? 0} 文件 · ${ds.active_release_id ? '已发布' : '未发布'}</div>
                 </div>
                 <span class="dot" style="background:${ds.active_release_id ? 'var(--accent)' : '#f59e0b'};"></span>
               </div>
@@ -2612,7 +2619,12 @@
   async function renderLiveParsing() {
     const tasks = await api.getTasks({ type: 'document.parse', limit: 50 });
     state.parsingTasks = tasks;
-    const selected = tasks.find(task => task.id === state.parsingSelectedDocId) || tasks[0] || null;
+    const routeDocumentId = state.routeParams?.document;
+    const selected = tasks.find(task =>
+      task.id === state.parsingSelectedDocId ||
+      task.object_id === routeDocumentId ||
+      task.result?.documentId === routeDocumentId
+    ) || tasks[0] || null;
     if (selected) state.parsingSelectedDocId = selected.id;
     const groups = ['running', 'queued', 'paused', 'succeeded', 'partial', 'failed', 'cancelled'];
     const label = status => ({ running: '处理中', queued: '待处理', paused: '已暂停', succeeded: '已完成', partial: '部分完成', failed: '失败', cancelled: '已取消' }[status] || status || '未知');
@@ -3001,7 +3013,7 @@
     const selectedIds = new Set(state.indexSelectedChunkIds || []);
     const routeChunkId = state.routeParams?.chunk;
     const selected = chunks.find(item => item.id === (routeChunkId || state.selectedChunkId)) || chunks[0] || null;
-    if (selected && !state.selectedChunkId) state.selectedChunkId = selected.id;
+    if (selected) state.selectedChunkId = selected.id;
     const vectorized = chunks.filter(item => item.embedding_json || item.embedding_model).length;
     const warnings = chunks.filter(item => item.excluded || item.warnings?.length || (item.warnings_json && item.warnings_json !== '[]')).length;
     const rows = chunks.length ? chunks.map(chunk => `<div style="border:1px solid ${chunk.id === selected?.id ? 'var(--accent)' : 'var(--line)'};border-radius:6px;padding:10px;margin-bottom:8px;background:${chunk.id === selected?.id ? 'var(--accent-soft)' : 'var(--card-bg)'};"><label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;"><input type="checkbox" ${selectedIds.has(chunk.id) ? 'checked' : ''} onchange="window.handleToggleIndexChunk('${esc(chunk.id)}', this.checked)"><span style="min-width:0;"><b style="font-size:12px;">${esc(chunk.id)}</b><span class="badge ${chunk.excluded ? 'warn' : 'ok'}" style="margin-left:8px;">${chunk.excluded ? '已禁用' : (chunk.embedding_model ? '已向量化' : '待向量化')}</span><span class="muted" style="display:block;font-size:11.5px;margin-top:5px;">${esc((chunk.content_text || '').slice(0, 110))}${(chunk.content_text || '').length > 110 ? '…' : ''}</span></span></label><button class="btn sm" style="margin-top:7px;" onclick="window.handleSelectChunkItem('${esc(chunk.id)}')">查看</button></div>`).join('') : emptyState('暂无知识块', '请先完成文档解析。');
@@ -5763,15 +5775,21 @@
 
   /* 15 AI应用 > 智能问答 - 100% 对应 15-AI应用-智能问答.png (动态交互版) */
   async function pageChat() {
-    if (api && api.connected && !state.chatConversationsLoaded) {
+    const routeConversationId = state.routeParams?.conversation || null;
+    const shouldLoadConversations = api && api.connected && (
+      !state.chatConversationsLoaded ||
+      state.chatRouteConversationId !== routeConversationId
+    );
+    if (shouldLoadConversations) {
       state.chatConversationsLoaded = true;
+      state.chatRouteConversationId = routeConversationId;
       const conversations = await api.getConversations();
       if (Array.isArray(conversations)) {
         state.chatConversations = conversations.map((c, index) => ({
           id: c.id,
           title: c.title,
           time: (c.updated_at || '').slice(11, 16) || '—',
-          active: c.id === state.activeConversationId || (!state.activeConversationId && index === 0),
+          active: c.id === routeConversationId || c.id === state.activeConversationId || (!routeConversationId && !state.activeConversationId && index === 0),
           knowledgeBaseId: c.knowledge_base_id,
           knowledgeBaseName: c.knowledge_base_name,
           datasetId: c.dataset_id,
@@ -5785,6 +5803,32 @@
           state.selectedChatKb = active.knowledgeBaseName || state.selectedChatKb;
           state.selectedChatDatasetId = active.datasetId;
           state.selectedChatReleaseVersion = active.releaseVersion;
+          if (active.id === routeConversationId) {
+            try {
+              const conversation = await api.getConversation(active.id);
+              if (conversation?.messages) {
+                state.chatMessages = conversation.messages.map(m => ({
+                  id: m.id,
+                  role: m.role,
+                  text: m.content,
+                  time: (m.created_at || '').slice(11, 16) || '刚刚',
+                  citations: (m.citations || []).map(c => ({
+                    id: c.id,
+                    citationId: c.id,
+                    ordinal: c.ordinal,
+                    title: c.title || '知识库文档',
+                    page: api.parseCitationLocator(c),
+                    quote: c.excerpt || ''
+                  }))
+                }));
+              }
+            } catch (e) {
+              state.chatMessages = [];
+            }
+          }
+        } else if (routeConversationId) {
+          state.chatMessages = [];
+          state.activeConversationId = null;
         }
       }
     }
@@ -7128,7 +7172,7 @@
           <div class="model-test-success-card" style="${cur.status === 'danger' ? 'background:var(--danger-soft);border-color:#fca5a5;' : ''}">
             <div style="display:flex;align-items:center;justify-content:space-between;">
               <div style="display:flex;align-items:center;gap:12px;">
-                <b style="color:${cur.status === 'danger' ? 'var(--danger)' : 'var(--accent)'};font-size:14px;">${cur.status === 'danger' ? '✕ 连接测试失败 (504 Gateway Timeout)' : '✓ 连接测试成功'}</b>
+                <b style="color:${cur.status === 'danger' ? 'var(--danger)' : cur.status === 'ok' ? 'var(--accent)' : 'var(--ink-dim)'};font-size:14px;">${cur.status === 'danger' ? `✕ ${esc(cur.lastError || cur.statusText || '连接测试失败')}` : cur.status === 'ok' ? `✓ ${esc(cur.statusText || '连接正常')}` : esc(cur.statusText || '尚未测试')}</b>
                 <span class="muted" style="font-size:12px;">延迟 ${cur.latency}</span>
                 <span class="muted" style="font-size:12px;">时间 ${cur.time}</span>
               </div>
@@ -7136,11 +7180,7 @@
             </div>
             <div class="cap-pills">
               <span class="muted" style="font-size:12px;align-self:center;">支持能力：</span>
-              <span class="badge ok">✓ 对话生成</span>
-              <span class="badge ok">✓ JSON 输出</span>
-              <span class="badge ok">✓ 函数调用</span>
-              <span class="badge ok">✓ 流式输出</span>
-              <span class="badge ok">✓ 多轮对话</span>
+              <span class="badge">能力以服务端测试结果为准</span>
             </div>
           </div>
 
@@ -7148,11 +7188,7 @@
           <div style="margin-top:24px;border-top:1px solid var(--line);padding-top:16px;">
             <b style="font-size:14px;">默认分配 (系统使用此模型) ⓘ</b>
             <div class="model-default-grid">
-              <div class="form-group"><small class="muted">内部问答 (回答模型)</small><select class="select" style="height:32px;font-size:12.5px;"><option>OpenAI GPT-5</option><option>本地 Qwen</option></select></div>
-              <div class="form-group"><small class="muted">智能助手 (回答模型)</small><select class="select" style="height:32px;font-size:12.5px;"><option>OpenAI GPT-5</option><option>本地 Qwen</option></select></div>
-              <div class="form-group"><small class="muted">Wiki 生成 (回答模型)</small><select class="select" style="height:32px;font-size:12.5px;"><option>OpenAI GPT-5</option><option>本地 Qwen</option></select></div>
-              <div class="form-group"><small class="muted">Embedding (嵌入模型)</small><select class="select" style="height:32px;font-size:12.5px;"><option>text-embedding-3-large</option></select></div>
-              <div class="form-group"><small class="muted">重排 (重排模型)</small><select class="select" style="height:32px;font-size:12.5px;"><option>bge-reranker-v2-m3</option></select></div>
+              ${['内部问答 (回答模型)','智能助手 (回答模型)','Wiki 生成 (回答模型)','Embedding (嵌入模型)','重排 (重排模型)'].map(label => `<div class="form-group"><small class="muted">${label}</small><select class="select" style="height:32px;font-size:12.5px;">${modelEntries.map(([id, model]) => `<option value="${esc(id)}">${esc(model.name || model.modelName || id)}</option>`).join('') || '<option>未登记模型</option>'}</select></div>`).join('')}
             </div>
             <div class="muted" style="font-size:12px;margin-top:8px;">系统在执行相应任务时，将优先使用以上默认模型；如该模型不可用，将按配置顺序自动回退。</div>
           </div>
@@ -7162,8 +7198,29 @@
     return { desc: '大模型、嵌入、重排、OCR/VLM 服务与连通性', actions: `<button class="btn primary" onclick="openAddModelModal()">添加模型连接</button>`, html };
   }
 
+  async function renderLiveStorage() {
+    const [dashboard, health, backups] = await Promise.all([
+      api.getDashboard(), api.getHealth(), api.getBackups()
+    ]);
+    if (!dashboard) return { desc: '统一管理系统存储资源、健康状态与生命周期策略', html: emptyState('存储数据读取失败', api.lastError?.message || '服务端没有返回存储统计。') };
+    const storage = dashboard.storage || {};
+    const blob = storage.blobs || {};
+    const artifact = storage.artifacts || {};
+    const bytes = Number(storage.databaseBytes || 0) + Number(blob.bytes || blob.size || 0) + Number(artifact.bytes || artifact.size || 0);
+    const fmtBytes = value => { const n = Number(value || 0); if (!n) return '0 B'; const units = ['B','KB','MB','GB','TB']; const i = Math.min(units.length - 1, Math.floor(Math.log(n) / Math.log(1024))); return `${(n / 1024 ** i).toFixed(i ? 1 : 0)} ${units[i]}`; };
+    const componentRows = Object.entries(health?.components || {});
+    const healthy = componentRows.filter(([, c]) => c?.status === 'available' || c?.status === 'ready').length;
+    const componentName = { metadata:'关系数据', blob:'文件与对象', artifacts:'解析产物', fullText:'全文索引', vector:'向量索引', generation:'回答模型', parser:'解析器' };
+    const architecture = componentRows.map(([key, value]) => `<div class="storage-live-component"><b>${esc(componentName[key] || key)}</b><span class="muted">${esc(value?.provider || '未记录')}</span><span class="${value?.status === 'available' || value?.status === 'ready' ? 'ok-text' : 'warn-text'}">● ${esc(value?.status || '未记录')}</span></div>`).join('');
+    const backupRows = (backups || []).map(b => `<tr><td class="mono">${esc(b.id)}</td><td>${esc(b.storage_key || '未记录')}</td><td class="mono">${esc(b.checksum ? b.checksum.slice(0, 16) : '未记录')}</td><td>${esc((b.created_at || '未记录').replace('T',' ').slice(0,19))}</td><td><span class="badge ${b.status === 'completed' || b.status === 'succeeded' ? 'ok' : ''}">${esc(b.status || '未记录')}</span></td><td><button class="btn sm" onclick="window.handleRestoreStorageBackup('${esc(b.id)}')">隔离恢复</button></td></tr>`).join('');
+    const latestBackup = dashboard.lastBackup;
+    const ratio = value => bytes ? `${Math.round(Number(value || 0) / bytes * 100)}%` : '—';
+    return { desc: '统一管理系统存储资源、健康状态与生命周期策略', html: `<div class="grid grid-4"><div class="card stat-card"><div class="muted">总占用</div><b>${fmtBytes(bytes)}</b><small>数据库 ${fmtBytes(storage.databaseBytes)}</small></div><div class="card stat-card"><div class="muted">对象</div><b>${Number(blob.count || 0)}</b><small>文件与对象</small></div><div class="card stat-card"><div class="muted">健康</div><b>${healthy} / ${componentRows.length || 0}</b><small>${esc(health?.status || '未记录')}</small></div><div class="card stat-card"><div class="muted">最近备份</div><b>${latestBackup ? esc((latestBackup.created_at || '未记录').replace('T',' ').slice(0,16)) : '未记录'}</b><small>${latestBackup ? esc(latestBackup.status || '已登记') : '尚无快照'}</small></div></div><div class="card section-gap"><div class="card-head">存储架构 <span class="muted">来自 /api/v1/health</span></div><div class="card-body storage-live-grid">${architecture || '<div class="dataset-empty">服务端未返回组件信息</div>'}</div></div><div class="grid grid-3 section-gap"><div class="card"><div class="card-head">占用分布</div><div class="card-body storage-live-breakdown"><div><span>数据库</span><b>${fmtBytes(storage.databaseBytes)}</b><small>${ratio(storage.databaseBytes)}</small></div><div><span>文件与对象</span><b>${fmtBytes(blob.bytes || blob.size)}</b><small>${ratio(blob.bytes || blob.size)}</small></div><div><span>解析产物</span><b>${fmtBytes(artifact.bytes || artifact.size)}</b><small>${ratio(artifact.bytes || artifact.size)}</small></div></div></div><div class="card"><div class="card-head">运行状态</div><div class="card-body"><div class="storage-health-message"><span class="${health?.status === 'ready' ? 'ok-text' : 'warn-text'}">● ${esc(health?.status || '未记录')}</span><p>检查时间：${esc(health?.checkedAt || '未记录')}</p></div></div></div><div class="card"><div class="card-head">生命周期</div><div class="card-body"><p class="muted">备份保留策略由服务端配置返回。</p><b>${latestBackup ? `最近快照：${esc(latestBackup.id)}` : '未记录备份快照'}</b></div></div></div><div class="card section-gap"><div class="card-head">系统备份历史快照 (${(backups || []).length})</div><div class="card-body" style="padding:0;overflow:auto"><table class="data-table"><thead><tr><th>快照标识</th><th>存储键值</th><th>校验指纹</th><th>创建时间</th><th>状态</th><th>操作</th></tr></thead><tbody>${backupRows || '<tr><td colspan="6" class="dataset-empty">暂无备份快照</td></tr>'}</tbody></table></div></div>` };
+  }
+
   /* 19 设置 > 存储配置 (Storage) - 100% 对应 19-设置-存储配置.png */
   async function pageStorage() {
+    if (api && api.connected) return renderLiveStorage();
     let backups = [];
     let dbBytes = '32.1 MB';
     let blobsCount = '503';
@@ -7385,8 +7442,8 @@
           </div>
         </div>
         <div style="display:flex;align-items:center;gap:10px;">
-          <button class="btn primary" id="checkUpdateBtn" style="background:var(--accent);color:#ffffff;height:36px;padding:0 20px;border-radius:6px;font-size:13px;font-weight:500;cursor:pointer;" onclick="handleCheckSystemUpdate()">检查更新</button>
-          <button class="btn" style="background:var(--card-bg);border:1px solid var(--line);height:36px;padding:0 18px;border-radius:6px;font-size:13px;font-weight:500;color:var(--ink-strong);cursor:pointer;" onclick="openReleaseNotesModal()">查看发布说明</button>
+          <button class="btn primary" id="checkUpdateBtn" disabled title="服务端未提供在线更新检查接口" style="background:var(--accent);color:#ffffff;height:36px;padding:0 20px;border-radius:6px;font-size:13px;font-weight:500;cursor:not-allowed;opacity:.6;" onclick="handleCheckSystemUpdate()">检查更新（暂不可用）</button>
+          <button class="btn" disabled title="服务端未提供发布说明接口" style="background:var(--card-bg);border:1px solid var(--line);height:36px;padding:0 18px;border-radius:6px;font-size:13px;font-weight:500;color:var(--ink-strong);cursor:not-allowed;opacity:.6;" onclick="openReleaseNotesModal()">发布说明（暂不可用）</button>
         </div>
       </div>
 
@@ -7820,6 +7877,7 @@
     }
   }
 
+  window.render = render;
   render();
   /* Complete State & Button Interaction Handlers */
   
@@ -7851,16 +7909,18 @@
       taskItems = [{ title: '通知仅在线可用', status: '— 未连接服务端', time: '—', tone: 'warn' }];
     }
     if (api && api.connected) {
+      // Viewing the popover acknowledges only terminal tasks actually shown.
+      const visibleIds = new Set(taskItems.map(item => item.id).filter(Boolean));
       const terminalIds = state.notificationTasks
-        .filter(task => taskTerminalStatuses.has(task.status))
+        .filter(task => visibleIds.has(task.id) && taskTerminalStatuses.has(task.status))
         .map(task => task.id);
       try {
         const read = getReadNotificationIds();
         terminalIds.forEach(id => read.add(id));
         localStorage.setItem('ordo.notificationRead', JSON.stringify([...read]));
+        state.notificationUnreadCount = state.notificationTasks
+          .filter(task => taskTerminalStatuses.has(task.status) && !read.has(task.id)).length;
       } catch (e) {}
-      state.notificationUnreadCount = state.notificationTasks
-        .filter(task => taskTerminalStatuses.has(task.status) && !terminalIds.includes(task.id)).length;
       updateNotificationBadge();
     }
 
@@ -8895,8 +8955,24 @@
     if (api && api.connected && convId && !String(convId).startsWith('c-demo-') && convId !== 'c1' && convId !== 'c2') {
       const res = await api.deleteConversation(convId);
       if (res) {
+        state.chatConversations = (state.chatConversations || []).filter(c => c.id !== convId);
+        if (state.activeConversationId === convId) {
+          const next = state.chatConversations[0] || null;
+          state.activeConversationId = next?.id || null;
+          state.chatConversations.forEach(c => { c.active = c.id === state.activeConversationId; });
+          state.chatMessages = [];
+          state.selectedChatKbId = next?.knowledgeBaseId || api.context?.defaultKbId || null;
+          state.selectedChatKb = next?.knowledgeBaseName || state.selectedChatKb || '';
+          state.selectedChatDatasetId = next?.datasetId || api.context?.defaultDatasetId || null;
+          state.selectedChatReleaseVersion = next?.releaseVersion || null;
+        }
+        state.chatRouteConversationId = state.activeConversationId;
         showToast('✓ 会话已删除', 'ok');
-        render();
+        if (state.routeParams?.conversation === convId) {
+          go('apps/chat', state.activeConversationId ? { conversation: state.activeConversationId } : {});
+        } else {
+          render();
+        }
       } else {
         showToast(api.lastError?.message || '删除会话失败', 'error');
       }

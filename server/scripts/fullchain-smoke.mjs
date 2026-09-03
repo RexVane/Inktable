@@ -67,12 +67,18 @@ async function main() {
     if (probe) throw new Error(`端口 ${PORT} 已被占用：请先清理残留进程再运行`);
   }
   const child = spawn(process.execPath, ['src/main.js'], { cwd: serverDir, env: { ...process.env, ORDO_PORT: String(PORT), ORDO_DATA_DIR: dataRoot, ORDO_LOG_LEVEL: 'warn' }, stdio: ['ignore', 'pipe', 'pipe'] });
-  child.stderr.on('data', d => { if (cookieDebug) console.error('[srv]', String(d).slice(0, 200)); });
+  let startupOutput = '';
+  child.stdout.on('data', d => { startupOutput += String(d); if (cookieDebug) console.error('[srv]', String(d).slice(0, 200)); });
+  child.stderr.on('data', d => { startupOutput += String(d); if (cookieDebug) console.error('[srv]', String(d).slice(0, 200)); });
+  child.on('error', error => { startupOutput += `
+child error: ${error.message}`; });
+  child.on('exit', (code, signal) => { if (code !== 0) startupOutput += `
+child exit: code=${code} signal=${signal}`; });
   await new Promise((resolve, reject) => {
     const started = Date.now();
     const poll = setInterval(async () => {
       try { const r = await fetch(`${BASE}/api/v1/health`); if (r.ok) { clearInterval(poll); resolve(); } } catch {}
-      if (Date.now() - started > 15000) { clearInterval(poll); reject(new Error('server start timeout')); }
+      if (Date.now() - started > 15000) { clearInterval(poll); reject(new Error(`server start timeout${startupOutput ? `: ${startupOutput.slice(-1000)}` : ''}`)); }
     }, 300);
   });
 

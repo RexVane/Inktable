@@ -114,4 +114,26 @@ test('all P1, P2 and P3 wired endpoints, handlers and security contracts are ver
   assert.match(app, /home-bottom-card/);
 });
 
+test('online management views use real entities, task outcomes, routes and honest fallbacks', () => {
+  assert.match(app, /async getAssistant\(id\)/);
+  assert.match(app, /async getDataset\(dsId\)/);
+  assert.match(app, /async getDiagnostics\(\)/);
+  assert.match(app, /getWidgetBundleStatus/);
+  assert.match(app, /fetch\('\/widget\.js', \{ method: 'HEAD'/);
+  assert.match(app, /暂未接入/);
+  assert.match(app, /waitTaskTerminal/);
+  assert.match(app, /const result = await api\.waitTaskTerminal\(task\.id/);
+  assert.match(app, /readRouteParams/);
+  for (const param of ['kb', 'dataset', 'chunk', 'document', 'conversation']) {
+    assert.match(app, new RegExp(`routeParams\\?\\.${param}`), `missing route query parameter ${param}`);
+  }
+  assert.match(app, /ordo\.notificationRead/);
+  assert.match(app, /taskTerminalStatuses\.has\(task\.status\)/);
+  assert.match(app, /handleDeleteConversation/);
+  assert.match(app, /state\.chatConversations = \(state\.chatConversations \|\| \[\]\)\.filter/);
+  assert.match(app, /state\.chatMessages = \[\];/);
+  assert.match(app, /诊断导出需要连接服务端/);
+  assert.match(app, /无法生成嵌入代码|无法生成嵌入/);
+  assert.doesNotMatch(app, /if \(!diag\)[\\s\\S]{0,500}triggerDownloadFile\([^;]*mock/i);
+});
 
