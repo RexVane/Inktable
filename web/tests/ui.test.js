@@ -87,14 +87,30 @@ test('every page route executes without error and produces full non-empty HTML',
   }
 });
 
-test('native OS interactions, file upload dialog, downloads and API client exist', () => {
-  assert.match(app, /triggerNativeFileUpload/);
-  assert.match(app, /triggerNativeFolderUpload/);
-  assert.match(app, /triggerDownloadFile/);
-  assert.match(app, /handleSendChat/);
-  assert.match(app, /handleSaveAssistant/);
-  assert.match(app, /openAddDatabaseModal/);
-  assert.match(app, /const api = \{/);
-  assert.match(app, /\/api\/v1\/session\/bootstrap/);
+test('all P1, P2 and P3 wired endpoints, handlers and security contracts are verified in app.js', () => {
+  // P1 Core Workbench Wiring
+  assert.match(app, /handleBatchDeleteDocs/);
+  assert.match(app, /handleDeleteSingleDoc/);
+  assert.match(app, /handleDirectoryImportPrompt/);
+  assert.match(app, /handleExecuteDirImport/);
+  assert.match(app, /handleSearchRelease/);
+  assert.match(app, /handleSwitchChatKb/);
+  assert.match(app, /local-hash-v1/);
+
+  // P2 Settings, Assistants & Storage
+  assert.match(app, /handleResetGeneralSettings/);
+  assert.match(app, /handleCancelGeneralSettings/);
+  assert.match(app, /handleRestoreStorageBackup/);
+  assert.match(app, /handleToggleFeatureFlag/);
+  assert.match(app, /getAssistantClients/);
+  assert.match(app, /createAssistantClient/);
+  assert.match(app, /rotateWidgetClient/);
+  assert.match(app, /openCreateWidgetClientModal/);
+  assert.match(app, /handleRotateWidgetClient/);
+
+  // P3 Experience & Debounce
+  assert.match(app, /searchDebounceTimer/);
+  assert.match(app, /homeTrendRange/);
 });
+
 

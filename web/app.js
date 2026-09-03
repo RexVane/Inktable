@@ -1445,8 +1445,14 @@
       <!-- Bottom 3 Cards Filling Remaining Height -->
       <div class="home-bottom-grid">
         <!-- 1. 近 7 天请求 -->
-        <div class="card home-bottom-card">
-          <div class="card-head"><span>近 7 天请求</span><span class="badge" style="background:var(--card-bg);border:1px solid var(--line);cursor:pointer;">近 7 天 ⌄</span></div>
+          <div class="card-head" style="display:flex;justify-content:space-between;align-items:center;">
+            <span>请求趋势 (${(state.homeTrendRange || '7d') === 'today' ? '今天' : ((state.homeTrendRange || '7d') === '30d' ? '近 30 天' : '近 7 天')})</span>
+            <div style="display:flex;gap:4px;">
+              <button class="btn sm ${(state.homeTrendRange || '7d') === 'today' ? 'primary' : ''}" style="font-size:11px;padding:2px 8px;" onclick="state.homeTrendRange='today';render();">今天</button>
+              <button class="btn sm ${(state.homeTrendRange || '7d') === '7d' ? 'primary' : ''}" style="font-size:11px;padding:2px 8px;" onclick="state.homeTrendRange='7d';render();">近 7 天</button>
+              <button class="btn sm ${(state.homeTrendRange || '7d') === '30d' ? 'primary' : ''}" style="font-size:11px;padding:2px 8px;" onclick="state.homeTrendRange='30d';render();">近 30 天</button>
+            </div>
+          </div>
           <div class="card-body">
             ${svgChart}
             <div style="display:flex;align-items:center;justify-content:center;gap:6px;font-size:12px;color:var(--ink-dim);margin-top:6px;">
@@ -2194,56 +2200,18 @@
         <div class="card-head">数据来源</div>
         <div class="card-body" style="padding:10px 12px;">
           <div style="display:flex;flex-direction:column;gap:4px;">
-            <div class="tree-node active">
-              <span>∨</span> <span>☁</span> <b>企业资料</b>
-              <span class="badge" style="margin-left:auto;border-radius:10px;padding:1px 8px;">128</span>
-            </div>
-            <div class="tree-node" style="padding-left:22px;">
-              <span>›</span> <span>📁</span> <span>市场资料</span>
-              <span class="badge" style="margin-left:auto;border-radius:10px;padding:1px 8px;">32</span>
-            </div>
-            <div class="tree-node" style="padding-left:22px;">
-              <span>›</span> <span>📁</span> <span>产品资料</span>
-              <span class="badge" style="margin-left:auto;border-radius:10px;padding:1px 8px;">54</span>
-            </div>
-            <div class="tree-node" style="padding-left:22px;">
-              <span>›</span> <span>📁</span> <span>技术资料</span>
-              <span class="badge" style="margin-left:auto;border-radius:10px;padding:1px 8px;">42</span>
-            </div>
-
-            <div class="tree-node" style="margin-top:6px;">
-              <span>∨</span> <span>🌐</span> <b>WebDAV</b>
-              <span class="badge" style="margin-left:auto;border-radius:10px;padding:1px 8px;">36</span>
-            </div>
-            <div class="tree-node" style="padding-left:22px;">
-              <span>›</span> <span>🌐</span> <span>dav.ordo.com</span>
-              <span class="badge" style="margin-left:auto;border-radius:10px;padding:1px 8px;">36</span>
-            </div>
-
-            <div class="tree-node" style="margin-top:6px;">
-              <span>∨</span> <span>🗄</span> <b>PostgreSQL 业务库</b>
-              <span class="badge" style="margin-left:auto;border-radius:10px;padding:1px 8px;">12</span>
-            </div>
-            <div class="tree-node" style="padding-left:22px;">
-              <span>›</span> <span>🗄</span> <span>crm_db</span>
-              <span class="badge" style="margin-left:auto;border-radius:10px;padding:1px 8px;">5</span>
-            </div>
-            <div class="tree-node" style="padding-left:22px;">
-              <span>›</span> <span>🗄</span> <span>erp_db</span>
-              <span class="badge" style="margin-left:auto;border-radius:10px;padding:1px 8px;">7</span>
-            </div>
-
-            <div class="tree-node" style="margin-top:6px;">
-              <span>∨</span> <span>💻</span> <b>本机已确认</b>
-              <span class="badge" style="margin-left:auto;border-radius:10px;padding:1px 8px;">78</span>
-            </div>
-            <div class="tree-node" style="padding-left:22px;">
-              <span>›</span> <span>📁</span> <span>D:\知识库资料</span>
-              <span class="badge" style="margin-left:auto;border-radius:10px;padding:1px 8px;">46</span>
-            </div>
-            <div class="tree-node" style="padding-left:22px;">
-              <span>›</span> <span>📁</span> <span>E:\项目文档</span>
-              <span class="badge" style="margin-left:auto;border-radius:10px;padding:1px 8px;">32</span>
+            ${(regKbs.length ? regKbs : [{ id: 'local', name: '本地知识库' }]).map(kb => `
+              <div class="tree-node active" onclick="state.selectedRegistryKbId='${esc(kb.id)}';render();">
+                <span>∨</span> <span>☁</span> <b>${esc(kb.name)}</b>
+                <span class="badge" style="margin-left:auto;border-radius:10px;padding:1px 8px;">${regDocs.length || 0}</span>
+              </div>
+              <div class="tree-node" style="padding-left:22px;">
+                <span>›</span> <span>📁</span> <span>已登记文档</span>
+                <span class="badge" style="margin-left:auto;border-radius:10px;padding:1px 8px;">${regDocs.length || 0}</span>
+              </div>
+            `).join('')}
+            <div class="tree-node" style="margin-top:8px;opacity:0.6;" title="未启用">
+              <span>›</span> <span>🌐</span> <span class="muted">外部连接器 (未启用)</span>
             </div>
           </div>
         </div>
@@ -2265,87 +2233,26 @@
               </tr>
             </thead>
             <tbody>
-              <tr>
-                <td style="padding-left:16px;"><span class="file-type-icon word">W</span> 产品需求说明书.docx</td>
-                <td>企业资料</td>
-                <td><span style="color:var(--accent);">● 已同步</span></td>
-                <td><span class="badge ok">已完成</span></td>
-                <td>产品资料集</td>
-                <td>2025-05-20 10:23</td>
-                <td></td>
-              </tr>
-              <tr style="background:var(--accent-soft);">
-                <td style="padding-left:16px;">
-                  <span style="color:var(--accent);margin-right:4px;">☑</span>
-                  <span class="file-type-icon folder">📁</span> <b>产品手册目录</b>
-                </td>
-                <td>企业资料</td>
-                <td>
-                  <div style="font-size:12px;color:var(--ink-dim);">↻ 同步中 68%</div>
-                  <div class="progress-bar-wrap" style="width:90px;"><div class="progress-bar-fill" style="width:68%;"></div></div>
-                </td>
-                <td>
-                  <div style="font-size:12px;color:var(--blue);">解析中 3/12</div>
-                  <div class="progress-bar-wrap" style="width:90px;"><div class="progress-bar-fill blue" style="width:25%;"></div></div>
-                </td>
-                <td>产品资料集</td>
-                <td>2025-05-20 10:18</td>
-                <td style="color:var(--ink-dim);cursor:pointer;">⋮</td>
-              </tr>
-              <tr>
-                <td style="padding-left:16px;"><span class="file-type-icon pdf">PDF</span> 解决方案白皮书.pdf</td>
-                <td>WebDAV</td>
-                <td><span style="color:var(--accent);">● 已同步</span></td>
-                <td><span class="badge ok">已完成</span></td>
-                <td>市场资料集</td>
-                <td>2025-05-20 09:55</td>
-                <td></td>
-              </tr>
-              <tr>
-                <td style="padding-left:16px;"><span class="file-type-icon excel">X</span> 客户清单.xlsx</td>
-                <td>PostgreSQL 业务库</td>
-                <td><span style="color:var(--accent);">● 已同步</span></td>
-                <td><span class="badge ok">已完成</span></td>
-                <td>客户资料集</td>
-                <td>2025-05-20 09:42</td>
-                <td></td>
-              </tr>
-              <tr>
-                <td style="padding-left:16px;"><span class="file-type-icon folder">📁</span> 技术图纸目录</td>
-                <td>本机已确认</td>
-                <td><span style="color:var(--ink-dim);">○ 等待同步</span></td>
-                <td><span class="badge warn">待处理</span></td>
-                <td>技术资料集</td>
-                <td>2025-05-20 09:31</td>
-                <td></td>
-              </tr>
-              <tr>
-                <td style="padding-left:16px;"><span class="file-type-icon ppt">P</span> 产品培训PPT.pptx</td>
-                <td>企业资料</td>
-                <td><span style="color:var(--danger);">! 同步失败</span></td>
-                <td><span class="badge danger">失败</span></td>
-                <td>培训资料集</td>
-                <td>2025-05-20 09:10</td>
-                <td></td>
-              </tr>
-              <tr>
-                <td style="padding-left:16px;"><span class="file-type-icon md">MD</span> API 接口文档.md</td>
-                <td>本机已确认</td>
-                <td><span style="color:var(--accent);">● 已同步</span></td>
-                <td><span class="badge ok">已完成</span></td>
-                <td>技术资料集</td>
-                <td>2025-05-20 08:54</td>
-                <td></td>
-              </tr>
-              <tr>
-                <td style="padding-left:16px;"><span class="file-type-icon folder">📁</span> 历史合同目录</td>
-                <td>PostgreSQL 业务库</td>
-                <td><span style="color:var(--accent);">● 已同步</span></td>
-                <td><span class="badge ok">已完成</span></td>
-                <td>合同资料集</td>
-                <td>2025-05-20 08:32</td>
-                <td></td>
-              </tr>
+              ${regDocs.length === 0 ? `
+                <tr>
+                  <td colspan="7" style="text-align:center;padding:32px 16px;color:var(--ink-dim);">
+                    ${api && api.connected ? '暂无登记的文档，可通过上方「上传文件」或「导入目录」完成登记。' : '演示模式：暂无文档'}
+                  </td>
+                </tr>
+              ` : regDocs.map(doc => `
+                <tr>
+                  <td style="padding-left:16px;">
+                    <span class="file-type-icon ${doc.media_type?.includes('pdf') ? 'pdf' : (doc.media_type?.includes('word') ? 'word' : 'md')}">📄</span>
+                    <b>${esc(doc.title)}</b>
+                  </td>
+                  <td>本地原位安全存储</td>
+                  <td><span style="color:var(--accent);">● 已登记</span></td>
+                  <td><span class="badge ${doc.status === 'succeeded' ? 'ok' : 'warn'}">${doc.status === 'succeeded' ? '已完成' : (doc.status || '待处理')}</span></td>
+                  <td>${esc(state.selectedDatasetId || '默认资料集')}</td>
+                  <td>${esc((doc.updated_at || doc.created_at || '').replace('T', ' ').slice(0, 16))}</td>
+                  <td style="color:var(--ink-dim);cursor:pointer;" onclick="window.handleDeleteSingleDoc('${esc(doc.id)}')">🗑</td>
+                </tr>
+              `).join('')}
             </tbody>
           </table>
 
@@ -2466,6 +2373,7 @@
   /* 05 知识库 > 数据解析 - 100% 对应 05-知识库-数据解析.png */
   async function pageParsing() {
     let tasks = [];
+    let curArtifactMarkdown = null;
     if (api && api.connected) {
       try {
         tasks = await api.getTasks({ type: 'document.parse', limit: 20 }) || [];
@@ -2473,6 +2381,10 @@
           state.parsingTotalCount = String(tasks.length);
           state.parsingDoneCount = String(tasks.filter(t => t.status === 'succeeded' || t.status === 'partial').length);
           state.parsingArtifactCount = String(tasks.filter(t => t.result?.artifactId).length);
+        }
+        const selTask = tasks.find(t => t.id === state.parsingSelectedDocId) || tasks[0];
+        if (selTask && selTask.result && selTask.result.artifactId) {
+          curArtifactMarkdown = await api.getArtifactMarkdown(selTask.result.artifactId);
         }
       } catch (e) {}
     }
@@ -2676,47 +2588,21 @@
 
             <!-- Viewport centering the A4 page sheet -->
             <div class="parsing-viewport">
-              <div class="parsing-page-canvas">
-              <h3 style="font-size:17px;font-weight:700;color:var(--ink-strong);">3.2 产品功能</h3>
-              <p class="muted" style="font-size:13px;margin:8px 0 16px;">产品提供以下核心功能模块，支持用户完成从数据接入到分析决策的全流程管理。</p>
-              
-              <!-- 4 Feature Boxes -->
-              <div class="parsing-boxes-grid">
-                <div class="parsing-feature-box green">
-                  <b style="color:#16a34a;font-size:13.5px;display:block;margin-bottom:8px;">数据接入</b>
-                  <ul style="padding-left:16px;font-size:12px;color:var(--ink);line-height:1.8;">
-                    <li>• 支持多源数据接入</li>
-                    <li>• 实时与离线同步</li>
-                    <li>• 数据质量校验</li>
-                  </ul>
-                </div>
-                <div class="parsing-feature-box blue">
-                  <b style="color:#2563eb;font-size:13.5px;display:block;margin-bottom:8px;">数据管理</b>
-                  <ul style="padding-left:16px;font-size:12px;color:var(--ink);line-height:1.8;">
-                    <li>• 数据集管理</li>
-                    <li>• 数据权限控制</li>
-                    <li>• 元数据管理</li>
-                  </ul>
-                </div>
-                <div class="parsing-feature-box orange">
-                  <b style="color:#ea580c;font-size:13.5px;display:block;margin-bottom:8px;">数据分析</b>
-                  <ul style="padding-left:16px;font-size:12px;color:var(--ink);line-height:1.8;">
-                    <li>• 可视化分析</li>
-                    <li>• 自定义报表</li>
-                    <li>• 多维度钻取</li>
-                  </ul>
-                </div>
-                <div class="parsing-feature-box purple">
-                  <b style="color:#9333ea;font-size:13.5px;display:block;margin-bottom:8px;">系统管理</b>
-                  <ul style="padding-left:16px;font-size:12px;color:var(--ink);line-height:1.8;">
-                    <li>• 用户与角色管理</li>
-                    <li>• 审计日志</li>
-                    <li>• 系统配置</li>
-                  </ul>
-                </div>
+              <div class="parsing-page-canvas" style="overflow-y:auto;max-height:520px;padding:24px;text-align:left;">
+                ${curArtifactMarkdown ? `
+                  <div style="font-size:11px;color:var(--accent);font-weight:600;margin-bottom:8px;">✓ 提取自服务端真实解析产物 (Artifact Markdown)</div>
+                  <pre style="white-space:pre-wrap;font-family:inherit;font-size:13px;line-height:1.7;color:var(--ink-strong);margin:0;">${esc(curArtifactMarkdown)}</pre>
+                ` : `
+                  <div style="text-align:center;padding:48px 16px;color:var(--ink-dim);">
+                    <div style="font-size:32px;margin-bottom:8px;">📄</div>
+                    <b style="font-size:14px;color:var(--ink-strong);">${api && api.connected ? '暂无选中文档的解析产物' : '演示排版示意'}</b>
+                    <div style="font-size:12px;margin-top:4px;max-width:320px;margin-left:auto;margin-right:auto;">
+                      ${api && api.connected ? '解析任务完成后，提取的 Markdown 结构化原文将在此实时呈现。' : '当前处于离线演示模式。'}
+                    </div>
+                  </div>
+                `}
               </div>
             </div>
-          </div>
         </div>
 
         <!-- Bottom Legend -->
@@ -2987,11 +2873,26 @@
           </div>
         </div>
         <div class="card-body" style="padding:10px;overflow-y:auto;max-height:540px;">
+          ${state.indexSearchResults ? `
+            <div style="padding:8px 12px;background:var(--accent-soft);border:1px solid var(--accent);border-radius:6px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;">
+              <span style="font-size:12px;font-weight:600;color:var(--accent);">🔍 检索验证结果 (命中 ${state.indexSearchResults.length} 条)</span>
+              <button class="btn sm" style="padding:1px 6px;font-size:11px;" onclick="state.indexSearchResults=null;render();">✕ 清除</button>
+            </div>
+            ${state.indexSearchResults.map(hit => `
+              <div style="border:1px solid var(--accent);background:var(--card-bg);border-radius:6px;padding:10px;margin-bottom:8px;">
+                <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;">
+                  <b>● ${esc(hit.chunkId || hit.id || '命中块')}</b>
+                  <span class="mono" style="color:var(--accent);font-weight:700;">Score: ${Number(hit.score || 0).toFixed(4)}</span>
+                </div>
+                <div style="font-size:12px;color:var(--ink);line-height:1.5;">${esc((hit.content || hit.text || '').slice(0, 80))}...</div>
+              </div>
+            `).join('')}
+          ` : ''}
           ${chunks.map((chunk) => {
             const isSelected = chunk.id === curChunk.id;
             const previewText = (chunk.content_text || chunk.content_md || '').slice(0, 50) + '...';
             return `
-              <div style="border:1.5px solid ${isSelected ? 'var(--accent)' : 'var(--line)'};background:${isSelected ? '#f0fdf4' : '#ffffff'};border-radius:6px;padding:12px;cursor:pointer;margin-bottom:8px;" onclick="window.handleSelectChunkItem('${esc(chunk.id)}')">
+              <div style="border:1.5px solid ${isSelected ? 'var(--accent)' : 'var(--line)'};background:${isSelected ? 'var(--accent-soft)' : 'var(--card-bg)'};border-radius:6px;padding:12px;cursor:pointer;margin-bottom:8px;" onclick="window.handleSelectChunkItem('${esc(chunk.id)}')">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
                   <span style="font-weight:700;font-size:13px;color:${isSelected ? 'var(--accent)' : 'var(--ink-strong)'};">● ${esc(chunk.id)}</span>
                   <span class="badge ${chunk.excluded ? 'warn' : 'ok'}">${chunk.excluded ? '● 已禁用' : '● 已向量化'}</span>
@@ -5372,6 +5273,45 @@
 
   // [removed: old handleSwitchConversation stub - replaced by async version above]
 
+  
+  window.handleSwitchChatKb = async function(kbName) {
+    state.selectedChatKb = kbName;
+    showToast(`正在切换至知识库「${kbName}」并创建新会话...`);
+    if (api && api.connected) {
+      try {
+        const kbs = await api.getKnowledgeBases() || [];
+        const matched = kbs.find(k => k.name === kbName) || kbs[0];
+        if (matched) {
+          const conv = await api.createConversation({
+            knowledgeBaseId: matched.id,
+            title: `问答 (${kbName})`
+          });
+          if (conv) {
+            state.activeConversationId = conv.id;
+            state.chatConversations.unshift({
+              id: conv.id,
+              title: conv.title || `问答 (${kbName})`,
+              time: '刚刚',
+              active: true,
+              kb: kbName
+            });
+            state.chatConversations.forEach(c => c.active = (c.id === conv.id));
+            state.chatMessages = [{
+              role: 'assistant',
+              text: `你好！当前会话已固定绑定至「${kbName}」，不可变版本检索就绪。请问有什么可以帮助你？`,
+              time: '刚刚'
+            }];
+            showToast(`✓ 已创建并绑定「${kbName}」新会话 (红线 §5)`, 'ok');
+            render();
+            return;
+          }
+        }
+      } catch (e) {}
+    }
+    showToast(`已切换知识库: ${kbName}`, 'ok');
+    render();
+  };
+
   window.handleCopyChatText = function(text) {
     if (navigator.clipboard) {
       navigator.clipboard.writeText(text).then(() => showToast('已复制到剪贴板', 'ok')).catch(() => showToast('已复制内容'));
@@ -5394,7 +5334,7 @@
     const html = `
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
       <div style="display:flex;align-items:center;gap:10px;">
-        <select class="input" style="height:32px;font-size:12.5px;font-weight:600;padding:0 8px;" onchange="state.selectedChatKb=this.value;showToast('已切换知识库: '+this.value,'ok');render();">
+        <select class="input" style="height:32px;font-size:12.5px;font-weight:600;padding:0 8px;" onchange="window.handleSwitchChatKb(this.value);">
           <option ${state.selectedChatKb === '产品文档库' ? 'selected' : ''}>▣ 产品文档库</option>
           <option ${state.selectedChatKb === '技术资料库' ? 'selected' : ''}>▣ 技术资料库</option>
           <option ${state.selectedChatKb === '全知识库' ? 'selected' : ''}>▣ 全知识库 (多库融合)</option>
@@ -5521,6 +5461,63 @@
   }
 
   /* Global Interaction Handlers for Assistants, Parsing & Search */
+  
+  window.openCreateWidgetClientModal = function(assistantId) {
+    const origins = prompt('请输入允许调用该助手的跨域来源域名 (多个用逗号隔开，允许所有填 *):', 'https://example.com');
+    if (origins === null) return;
+    (async () => {
+      showToast('正在注册接入端点并生成签名凭据...');
+      if (api && api.connected) {
+        const res = await api.createAssistantClient(assistantId, { origins: origins.split(',').map(s=>s.trim()).filter(Boolean) });
+        if (res && res.clientSecret) {
+          const alertHtml = `
+            <div class="modal-box" style="max-width:520px;">
+              <div class="modal-header">
+                <span style="color:#ea580c;">⚠️ 一次性凭据生成确认</span>
+                <button class="btn sm" data-close>✕</button>
+              </div>
+              <div class="modal-body" style="padding:16px 20px;">
+                <p style="font-size:13px;line-height:1.5;color:var(--ink-strong);">
+                  新接入端点 <b>${esc(res.client.id)}</b> 已创建成功！<br>
+                  <span style="color:var(--danger);font-weight:600;">以下 Client Secret 仅在本次展示一次，关闭后服务端将永远只存储掩码且不可逆回显，请立即妥善保存：</span>
+                </p>
+                <div style="background:#1e293b;color:#f8fafc;padding:12px;border-radius:6px;font-family:monospace;font-size:13px;word-break:break-all;margin:12px 0;">
+                  ${esc(res.clientSecret)}
+                </div>
+              </div>
+              <div class="modal-footer" style="display:flex;justify-content:flex-end;">
+                <button class="btn primary" data-close onclick="render();">我已保存凭据</button>
+              </div>
+            </div>
+          `;
+          showOverlay(alertHtml);
+          return;
+        } else {
+          showToast(api.lastError?.message || '创建接入凭据失败', 'error');
+        }
+      } else {
+        showToast('演示模式：已模拟创建接入端点', 'ok');
+      }
+      render();
+    })();
+  };
+
+  window.handleRotateWidgetClient = async function(clientId) {
+    if (!confirm('警告：轮换凭据将使原 Secret 立即失效。确定轮换吗？')) return;
+    showToast('正在轮换密钥...');
+    if (api && api.connected) {
+      const res = await api.rotateWidgetClient(clientId);
+      if (res && res.clientSecret) {
+        alert(`密钥轮换成功！\n新 Client Secret (仅展示一次): ${res.clientSecret}`);
+        render();
+      } else {
+        showToast(api.lastError?.message || '轮换密钥失败', 'error');
+      }
+    } else {
+      showToast('演示模式：已模拟轮换密钥', 'ok');
+    }
+  };
+
   window.handleSelectAssistant = function(id) {
     state.selectedAssistantId = id;
     render();
@@ -6091,14 +6088,54 @@
         </div>
       `;
     } else if (currentTab === 'web') {
+      let widgetClients = [];
+      if (api && api.connected && cur.backendId) {
+        try { widgetClients = await api.getAssistantClients(cur.backendId) || []; } catch (e) {}
+      }
       tabBody = `
         <div style="margin-top:16px;background:var(--inset);border:1px solid var(--line);border-radius:8px;padding:20px;">
-          <b style="font-size:14px;color:var(--ink-strong);display:block;margin-bottom:8px;">企业网站嵌入代码 (Web Widget)</b>
-          <p class="muted" style="font-size:12.5px;line-height:1.5;margin-bottom:12px;">
-            将以下代码复制并粘贴到您企业网站 HTML 的 <code>&lt;/body&gt;</code> 结束标签之前，即可秒级接入在线智能问答客服浮层：
-          </p>
-          <pre style="background:#1e293b;color:#f8fafc;padding:14px;border-radius:6px;font-size:12.5px;overflow-x:auto;">&lt;script src="http://127.0.0.1:8790/widget.js" data-assistant-id="${esc(cur.backendId || cur.id)}" defer&gt;&lt;/script&gt;</pre>
-          <button class="btn primary" style="margin-top:12px;" onclick="navigator.clipboard.writeText('&lt;script src=\'http://127.0.0.1:8790/widget.js\' data-assistant-id=\'${esc(cur.backendId || cur.id)}\' defer&gt;&lt;/script&gt;');showToast('✓ 嵌入代码已复制到剪贴板！','ok');">📋 复制代码</button>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <div>
+              <b style="font-size:14px;color:var(--ink-strong);">接入端点与密钥管理 (Widget Clients)</b>
+              <div class="muted" style="font-size:12px;margin-top:2px;">管理网站嵌入授权凭据与允许跨域来源（规划 §14.5.3）。</div>
+            </div>
+            <button class="btn sm primary" onclick="window.openCreateWidgetClientModal('${esc(cur.backendId || cur.id)}')">+ 注册新接入端点</button>
+          </div>
+
+          <table class="data-table" style="font-size:12.5px;width:100%;background:var(--card-bg);border:1px solid var(--line);border-radius:6px;margin-bottom:16px;">
+            <thead>
+              <tr>
+                <th style="padding:8px 12px;">端点标识 (Client ID)</th>
+                <th style="padding:8px 12px;">允许域名 (Origins)</th>
+                <th style="padding:8px 12px;">签名凭据 (Secret Mask)</th>
+                <th style="padding:8px 12px;">状态</th>
+                <th style="padding:8px 12px;text-align:right;">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${widgetClients.length === 0 ? `
+                <tr>
+                  <td colspan="5" style="text-align:center;padding:20px;color:var(--ink-dim);">
+                    暂未注册网站接入端点凭据。请点击上方按钮注册接入端点以获取嵌入代码与签名凭据。
+                  </td>
+                </tr>
+              ` : widgetClients.map(c => `
+                <tr>
+                  <td style="padding:8px 12px;font-family:monospace;font-weight:600;">${esc(c.id)}</td>
+                  <td style="padding:8px 12px;color:var(--ink-dim);">${esc(c.origins?.join(', ') || '*')}</td>
+                  <td style="padding:8px 12px;font-family:monospace;color:var(--ink-dim);">${esc(c.secret_mask || '●●●●●●●●')}</td>
+                  <td style="padding:8px 12px;"><span class="badge ok">● 激活</span></td>
+                  <td style="padding:8px 12px;text-align:right;">
+                    <button class="btn sm" style="padding:2px 8px;font-size:11px;" onclick="window.handleRotateWidgetClient('${esc(c.id)}')">轮换密钥</button>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+
+          <b style="font-size:13.5px;color:var(--ink-strong);display:block;margin-bottom:6px;">企业网站挂载嵌入代码</b>
+          <pre style="background:#1e293b;color:#f8fafc;padding:12px;border-radius:6px;font-size:12px;overflow-x:auto;">&lt;script src="http://127.0.0.1:8790/widget.js" data-assistant-id="${esc(cur.backendId || cur.id)}" defer&gt;&lt;/script&gt;</pre>
+          <button class="btn primary" style="margin-top:10px;" onclick="navigator.clipboard.writeText('&lt;script src=\'http://127.0.0.1:8790/widget.js\' data-assistant-id=\'${esc(cur.backendId || cur.id)}\' defer&gt;&lt;/script&gt;');showToast('✓ 嵌入代码已复制到剪贴板！','ok');">📋 复制代码</button>
         </div>
       `;
     } else if (currentTab === 'scope') {
@@ -7142,10 +7179,13 @@
   };
 
   /* 22 全局快捷搜索 Modal (Cmd+K) - 100% 对应 22-状态-全局快捷搜索.png (实时过滤) */
-  window.filterSearchModal = async function(query) {
-    const list = document.getElementById('spotlightResults') || document.getElementById('searchModalList');
-    if (!list) return;
-    const q = (query || '').trim();
+  let searchDebounceTimer = null;
+  window.filterSearchModal = function(query) {
+    clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(async () => {
+      const list = document.getElementById('spotlightResults') || document.getElementById('searchModalList');
+      if (!list) return;
+      const q = (query || '').trim();
     if (!q) {
       // Show default pages
       list.innerHTML = `
@@ -7175,6 +7215,7 @@
       } catch (e) {}
     }
     list.innerHTML = `<div style="padding:14px;text-align:center;color:var(--ink-dim);font-size:13px;">未找到与「${esc(q)}」匹配的知识库条目</div>`;
+    }, 200);
   };
 
   function openSearchModal() {
@@ -7703,6 +7744,24 @@
     render();
   };
 
+  
+  window.handleDeleteSingleDoc = async function(docId) {
+    if (!confirm('确定要从数据集中移除该登记文档吗？此操作将同步剔除所有关联知识块。')) return;
+    showToast('正在删除文档...');
+    if (api && api.connected) {
+      const res = await api.deleteDocument(docId);
+      if (res) {
+        showToast('✓ 文档已成功删除！', 'ok');
+        render();
+      } else {
+        showToast(api.lastError?.message || '删除失败', 'error');
+      }
+    } else {
+      showToast('演示模式：已删除文档', 'ok');
+      render();
+    }
+  };
+
   window.handleBatchDeleteDocs = function() {
     if (!state.selectedDocIds || state.selectedDocIds.length === 0) return;
     const count = state.selectedDocIds.length;
@@ -7887,24 +7946,59 @@
 
   window.handleDirectoryImportPrompt = function() {
     const dsId = state.selectedDatasetId || (api?.context?.defaultDatasetId);
-    const dirPath = prompt('请输入本机待导入的绝对目录路径 (如 D:\\docs 或 /var/data):', 'D:\\AIApp\\Ordo\\docs');
+    const dirPath = prompt('请输入本机待导入的绝对目录路径 (如 D:\\AIApp\\Ordo\\docs):', 'D:\\AIApp\\Ordo\\docs');
     if (!dirPath) return;
-    showToast('正在扫描与预览目录结构...');
+    showToast('正在扫描与预览目录候选文件...');
     if (api && api.connected && dsId && !String(dsId).startsWith('ds-demo-')) {
       (async () => {
         const preview = await api.directoryPreview(dsId, dirPath);
         if (!preview) return showToast(api.lastError?.message || '目录无法读取或路径不存在', 'error');
-        if (!confirm(`已识别目录「${preview.root}」下 ${preview.count} 个候选文件。\n确定立即导入吗？`)) return;
-        const res = await api.directoryImport(dsId, dirPath);
-        if (res) {
-          showToast(`✓ 目录已成功导入！提交 ${res.tasks?.length || preview.count} 个解析任务`, 'ok');
-          render();
-        } else {
-          showToast(api.lastError?.message || '目录导入失败', 'error');
-        }
+        
+        const candidates = preview.candidates || [];
+        const candListHtml = candidates.slice(0, 10).map(c => `
+          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line-soft);font-size:12.5px;">
+            <span>📄 ${esc(c.name || c.path || '文件')}</span>
+            <span class="muted">${esc(c.size ? (c.size/1024).toFixed(1)+' KB' : '')}</span>
+          </div>
+        `).join('');
+
+        const modalHtml = `
+          <div class="modal-box" style="max-width:540px;">
+            <div class="modal-header">
+              <span>确认导入目录 · ${esc(preview.root || dirPath)}</span>
+              <button class="btn sm" data-close>✕</button>
+            </div>
+            <div class="modal-body" style="padding:16px 20px;">
+              <p style="font-size:13px;color:var(--ink-strong);margin-bottom:10px;">
+                共识别到 <b>${preview.count || candidates.length}</b> 个候选文档。确认后系统将原位登记并提交异步解析任务。
+              </p>
+              <div style="max-height:220px;overflow-y:auto;background:var(--inset);border:1px solid var(--line);border-radius:6px;padding:10px 14px;">
+                ${candListHtml || '<div class="muted">未发现支持格式的文件</div>'}
+                ${candidates.length > 10 ? `<div class="muted" style="text-align:center;padding-top:6px;font-size:11.5px;">... 以及其余 ${candidates.length - 10} 个文件</div>` : ''}
+              </div>
+            </div>
+            <div class="modal-footer" style="display:flex;justify-content:flex-end;gap:10px;">
+              <button class="btn" data-close>取消</button>
+              <button class="btn primary" onclick="window.handleExecuteDirImport('${esc(dsId)}', '${esc(dirPath)}')">确认原位导入</button>
+            </div>
+          </div>
+        `;
+        showOverlay(modalHtml);
       })();
     } else {
       showToast(`演示模式：已模拟导入目录 ${dirPath}`, 'ok');
+    }
+  };
+
+  window.handleExecuteDirImport = async function(dsId, dirPath) {
+    closeOverlay();
+    showToast('正在提交目录批量导入任务...');
+    const res = await api.directoryImport(dsId, dirPath);
+    if (res) {
+      showToast(`✓ 目录已成功导入！已提交 ${res.tasks?.length || 1} 个解析任务`, 'ok');
+      render();
+    } else {
+      showToast(api.lastError?.message || '目录导入失败', 'error');
     }
   };
 
