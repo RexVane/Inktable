@@ -1980,6 +1980,7 @@
       releases = Array.isArray(releaseResult) ? releaseResult : [];
       datasetAssistants = Array.isArray(assistantResult) ? assistantResult.filter(a => a.dataset_id === activeDs.id) : [];
     }
+    const selectedWiki = wikiPages.find(p => p.id === state.datasetWikiId) || wikiPages[0] || null;
 
     // Build Tab content
     let tabContentHtml = '';
@@ -2152,58 +2153,43 @@
         </div>
       `;
     } else if (currentTab === 'index') {
+      const activeRelease = releases.find(r => r.id === activeDs.active_release_id || r.status === 'active');
+      const manifest = activeRelease?.manifest || (typeof activeRelease?.manifest_json === 'string' ? (() => { try { return JSON.parse(activeRelease.manifest_json); } catch (e) { return {}; } })() : {});
+      const indexRows = [
+        ['向量索引', manifest.vectorCount ?? manifest.vector_count ?? (activeRelease ? '已发布' : '未记录'), activeRelease ? '可用' : '未构建'],
+        ['全文索引', manifest.fullTextCount ?? manifest.full_text_count ?? (activeRelease ? '已发布' : '未记录'), activeRelease ? '可用' : '未构建'],
+        ['知识块快照', activeDs.chunk_count ?? activeDs.counts?.chunks ?? 0, activeRelease ? `Release v${activeRelease.version}` : '未发布'],
+        ['索引指针', activeDs.active_release_id || '未记录', activeRelease ? '活动' : '未激活']
+      ];
       tabContentHtml = `
-        <div style="background:var(--card-bg);border-radius:8px;border:1px solid var(--line);padding:24px;">
-          <b style="font-size:16px;color:var(--ink-strong);display:block;margin-bottom:16px;">索引引擎与指标状态</b>
-          <div class="grid grid-3" style="gap:16px;margin-bottom:20px;">
-            <div class="card" style="padding:18px;background:var(--inset);border:1px solid var(--line);">
-              <div class="muted" style="font-size:12.5px;">已索引知识块</div>
-              <b style="font-size:24px;color:var(--ink-strong);display:block;margin-top:4px;">${activeDs.chunk_count ?? activeDs.counts?.chunks ?? 0}</b>
-              <div class="ok-text" style="font-size:12px;margin-top:4px;">✓ 100% 向量就绪</div>
-            </div>
-            <div class="card" style="padding:18px;background:var(--inset);border:1px solid var(--line);">
-              <div class="muted" style="font-size:12.5px;">存储引擎</div>
-              <b style="font-size:16px;color:var(--accent);display:block;margin-top:8px;">SQLite (FTS5 + Cosine)</b>
-              <div class="muted" style="font-size:12px;margin-top:4px;">内置轻量向量检索</div>
-            </div>
-            <div class="card" style="padding:18px;background:var(--inset);border:1px solid var(--line);">
-              <div class="muted" style="font-size:12.5px;">活动版本</div>
-              <b style="font-size:16px;color:var(--ink-strong);display:block;margin-top:8px;">${activeDs.active_release_id ? 'Release 指针正常' : '未激活发布'}</b>
-              <div class="muted" style="font-size:12px;margin-top:4px;">支持无损回滚</div>
-            </div>
+        <div class="dataset-index-panel">
+          <div class="dataset-panel-heading"><div><b>索引状态</b><span class="muted">来自当前数据集的活动 Release 和服务端计数</span></div><button class="btn primary" onclick="window.go('knowledge/index')">构建索引</button></div>
+          <div class="dataset-index-cards">
+            ${indexRows.map(row => `<div class="dataset-index-card"><span class="muted">${esc(row[0])}</span><b>${esc(String(row[1]))}</b><span class="${row[2] === '可用' || row[2] === '活动' ? 'ok-text' : 'muted'}">● ${esc(row[2])}</span></div>`).join('')}
           </div>
+          <div class="dataset-index-flow"><div class="dataset-flow-step done"><i>1</i><span>数据块</span><small>${activeDs.chunk_count ?? activeDs.counts?.chunks ?? 0} 块</small></div><em>→</em><div class="dataset-flow-step ${activeRelease ? 'done' : ''}"><i>2</i><span>向量化</span><small>${manifest.embeddingModel || manifest.embedding_model || '未记录模型'}</small></div><em>→</em><div class="dataset-flow-step ${activeRelease ? 'done' : ''}"><i>3</i><span>发布指针</span><small>${activeRelease ? `v${activeRelease.version}` : '等待发布'}</small></div></div>
+          <div class="dataset-panel-heading small"><b>最近构建记录</b><span class="muted">${releases.length} 个 Release</span></div>
+          <table class="dataset-table"><thead><tr><th>版本</th><th>状态</th><th>知识块</th><th>创建时间</th></tr></thead><tbody>${releases.length ? releases.slice(0, 6).map(r => `<tr><td><b>v${esc(r.version)}</b></td><td><span class="badge ${r.status === 'active' ? 'ok' : ''}">${esc(r.status || '未记录')}</span></td><td>${r.chunkCount ?? r.manifest?.chunkCount ?? '—'}</td><td>${esc((r.created_at || r.activated_at || '未记录').replace('T', ' ').slice(0, 16))}</td></tr>`).join('') : '<tr><td colspan="4" class="dataset-empty">暂无 Release 构建记录</td></tr>'}</tbody></table>
         </div>
       `;
     } else if (currentTab === 'wiki') {
       tabContentHtml = `
-        <div style="padding:40px 20px;text-align:center;background:var(--card-bg);border-radius:8px;border:1px solid var(--line);">
-          <div style="font-size:36px;margin-bottom:12px;">📝</div>
-          <b style="font-size:16px;color:var(--ink-strong);">Wiki 与结构化笔记沉淀</b>
-          <p class="muted" style="font-size:13px;max-width:520px;margin:8px auto 16px;line-height:1.6;">
-            当前版本支持将智能问答中的有效证据链或高频回答直接一键「整理为 Wiki」。Wiki 沉淀为知识库中的结构化条目后，将自动参与下一次索引构建。
-          </p>
-          <button class="btn primary" onclick="window.go('apps/chat')">前往智能问答提问并整理</button>
+        <div class="dataset-wiki-panel">
+          <aside class="dataset-wiki-list"><div class="dataset-panel-heading small"><b>Wiki / 笔记</b><button class="btn sm primary" onclick="window.openCreateWikiModal && window.openCreateWikiModal('${esc(kbId || '')}')">新建</button></div>${wikiPages.length ? wikiPages.map((p, i) => `<button class="dataset-wiki-item ${i === 0 ? 'active' : ''}" onclick="window.handleWikiSelect('${esc(p.id)}')"><b>${esc(p.title || '未命名页面')}</b><span>${esc((p.updated_at || p.created_at || '未记录').replace('T', ' ').slice(0, 16))}</span></button>`).join('') : '<div class="dataset-empty">暂无 Wiki 页面<br><small>问答整理或新建后会显示在这里</small></div>'}</aside>
+          <article class="dataset-wiki-editor">${selectedWiki ? `<div class="dataset-panel-heading"><div><b>${esc(selectedWiki.title || '未命名页面')}</b><span class="muted">${selectedWiki.revision_count ?? '—'} 次修订 · ${esc(selectedWiki.status || '未记录')}</span></div><button class="btn" onclick="window.handleWikiEdit('${esc(selectedWiki.id)}')">编辑</button></div><div class="wiki-content-preview">${esc(String(selectedWiki.content_md || selectedWiki.content || '暂无正文内容')).replace(/\n/g, '<br>')}</div><div class="dataset-source-strip"><b>来源与版本</b><span>${esc(selectedWiki.source || '服务端 Wiki 记录')}</span><span>${esc(selectedWiki.updated_at || selectedWiki.created_at || '未记录')}</span></div>` : `<div class="dataset-empty large">📝<b>暂无 Wiki / 笔记</b><span>当前数据集还没有结构化笔记，创建后将参与下一次索引构建。</span></div>`}</article>
+          <aside class="dataset-wiki-info"><b>知识库关联</b><dl><dt>所属知识库</dt><dd>${esc((api?.context?.knowledgeBases || []).find(k => k.id === kbId)?.name || kbId || '未记录')}</dd><dt>页面数量</dt><dd>${wikiPages.length}</dd><dt>索引参与</dt><dd>${wikiPages.length ? '<span class="ok-text">● 下次发布时纳入</span>' : '未记录'}</dd></dl><button class="btn" onclick="window.go('apps/chat')">从问答整理</button></aside>
         </div>
       `;
     } else if (currentTab === 'graph') {
       tabContentHtml = `
-        <div style="padding:40px 20px;text-align:center;background:var(--card-bg);border-radius:8px;border:1px solid var(--line);">
-          <div style="font-size:36px;margin-bottom:12px;">🕸</div>
-          <b style="font-size:16px;color:var(--ink-strong);">知识图谱实体抽取</b>
-          <p class="muted" style="font-size:13px;max-width:520px;margin:8px auto 16px;line-height:1.6;">
-            知识图谱实体与关系扩展属于进阶多路召回策略。当前版本遵循轻量化部署规划（§14），主要依托 Dense 向量检索与 BM25 全文检索通道保障高精度问答。
-          </p>
-          <span class="badge" style="background:var(--inset);color:#64748b;font-size:12px;">未启用 · 诚实规范占位</span>
+        <div class="dataset-graph-panel">
+          <div class="dataset-panel-heading"><div><b>知识图谱</b><span class="muted">${graphData ? `${graphData.entities?.length || 0} 个实体 · ${graphData.relations?.length || 0} 条关系` : '服务端未返回图谱数据'}</span></div><div><button class="btn" onclick="window.handleGraphRefresh()">刷新</button><button class="btn primary" onclick="window.openCreateGraphEntityModal && window.openCreateGraphEntityModal('${esc(activeDs.id)}')">新增实体</button></div></div>
+          ${graphData ? `<div class="graph-canvas"><svg viewBox="0 0 720 250" role="img" aria-label="知识图谱关系图"><path class="graph-edge" d="M130 125 L350 72 L580 125 M130 125 L350 180 L580 125"/><circle class="graph-node main" cx="130" cy="125" r="42"/><circle class="graph-node" cx="350" cy="72" r="36"/><circle class="graph-node" cx="350" cy="180" r="36"/><circle class="graph-node" cx="580" cy="125" r="42"/><text x="130" y="130">${esc((graphData.entities || [])[0]?.name || '实体')}</text><text x="350" y="77">${esc((graphData.entities || [])[1]?.name || '实体')}</text><text x="350" y="185">${esc((graphData.entities || [])[2]?.name || '实体')}</text><text x="580" y="130">${esc((graphData.entities || [])[3]?.name || '实体')}</text></svg></div><table class="dataset-table"><thead><tr><th>实体</th><th>类型</th><th>描述</th><th>来源</th></tr></thead><tbody>${(graphData.entities || []).slice(0, 12).map(e => `<tr><td><b>${esc(e.name || '未命名')}</b></td><td>${esc(e.type || '未记录')}</td><td>${esc(e.description || '—')}</td><td>${esc(e.source_chunk_id || '未记录')}</td></tr>`).join('') || '<tr><td colspan="4" class="dataset-empty">暂无实体</td></tr>'}</tbody></table>` : `<div class="dataset-empty large">🕸<b>知识图谱未启用或暂无数据</b><span>页面已接入图谱接口；服务端未返回实体时不显示示例节点。</span><span class="badge">状态：未记录</span></div>`}
         </div>
       `;
     } else if (currentTab === 'auth') {
       tabContentHtml = `
-        <div style="padding:24px;background:var(--card-bg);border-radius:8px;border:1px solid var(--line);">
-          <b style="font-size:15px;color:var(--ink-strong);display:block;margin-bottom:8px;">授权范围与隔离边界</b>
-          <p class="muted" style="font-size:13px;line-height:1.6;">
-            当前数据集归属于工作空间 <b>${esc(state.currentWorkspace || 'Ordo 企业空间')}</b>。所有文档切块和向量均严格隔离于该工作空间，只有绑定该数据集的智能助手（产品问答助手、技术支持助手）享有检索问答权限。
-          </p>
-        </div>
+        <div class="dataset-auth-panel"><div class="dataset-panel-heading"><div><b>授权与使用方</b><span class="muted">服务端助手绑定关系与当前工作空间范围</span></div><button class="btn primary" onclick="window.go('apps/assistants')">管理智能助手</button></div><div class="auth-scope-card"><span class="auth-scope-icon">⌁</span><div><b>${esc(state.currentWorkspace || '当前工作空间')}</b><p>数据集访问边界由工作空间会话和助手的 dataset_id 决定。</p></div><span class="badge ok">工作空间内</span></div><div class="dataset-panel-heading small"><b>正在使用此数据集的助手</b><span class="muted">${datasetAssistants.length} 个</span></div><table class="dataset-table"><thead><tr><th>助手</th><th>状态</th><th>当前发布</th><th>更新时间</th><th>授权范围</th></tr></thead><tbody>${datasetAssistants.length ? datasetAssistants.map(a => `<tr><td><b>${esc(a.name || a.id)}</b></td><td><span class="badge ${a.status === 'published' ? 'ok' : ''}">${esc(a.status || '未记录')}</span></td><td>${a.active_release_id ? esc(a.active_release_id) : '未发布'}</td><td>${esc((a.updated_at || '未记录').replace('T', ' ').slice(0, 16))}</td><td><span class="ok-text">● 可检索</span></td></tr>`).join('') : '<tr><td colspan="5" class="dataset-empty">暂无助手绑定此数据集</td></tr>'}</tbody></table><div class="dataset-auth-note">成员级权限接口尚未在服务端提供，因此这里仅展示真实的助手绑定关系；成员授权显示为“未记录”。</div></div>
       `;
     }
 
@@ -2276,6 +2262,25 @@
     </div>`;
     return { desc: '知识库、数据源、文档和目录树的统一管理', actions: `<button class="btn primary" onclick="openCreateDatasetModal()">新建数据集</button><div style="position:relative;display:flex;align-items:center;"><input class="input" placeholder="🔍 搜索数据集" style="width:200px;height:36px;"></div>`, html };
   }
+
+  // 数据集页的辅助操作保持在真实页面上下文中，所有刷新都会重新读取服务端数据。
+  window.renderDatasetPage = () => render();
+  window.handleWikiSelect = function (pageId) { state.datasetWikiId = pageId; render(); };
+  window.handleGraphRefresh = function () { render(); };
+  window.handleWikiEdit = async function (pageId) {
+    if (!api || !api.connected || !pageId) { showToast('离线演示模式不可编辑服务端 Wiki', 'warn'); return; }
+    const page = await api.getWikiPage(pageId);
+    if (!page) { showToast(api.lastError?.message || 'Wiki 页面读取失败', 'error'); return; }
+    showOverlay(`<div class="modal-box"><div class="modal-header"><b>编辑 Wiki</b><button class="btn sm" data-close>✕</button></div><div class="modal-body"><label class="muted">标题</label><input class="input" id="wikiEditTitle" value="${esc(page.title || '')}"><label class="muted" style="display:block;margin-top:12px;">正文 Markdown</label><textarea class="textarea" id="wikiEditContent" style="min-height:260px;">${esc(page.content_md || page.content || '')}</textarea></div><div class="modal-footer"><button class="btn" data-close>取消</button><button class="btn primary" onclick="window.handleSaveWikiEdit('${esc(page.id)}')">保存修订</button></div></div>`);
+  };
+  window.handleSaveWikiEdit = async function (pageId) {
+    const title = document.getElementById('wikiEditTitle')?.value?.trim();
+    const content = document.getElementById('wikiEditContent')?.value || '';
+    if (!title || !content) { showToast('标题和正文不能为空', 'warn'); return; }
+    const saved = await api.request(`/api/v1/wiki/${encodeURIComponent(pageId)}`, { method: 'POST', body: JSON.stringify({ title, contentMd: content }) });
+    if (!saved) { showToast(api.lastError?.message || 'Wiki 保存失败', 'error'); return; }
+    closeOverlay(); showToast('Wiki 修订已保存', 'ok'); render();
+  };
 
   /* Interactive Database Connection Modal */
   window.openAddDatabaseModal = function() {
@@ -2994,7 +2999,8 @@
     state.currentChunks = chunks;
     const activeRelease = (releases || []).find(item => item.status === 'active') || null;
     const selectedIds = new Set(state.indexSelectedChunkIds || []);
-    const selected = chunks.find(item => item.id === state.selectedChunkId) || chunks[0] || null;
+    const routeChunkId = state.routeParams?.chunk;
+    const selected = chunks.find(item => item.id === (routeChunkId || state.selectedChunkId)) || chunks[0] || null;
     if (selected && !state.selectedChunkId) state.selectedChunkId = selected.id;
     const vectorized = chunks.filter(item => item.embedding_json || item.embedding_model).length;
     const warnings = chunks.filter(item => item.excluded || item.warnings?.length || (item.warnings_json && item.warnings_json !== '[]')).length;
@@ -7845,9 +7851,16 @@
       taskItems = [{ title: '通知仅在线可用', status: '— 未连接服务端', time: '—', tone: 'warn' }];
     }
     if (api && api.connected) {
-      const ids = state.notificationTasks.map(task => task.id);
-      try { localStorage.setItem('ordo.notificationRead', JSON.stringify(ids)); } catch (e) {}
-      state.notificationUnreadCount = 0;
+      const terminalIds = state.notificationTasks
+        .filter(task => taskTerminalStatuses.has(task.status))
+        .map(task => task.id);
+      try {
+        const read = getReadNotificationIds();
+        terminalIds.forEach(id => read.add(id));
+        localStorage.setItem('ordo.notificationRead', JSON.stringify([...read]));
+      } catch (e) {}
+      state.notificationUnreadCount = state.notificationTasks
+        .filter(task => taskTerminalStatuses.has(task.status) && !terminalIds.includes(task.id)).length;
       updateNotificationBadge();
     }
 
