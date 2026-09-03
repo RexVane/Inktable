@@ -6125,13 +6125,43 @@
 
   /* 17 设置 > 通用 (General) - 100% 对应 17-设置-通用.png */
   async function pageGeneral() {
+    let gen = {
+      autoStart: false,
+      minimizeToTray: true,
+      notifyOnMessage: true,
+      notifyOnTask: true,
+      notifyOnUpdate: true,
+      telemetryAnonymous: false,
+      enableLocalProbe: true
+    };
+
+    // Load from state / localStorage fallback
+    if (state.generalSettings) {
+      gen = { ...gen, ...state.generalSettings };
+    } else {
+      ['autoStart', 'minimizeToTray', 'notifyOnMessage', 'notifyOnTask', 'notifyOnUpdate', 'telemetryAnonymous', 'enableLocalProbe'].forEach(k => {
+        const stored = localStorage.getItem('ordo.settings.' + k);
+        if (stored !== null) gen[k] = (stored === 'true');
+      });
+    }
+
+    if (api && api.connected) {
+      try {
+        const allSettings = await api.getSettings();
+        if (allSettings && allSettings.general) {
+          gen = { ...gen, ...allSettings.general };
+          state.generalSettings = gen;
+        }
+      } catch (e) {}
+    }
+
     const html = `
-    <div style="display:flex;flex-direction:column;gap:14px;width:100%;">
+    <div id="generalSettingsContainer" style="display:flex;flex-direction:column;gap:14px;width:100%;">
       <!-- 1. 外观与语言 -->
-      <div class="card" style="padding:0;background:#ffffff;border:1px solid #e5e7eb;border-radius:8px;">
+      <div class="card" style="padding:0;background:var(--card-bg);border:1px solid var(--line);border-radius:8px;">
         <div style="display:grid;grid-template-columns:250px 1fr;align-items:stretch;">
           <!-- Left Info Column -->
-          <div style="padding:18px 20px;border-right:1px solid #e5e7eb;display:flex;align-items:center;gap:14px;">
+          <div style="padding:18px 20px;border-right:1px solid var(--line);display:flex;align-items:center;gap:14px;">
             <div style="font-size:24px;color:#16a34a;display:flex;align-items:center;justify-content:center;">🌐</div>
             <div>
               <b style="font-size:14px;color:var(--ink-strong);">外观与语言</b>
@@ -6142,7 +6172,10 @@
           <div style="padding:18px 20px;display:grid;grid-template-columns:1fr 1fr 1.2fr;gap:16px;align-items:center;">
             <div>
               <label class="muted" style="font-size:11.5px;display:block;margin-bottom:6px;">语言</label>
-              <select class="input" style="width:100%;height:34px;font-size:12.5px;"><option>简体中文</option><option>English</option></select>
+              <select class="input" style="width:100%;height:34px;font-size:12.5px;" onchange="window.handleLanguageChange(this.value)">
+                <option value="zh-CN" selected>简体中文 (zh-CN)</option>
+                <option value="en-US" disabled title="规划红线：当前版本专注于中文企业知识库">English (暂不支持 · 仅支持中文)</option>
+              </select>
             </div>
             <div>
               <label class="muted" style="font-size:11.5px;display:block;margin-bottom:6px;">主题外观 (实时切换)</label>
@@ -6161,9 +6194,9 @@
       </div>
 
       <!-- 2. 启动与窗口 -->
-      <div class="card" style="padding:0;background:#ffffff;border:1px solid #e5e7eb;border-radius:8px;">
+      <div class="card" style="padding:0;background:var(--card-bg);border:1px solid var(--line);border-radius:8px;">
         <div style="display:grid;grid-template-columns:250px 1fr;align-items:stretch;">
-          <div style="padding:18px 20px;border-right:1px solid #e5e7eb;display:flex;align-items:center;gap:14px;">
+          <div style="padding:18px 20px;border-right:1px solid var(--line);display:flex;align-items:center;gap:14px;">
             <div style="font-size:24px;color:#16a34a;display:flex;align-items:center;justify-content:center;">💻</div>
             <div>
               <b style="font-size:14px;color:var(--ink-strong);">启动与窗口</b>
@@ -6171,22 +6204,22 @@
             </div>
           </div>
           <div style="padding:12px 20px;display:flex;flex-direction:column;">
-            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #f1f5f9;font-size:13px;color:var(--ink-strong);">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--line-soft);font-size:13px;color:var(--ink-strong);">
               <span>开机时自动启动 Ordo</span>
-              <label class="switch-toggle"><input type="checkbox"><span class="switch-slider"></span></label>
+              <label class="switch-toggle"><input type="checkbox" id="sw_autoStart" data-key="autoStart" onchange="window.handleToggleSetting('autoStart', this.checked)" ${gen.autoStart ? 'checked' : ''}><span class="switch-slider"></span></label>
             </div>
             <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;font-size:13px;color:var(--ink-strong);">
               <span>最小化到系统托盘</span>
-              <label class="switch-toggle"><input type="checkbox" checked><span class="switch-slider"></span></label>
+              <label class="switch-toggle"><input type="checkbox" id="sw_minimizeToTray" data-key="minimizeToTray" onchange="window.handleToggleSetting('minimizeToTray', this.checked)" ${gen.minimizeToTray ? 'checked' : ''}><span class="switch-slider"></span></label>
             </div>
           </div>
         </div>
       </div>
 
       <!-- 3. 通知 -->
-      <div class="card" style="padding:0;background:#ffffff;border:1px solid #e5e7eb;border-radius:8px;">
+      <div class="card" style="padding:0;background:var(--card-bg);border:1px solid var(--line);border-radius:8px;">
         <div style="display:grid;grid-template-columns:250px 1fr;align-items:stretch;">
-          <div style="padding:18px 20px;border-right:1px solid #e5e7eb;display:flex;align-items:center;gap:14px;">
+          <div style="padding:18px 20px;border-right:1px solid var(--line);display:flex;align-items:center;gap:14px;">
             <div style="font-size:24px;color:#16a34a;display:flex;align-items:center;justify-content:center;">🔔</div>
             <div>
               <b style="font-size:14px;color:var(--ink-strong);">通知</b>
@@ -6194,26 +6227,26 @@
             </div>
           </div>
           <div style="padding:12px 20px;display:flex;flex-direction:column;">
-            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #f1f5f9;font-size:13px;color:var(--ink-strong);">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--line-soft);font-size:13px;color:var(--ink-strong);">
               <span>收到消息时通知</span>
-              <label class="switch-toggle"><input type="checkbox" checked><span class="switch-slider"></span></label>
+              <label class="switch-toggle"><input type="checkbox" id="sw_notifyOnMessage" data-key="notifyOnMessage" onchange="window.handleToggleSetting('notifyOnMessage', this.checked)" ${gen.notifyOnMessage ? 'checked' : ''}><span class="switch-slider"></span></label>
             </div>
-            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #f1f5f9;font-size:13px;color:var(--ink-strong);">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--line-soft);font-size:13px;color:var(--ink-strong);">
               <span>任务完成时通知</span>
-              <label class="switch-toggle"><input type="checkbox" checked><span class="switch-slider"></span></label>
+              <label class="switch-toggle"><input type="checkbox" id="sw_notifyOnTask" data-key="notifyOnTask" onchange="window.handleToggleSetting('notifyOnTask', this.checked)" ${gen.notifyOnTask ? 'checked' : ''}><span class="switch-slider"></span></label>
             </div>
             <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;font-size:13px;color:var(--ink-strong);">
               <span>产品更新通知</span>
-              <label class="switch-toggle"><input type="checkbox" checked><span class="switch-slider"></span></label>
+              <label class="switch-toggle"><input type="checkbox" id="sw_notifyOnUpdate" data-key="notifyOnUpdate" onchange="window.handleToggleSetting('notifyOnUpdate', this.checked)" ${gen.notifyOnUpdate ? 'checked' : ''}><span class="switch-slider"></span></label>
             </div>
           </div>
         </div>
       </div>
 
       <!-- 4. 下载与临时文件 -->
-      <div class="card" style="padding:0;background:#ffffff;border:1px solid #e5e7eb;border-radius:8px;">
+      <div class="card" style="padding:0;background:var(--card-bg);border:1px solid var(--line);border-radius:8px;">
         <div style="display:grid;grid-template-columns:250px 1fr;align-items:stretch;">
-          <div style="padding:18px 20px;border-right:1px solid #e5e7eb;display:flex;align-items:center;gap:14px;">
+          <div style="padding:18px 20px;border-right:1px solid var(--line);display:flex;align-items:center;gap:14px;">
             <div style="font-size:24px;color:#16a34a;display:flex;align-items:center;justify-content:center;">📥</div>
             <div>
               <b style="font-size:14px;color:var(--ink-strong);">下载与临时文件</b>
@@ -6221,11 +6254,11 @@
             </div>
           </div>
           <div style="padding:14px 20px;display:flex;flex-direction:column;">
-            <div style="padding-bottom:12px;border-bottom:1px solid #f1f5f9;">
+            <div style="padding-bottom:12px;border-bottom:1px solid var(--line-soft);">
               <label class="muted" style="font-size:11.5px;display:block;margin-bottom:6px;">下载目录</label>
               <div style="display:flex;gap:8px;">
-                <input class="input" value="C:\Users\ordouser\Downloads" style="flex:1;height:34px;font-size:12.5px;">
-                <button class="btn sm" style="background:#fff;border:1px solid #d1d5db;height:34px;padding:0 14px;border-radius:5px;" onclick="triggerNativeFolderUpload()">浏览</button>
+                <input class="input" id="downloadDirInput" value="D:\\AIApp\\Ordo\\downloads" style="flex:1;height:34px;font-size:12.5px;">
+                <button class="btn sm" style="background:var(--card-bg);border:1px solid var(--line);color:var(--ink);height:34px;padding:0 14px;border-radius:5px;" onclick="triggerNativeFolderUpload()">浏览</button>
               </div>
             </div>
             <div style="padding-top:12px;">
@@ -6237,9 +6270,9 @@
       </div>
 
       <!-- 5. 隐私与诊断 -->
-      <div class="card" style="padding:0;background:#ffffff;border:1px solid #e5e7eb;border-radius:8px;">
+      <div class="card" style="padding:0;background:var(--card-bg);border:1px solid var(--line);border-radius:8px;">
         <div style="display:grid;grid-template-columns:250px 1fr;align-items:stretch;">
-          <div style="padding:18px 20px;border-right:1px solid #e5e7eb;display:flex;align-items:center;gap:14px;">
+          <div style="padding:18px 20px;border-right:1px solid var(--line);display:flex;align-items:center;gap:14px;">
             <div style="font-size:24px;color:#16a34a;display:flex;align-items:center;justify-content:center;">🛡️</div>
             <div>
               <b style="font-size:14px;color:var(--ink-strong);">隐私与诊断</b>
@@ -6247,12 +6280,12 @@
             </div>
           </div>
           <div style="padding:12px 20px;display:flex;flex-direction:column;">
-            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #f1f5f9;">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--line-soft);">
               <div>
                 <div style="font-size:13px;color:var(--ink-strong);">允许发送匿名使用数据</div>
                 <div class="muted" style="font-size:11.5px;margin-top:2px;">帮助我们改进产品体验（不包含内容数据）</div>
               </div>
-              <label class="switch-toggle"><input type="checkbox"><span class="switch-slider"></span></label>
+              <label class="switch-toggle"><input type="checkbox" id="sw_telemetryAnonymous" data-key="telemetryAnonymous" onchange="window.handleToggleSetting('telemetryAnonymous', this.checked)" ${gen.telemetryAnonymous ? 'checked' : ''}><span class="switch-slider"></span></label>
             </div>
             <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;">
               <span class="muted" style="font-size:12px;">诊断日志级别</span>
@@ -6263,9 +6296,9 @@
       </div>
 
       <!-- 6. 本机探测 -->
-      <div class="card" style="padding:0;background:#ffffff;border:1px solid #e5e7eb;border-radius:8px;">
+      <div class="card" style="padding:0;background:var(--card-bg);border:1px solid var(--line);border-radius:8px;">
         <div style="display:grid;grid-template-columns:250px 1fr;align-items:stretch;">
-          <div style="padding:18px 20px;border-right:1px solid #e5e7eb;display:flex;align-items:center;gap:14px;">
+          <div style="padding:18px 20px;border-right:1px solid var(--line);display:flex;align-items:center;gap:14px;">
             <div style="font-size:24px;color:#16a34a;display:flex;align-items:center;justify-content:center;">💻</div>
             <div>
               <b style="font-size:14px;color:var(--ink-strong);">本机探测</b>
@@ -6280,16 +6313,16 @@
                 开启即表示您同意 Ordo 在本机运行探测。
               </div>
             </div>
-            <label class="switch-toggle"><input type="checkbox" checked><span class="switch-slider"></span></label>
+            <label class="switch-toggle"><input type="checkbox" id="sw_enableLocalProbe" data-key="enableLocalProbe" onchange="window.handleToggleSetting('enableLocalProbe', this.checked)" ${gen.enableLocalProbe ? 'checked' : ''}><span class="switch-slider"></span></label>
           </div>
         </div>
       </div>
 
       <!-- Bottom Actions Toolbar -->
       <div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;padding:16px 0 24px;">
-        <button class="btn" style="background:#ffffff;border:1px solid #d1d5db;height:36px;padding:0 16px;border-radius:6px;font-size:13px;font-weight:500;color:var(--ink-strong);cursor:pointer;" onclick="window.handleResetGeneralSettings()">恢复默认</button>
+        <button class="btn" style="background:var(--card-bg);border:1px solid var(--line);height:36px;padding:0 16px;border-radius:6px;font-size:13px;font-weight:500;color:var(--ink-strong);cursor:pointer;" onclick="window.handleResetGeneralSettings()">恢复默认</button>
         <div style="display:flex;align-items:center;gap:10px;">
-          <button class="btn" style="background:#ffffff;border:1px solid #d1d5db;height:36px;padding:0 18px;border-radius:6px;font-size:13px;font-weight:500;color:var(--ink-strong);cursor:pointer;" onclick="window.handleCancelGeneralSettings()">取消</button>
+          <button class="btn" style="background:var(--card-bg);border:1px solid var(--line);height:36px;padding:0 18px;border-radius:6px;font-size:13px;font-weight:500;color:var(--ink-strong);cursor:pointer;" onclick="window.handleCancelGeneralSettings()">取消</button>
           <button class="btn primary" style="background:var(--accent);color:#ffffff;height:36px;padding:0 22px;border-radius:6px;font-size:13.5px;font-weight:500;cursor:pointer;" onclick="window.handleSaveGeneralSettings()">保存设置</button>
         </div>
       </div>
@@ -6638,7 +6671,7 @@
     const html = `
     <div style="display:flex;flex-direction:column;gap:16px;width:100%;">
       <!-- Top Hero Card: Ordo 1.8.0 -->
-      <div class="card" style="padding:20px 24px;display:flex;align-items:center;justify-content:space-between;background:#ffffff;">
+      <div class="card" style="padding:20px 24px;display:flex;align-items:center;justify-content:space-between;background:var(--card-bg);border:1px solid var(--line);">
         <div style="display:flex;align-items:center;gap:18px;">
           <!-- Green Ribbon Logo Icon -->
           <div style="display:flex;align-items:center;gap:10px;">
@@ -6658,7 +6691,7 @@
         </div>
         <div style="display:flex;align-items:center;gap:10px;">
           <button class="btn primary" id="checkUpdateBtn" style="background:var(--accent);color:#ffffff;height:36px;padding:0 20px;border-radius:6px;font-size:13px;font-weight:500;cursor:pointer;" onclick="handleCheckSystemUpdate()">检查更新</button>
-          <button class="btn" style="background:#ffffff;border:1px solid #d1d5db;height:36px;padding:0 18px;border-radius:6px;font-size:13px;font-weight:500;color:var(--ink-strong);cursor:pointer;" onclick="openReleaseNotesModal()">查看发布说明</button>
+          <button class="btn" style="background:var(--card-bg);border:1px solid var(--line);height:36px;padding:0 18px;border-radius:6px;font-size:13px;font-weight:500;color:var(--ink-strong);cursor:pointer;" onclick="openReleaseNotesModal()">查看发布说明</button>
         </div>
       </div>
 
@@ -7548,11 +7581,28 @@
   };
 
   // 2. Real General Settings Persistence
-  window.handleToggleSetting = function(key, val) {
+  window.handleToggleSetting = async function(key, val) {
     state.generalSettings = state.generalSettings || {};
-    state.generalSettings[key] = val;
-    localStorage.setItem('ordo.settings.' + key, val);
-    showToast(`设置项已更新: ${val ? '开启' : '关闭'}`);
+    state.generalSettings[key] = Boolean(val);
+    localStorage.setItem('ordo.settings.' + key, String(val));
+    
+    const labelMap = {
+      autoStart: '开机时自动启动 Ordo',
+      minimizeToTray: '最小化到系统托盘',
+      notifyOnMessage: '收到消息时通知',
+      notifyOnTask: '任务完成时通知',
+      notifyOnUpdate: '产品更新通知',
+      telemetryAnonymous: '允许发送匿名使用数据',
+      enableLocalProbe: '启用本机探测'
+    };
+    const name = labelMap[key] || '设置项';
+    showToast(`✓ ${name}已${val ? '开启' : '关闭'}并生效`, val ? 'ok' : '');
+
+    if (api && api.connected) {
+      try {
+        await api.updateSetting('general', { [key]: Boolean(val) });
+      } catch (e) {}
+    }
   };
 
   window.handleSaveAllSettings = function() {
