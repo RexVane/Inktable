@@ -9,8 +9,37 @@ const tar = require('tar-stream');
 const zlib = require('node:zlib');
 const { pipeline } = require('node:stream/promises');
 const { id, now, required, AppError, hash, page, parseJson, stableJson } = require('./core');
+const { execSync } = require('node:child_process');
 const { atomicWrite, assertWithin } = require('./storage');
 const { validateArchivePath } = require('./ingest');
+
+function isWindowsAutoStartEnabled() {
+  if (process.platform !== 'win32') return false;
+  try {
+    const out = execSync('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "Ordo"', { stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000 }).toString();
+    return out.includes('Ordo') && out.includes('REG_SZ');
+  } catch {
+    return false;
+  }
+}
+
+function setWindowsAutoStart(enabled, projectRoot) {
+  if (process.platform !== 'win32') return false;
+  try {
+    if (enabled) {
+      const nodePath = process.execPath;
+      const scriptPath = path.resolve(projectRoot, 'server', 'src', 'main.js');
+      const cmd = `\\"${nodePath}\\" \\"${scriptPath}\\"`;
+      execSync(`reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "Ordo" /t REG_SZ /d "${cmd}" /f`, { stdio: 'ignore', timeout: 3000 });
+      return true;
+    } else {
+      execSync('reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "Ordo" /f', { stdio: 'ignore', timeout: 3000 });
+      return true;
+    }
+  } catch {
+    return false;
+  }
+}
 
 function backupKey(secretStore, workspaceId, backupId) {
   return Buffer.from(crypto.hkdfSync('sha256', secretStore.key, workspaceId, `ordo-backup:${backupId}`, 32));
@@ -179,13 +208,21 @@ class ProductService {
   }
 
   getSettings(workspaceId = this.workspaceId()) {
-    return Object.fromEntries(this.db.all('SELECT key,value_json,updated_at FROM settings WHERE workspace_id=? ORDER BY key', workspaceId).map(row => [row.key, { ...row.value, updatedAt: row.updated_at }]));
+    const settings = Object.fromEntries(this.db.all('SELECT key,value_json,updated_at FROM settings WHERE workspace_id=? ORDER BY key', workspaceId).map(row => [row.key, { ...row.value, updatedAt: row.updated_at }]));
+    if (process.platform === 'win32') {
+      settings.general = settings.general || {};
+      settings.general.autoStart = isWindowsAutoStartEnabled();
+    }
+    return settings;
   }
 
   updateSetting(key, value, workspaceId = this.workspaceId(), requestId) {
     const allowed = new Set(['general','query','ingestion','backup']);
     if (!allowed.has(key)) throw new AppError(400, 'SETTING_KEY_INVALID', '设置分组无效');
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new AppError(400, 'VALIDATION_ERROR', '设置值必须是对象');
+    if (key === 'general' && value.autoStart !== undefined) {
+      setWindowsAutoStart(Boolean(value.autoStart), this.config.projectRoot);
+    }
     this.db.run(`INSERT INTO settings(workspace_id,key,value_json,updated_at) VALUES(?,?,?,?)
       ON CONFLICT(workspace_id,key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`, workspaceId, key, JSON.stringify(value), now());
     this.audit.append({ workspaceId, action: 'setting.update', objectType: 'setting', objectId: key, requestId, details: { fields: Object.keys(value) } });

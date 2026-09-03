@@ -299,6 +299,7 @@ async function createApp(overrides = {}) {
   app.patch('/api/v1/models/:id', async request => { if (request.body?.baseUrl) product.requireFeature('externalModels', workspace(request)); return data(await models.update(request.params.id, request.body || {}, workspace(request), request.id)); });
   app.delete('/api/v1/models/:id', async request => data(models.remove(request.params.id, workspace(request), request.id)));
   app.post('/api/v1/models/:id/test', async request => { const model = models.get(request.params.id, workspace(request)); if (model.provider !== 'local-extractive') product.requireFeature('externalModels', workspace(request)); return data(await models.test(request.params.id, workspace(request), request.id)); });
+  app.get('/api/v1/models/probe-local', async () => data(await models.probeLocalOllama()));
 
   app.get('/api/v1/search', async request => data(product.globalSearch(request.query?.q, workspace(request), boundedInt(request.query?.limit, 30, 1, 100, 'limit'))));
   app.get('/api/v1/settings', async request => data(product.getSettings(workspace(request))));

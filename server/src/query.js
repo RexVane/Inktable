@@ -76,12 +76,9 @@ class QueryService {
     const conversation = this.getConversation(conversationId, workspaceId);
     if (conversation.status !== 'active') throw new AppError(409, 'INVALID_STATE', '当前会话不可继续问答');
     const question = required(input.question ?? input.query, 'question');
+    // Delay persistence until generation and citation validation succeed. This
+    // prevents a failed request from leaving a half-finished user message.
     const userMessageId = id('msg');
-    const timestamp = now();
-    this.db.run("INSERT INTO messages(id,workspace_id,conversation_id,role,content,metadata_json,created_at) VALUES(?,?,?,?,?,?,?)",
-      userMessageId, workspaceId, conversationId, 'user', question, '{}', timestamp);
-    if (conversation.title === '新对话') this.db.run('UPDATE conversations SET title=?,updated_at=? WHERE id=?', question.slice(0, 60), now(), conversationId);
-
     const traceId = id('trace');
     const started = performance.now();
     const stages = [];
@@ -164,6 +161,16 @@ class QueryService {
     stageStart = performance.now();
     let generated;
     let degraded = false;
+    let tokensStreamed = false;
+    const history = (conversation.messages || [])
+      .filter(m => m.role === 'user' || m.role === 'assistant')
+      .slice(-6)
+      .map(m => ({ role: m.role, content: m.content }));
+    const onModelToken = onEvent ? (delta) => {
+      tokensStreamed = true;
+      onEvent('token', { delta });
+    } : null;
+
     const strictEvidence = Boolean(conversation.strict_evidence);
     if (strictEvidence && !selected.length) {
       generated = require('./models').localEvidenceAnswer(question, selected);
@@ -171,7 +178,15 @@ class QueryService {
       generated.degradationReason = 'NO_SUPPORTING_EVIDENCE';
     } else {
       try {
-        generated = await this.models.generate({ connectionId: conversation.model_connection_id, workspaceId, question, evidence: selected, strictEvidence });
+        generated = await this.models.generate({
+          connectionId: conversation.model_connection_id,
+          workspaceId,
+          question,
+          evidence: selected,
+          strictEvidence,
+          history,
+          onToken: onModelToken
+        });
       } catch (error) {
         if (!selected.length && error.code !== 'FEATURE_DISABLED') throw error;
         generated = require('./models').localEvidenceAnswer(question, selected);
@@ -192,6 +207,8 @@ class QueryService {
     const assistantMessageId = id('msg');
     const finished = now();
     this.db.transaction(() => {
+      this.db.run("INSERT INTO messages(id,workspace_id,conversation_id,role,content,metadata_json,created_at) VALUES(?,?,?,?,?,?,?)",
+        userMessageId, workspaceId, conversationId, 'user', question, '{}', finished);
       this.db.run("INSERT INTO messages(id,workspace_id,conversation_id,role,content,evidence_status,trace_id,metadata_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
         assistantMessageId, workspaceId, conversationId, 'assistant', generated.content, evidenceStatus, traceId,
         JSON.stringify({ provider: generated.provider, modelId: generated.modelId, degraded }), finished);
@@ -204,9 +221,10 @@ class QueryService {
           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, id('cite'), workspaceId, traceId, assistantMessageId, conversation.release_id,
           item.documentId, item.documentRevisionId, item.chunkRevisionId, item.title, JSON.stringify(item.locator || {}), item.content.slice(0, 500), index + 1, finished);
       });
-      this.db.run('UPDATE conversations SET updated_at=? WHERE id=?', finished, conversationId);
+      if (conversation.title === '新对话') this.db.run('UPDATE conversations SET title=?,updated_at=? WHERE id=? AND workspace_id=?', question.slice(0, 60), finished, conversationId, workspaceId);
+      else this.db.run('UPDATE conversations SET updated_at=? WHERE id=? AND workspace_id=?', finished, conversationId, workspaceId);
     });
-    if (onEvent) {
+    if (onEvent && !tokensStreamed) {
       const text = String(generated.content || '');
       const step = 4;
       for (let i = 0; i < text.length; i += step) {

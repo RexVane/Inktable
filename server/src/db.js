@@ -614,7 +614,7 @@ class OrdoDatabase {
       this.raw.prepare('INSERT OR IGNORE INTO settings(workspace_id,key,value_json,updated_at) VALUES(?,?,?,?)')
         .run(this.config.localWorkspaceId, key, JSON.stringify(value), timestamp);
     }
-    for (const [key, enabled] of Object.entries({ wiki: true, assistants: true, externalModels: true, graph: false, databaseConnectors: false, websiteAssistant: false })) {
+    for (const [key, enabled] of Object.entries({ wiki: true, assistants: true, externalModels: true, graph: true, databaseConnectors: true, websiteAssistant: true })) {
       this.raw.prepare('INSERT OR IGNORE INTO feature_flags(workspace_id,key,enabled,config_json,updated_at) VALUES(?,?,?,?,?)')
         .run(this.config.localWorkspaceId, key, enabled ? 1 : 0, '{}', timestamp);
     }

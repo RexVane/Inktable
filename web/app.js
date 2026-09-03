@@ -202,7 +202,13 @@
 
     // Storage Interactive State
     storageTab: 'overview',
-    storageChecked: false
+    storageChecked: false,
+
+    // Server-backed notification and route state
+    notificationTasks: [],
+    notificationUnreadCount: null,
+    notificationInitialized: false,
+    routeParams: {}
   };
 
   /* Ordo Local-First REST API Client */
@@ -328,8 +334,11 @@
           statusText: a.status === 'published' ? '已发布' : a.status === 'paused' ? '已停用' : a.status === 'draft' ? '草稿' : (a.status || '—'),
           health: a.status === 'published' ? '健康' : '未发布',
           url: config.url || '—',
+          datasetId: a.dataset_id || null,
           kb: a.dataset_name || '—',
-          version: a.release_version ? `v${a.release_version}` : '未发布',
+          releaseId: a.active_release_id || null,
+          releaseVersion: a.release_version != null ? a.release_version : null,
+          version: a.release_version != null ? `v${a.release_version}` : '未发布',
           desc: config.description || '',
           tone: config.tone || '专业且友好',
           welcome: config.welcome || '你好，请问有什么可以帮你？',
@@ -359,6 +368,7 @@
     async createKnowledgeBase(payload) { return (await this.request('/api/v1/knowledge-bases', { method: 'POST', body: JSON.stringify(payload) }))?.data; },
     async getKnowledgeBase(kbId) { return (await this.request(`/api/v1/knowledge-bases/${kbId}`))?.data; },
     async getDatasets(kbId) { return (await this.request(`/api/v1/knowledge-bases/${kbId}/datasets`))?.data; },
+    async getDataset(dsId) { return (await this.request(`/api/v1/datasets/${dsId}`))?.data; },
     async getSources(dsId) {
       const response = await this.request(`/api/v1/datasets/${dsId}/sources`);
       return this.collection(response?.data, response?.meta);
@@ -390,6 +400,7 @@
     async getModels() { return (await this.request('/api/v1/models'))?.data; },
     async createModel(payload) { return (await this.request('/api/v1/models', { method: 'POST', body: JSON.stringify(payload) }))?.data; },
     async testModel(modelId) { return (await this.request(`/api/v1/models/${modelId}/test`, { method: 'POST', body: JSON.stringify({}) }))?.data; },
+    async probeLocalModel() { return (await this.request('/api/v1/models/probe-local'))?.data; },
     async getAssistants() { return (await this.request('/api/v1/assistants'))?.data; },
     async updateAssistant(id, payload) { return (await this.request(`/api/v1/assistants/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }))?.data; },
     async getConversations() {
@@ -490,6 +501,15 @@
     async publishAssistant(id) { return (await this.request(`/api/v1/assistants/${id}/publish`, { method: 'POST', body: JSON.stringify({}) }))?.data; },
     async pauseAssistant(id) { return (await this.request(`/api/v1/assistants/${id}/pause`, { method: 'POST', body: JSON.stringify({}) }))?.data; },
     async getAssistantClients(id) { return (await this.request(`/api/v1/assistants/${id}/clients`))?.data; },
+    async getAssistant(id) { return (await this.request(`/api/v1/assistants/${id}`))?.data; },
+    async getWidgetBundleStatus() {
+      try {
+        const res = await fetch('/widget.js', { method: 'HEAD', cache: 'no-store' });
+        return { available: res.ok, status: res.status };
+      } catch (error) {
+        return { available: false, status: 0, error: error.message };
+      }
+    },
     async createAssistantClient(id, payload) { return (await this.request(`/api/v1/assistants/${id}/clients`, { method: 'POST', body: JSON.stringify(payload) }))?.data; },
     async rotateWidgetClient(id) { return (await this.request(`/api/v1/widget-clients/${id}/rotate`, { method: 'POST', body: JSON.stringify({}) }))?.data; },
     async revokeWidgetClient(id) { return (await this.request(`/api/v1/widget-clients/${id}`, { method: 'DELETE' }))?.data; },
@@ -533,6 +553,9 @@
 
   const app = document.getElementById('app');
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  const taskTerminalStatuses = new Set(['succeeded', 'partial', 'failed', 'cancelled', 'paused']);
+  const taskStatusLabel = status => ({ queued: '待处理', running: '处理中', paused: '已暂停', succeeded: '已完成', partial: '部分完成', failed: '失败', cancelled: '已取消' }[status] || status || '未知');
+  const formatDateTime = value => value ? String(value).replace('T', ' ').slice(0, 19) : '—';
 
   function emptyState(title, detail, actionHtml = '') {
     return `<div class="card"><div class="card-body" style="padding:48px 24px;text-align:center;">
@@ -540,6 +563,12 @@
       <div class="muted" style="margin-top:8px;font-size:13px;">${esc(detail)}</div>
       ${actionHtml ? `<div style="margin-top:18px;">${actionHtml}</div>` : ''}
     </div></div>`;
+  }
+
+  function readRouteParams() {
+    const raw = window.location.hash.replace(/^#\/?/, '');
+    const queryIndex = raw.indexOf('?');
+    return queryIndex < 0 ? {} : Object.fromEntries(new URLSearchParams(raw.slice(queryIndex + 1)).entries());
   }
 
   function readPage() {
@@ -6431,11 +6460,35 @@
       ];
     }
     const curId = state.selectedAssistantId || asts[0]?.id;
-    const cur = asts.find(a => a.id === curId) || asts[0];
+    let cur = asts.find(a => a.id === curId) || asts[0];
+    if (!cur) {
+      return { desc: '企业网站助手的创建、数据源、模型与发布治理', actions: '<button class="btn primary" onclick="openCreateAssistantModal()">新建助手</button>', html: emptyState('暂无智能助手', api?.connected ? '服务端尚未创建智能助手。' : '当前处于离线演示模式。') };
+    }
     state.selectedAssistantId = cur.id;
 
+    // The list endpoint contains the current dataset and release join, while the detail
+    // endpoint is authoritative for the active assistant release and its status.
+    let assistantDetail = null;
+    if (api && api.connected && cur.backendId) {
+      assistantDetail = await api.getAssistant(cur.backendId);
+      if (assistantDetail) {
+        const activeRelease = (assistantDetail.releases || []).find(r => r.id === assistantDetail.active_release_id) || null;
+        cur = { ...cur,
+          datasetId: assistantDetail.dataset_id,
+          releaseId: assistantDetail.active_release_id || null,
+          releaseVersion: activeRelease?.version ?? null,
+          version: activeRelease ? `v${activeRelease.version}` : '未发布',
+          status: assistantDetail.status,
+          statusText: assistantDetail.status === 'published' ? '已发布' : assistantDetail.status === 'paused' ? '已停用' : assistantDetail.status === 'draft' ? '草稿' : (assistantDetail.status || '—'),
+          kb: cur.kb || assistantDetail.dataset_id || '—',
+          releaseStatus: activeRelease?.status || null
+        };
+        state.assistants = state.assistants.map(item => item.id === cur.id ? { ...item, ...cur } : item);
+      }
+    }
+
     const totalPub = asts.filter(a => a.status === 'published').length;
-    const totalReq = asts.reduce((sum, a) => sum + (Number(a.requestsToday) || 0), 0) || 86;
+    const totalReq = asts.reduce((sum, a) => sum + (Number(a.requestsToday) || 0), 0) || (api?.connected ? 0 : 86);
 
     const currentTab = state.assistantTab || 'basic';
 
@@ -6865,8 +6918,29 @@
     if (!state.selectedModel || !modelsData[state.selectedModel]) state.selectedModel = modelEntries[0][0];
     const availableCount = modelEntries.filter(([, model]) => model.status === 'ok').length;
     const unavailableCount = modelEntries.length - availableCount;
+    let localOllamaBanner = '';
+    if (api && api.connected) {
+      try {
+        const localOllama = await api.probeLocalModel();
+        if (localOllama && localOllama.available && localOllama.models?.length) {
+          localOllamaBanner = `
+            <div class="card" style="margin-bottom:16px;background:rgba(15,139,76,0.08);border:1px solid rgba(15,139,76,0.3);padding:14px 18px;display:flex;align-items:center;justify-content:space-between;border-radius:8px;">
+              <div style="display:flex;align-items:center;gap:12px;">
+                <span style="font-size:24px;">🦙</span>
+                <div>
+                  <b style="color:var(--accent);font-size:14px;">已探测到本机 Ollama 服务 (http://127.0.0.1:11434)</b>
+                  <div class="muted" style="font-size:12px;margin-top:2px;">发现可用本地大模型：${localOllama.models.map(m => `<code>${esc(m)}</code>`).join(' ')}</div>
+                </div>
+              </div>
+              <button class="btn primary sm" onclick="window.handleQuickAddOllama('${esc(localOllama.models[0])}')">一键接入 ${esc(localOllama.models[0])}</button>
+            </div>
+          `;
+        }
+      } catch (e) {}
+    }
 
     const html = `
+    ${localOllamaBanner}
     <!-- Top 4 Metrics -->
     <div class="grid grid-4">
       ${statCard('link', '连接总数', String(modelEntries.length))}
@@ -7604,6 +7678,7 @@
 
   async function render() {
     state.page = readPage();
+    state.routeParams = readRouteParams();
     renderShell();
     const pages = {
       home: pageHome,
@@ -8217,6 +8292,31 @@
     }
     state.selectedModel = modelId;
     render();
+  };
+
+  window.handleQuickAddOllama = async function(modelId) {
+    if (!api || !api.connected) return;
+    try {
+      showToast('正在接入本地 Ollama 模型...', 'info');
+      const res = await api.createModel({
+        name: `Ollama (${modelId})`,
+        provider: 'ollama',
+        baseUrl: 'http://127.0.0.1:11434',
+        modelId: modelId,
+        purpose: 'generation',
+        config: { temperature: 0.1 }
+      });
+      if (res) {
+        showToast(`已成功接入本地模型 ${modelId}`, 'ok');
+        await api.syncContext();
+        state.selectedModel = res.id;
+        render();
+      } else {
+        showToast(api.lastError?.message || '模型接入失败', 'error');
+      }
+    } catch (e) {
+      showToast(e.message || '接入出错', 'error');
+    }
   };
 
   // Wire patchModel in settings-model save

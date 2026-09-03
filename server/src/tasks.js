@@ -2,6 +2,8 @@
 
 const { id, now, AppError, parseJson, stableJson } = require('./core');
 
+const TERMINAL_STATES = new Set(['succeeded', 'partial', 'failed', 'cancelled']);
+
 class TaskService {
   constructor(db, audit, config) {
     this.db = db;
@@ -44,13 +46,17 @@ class TaskService {
 
   async execute(taskId) {
     if (this.running.has(taskId)) return;
-    const task = this.db.one('SELECT * FROM tasks WHERE id=?', taskId);
-    if (!task || task.status !== 'queued') return;
-    const handler = this.handlers.get(task.type);
+    const queued = this.db.one("SELECT * FROM tasks WHERE id=? AND status='queued'", taskId);
+    if (!queued) return;
+    const handler = this.handlers.get(queued.type);
     if (!handler) return;
     this.running.add(taskId);
+    let task;
     try {
-      this.db.run("UPDATE tasks SET status='running',attempt=attempt+1,started_at=?,updated_at=? WHERE id=?", now(), now(), taskId);
+      // Claim the queue entry atomically so duplicate wakeups cannot execute it twice.
+      const claimed = this.db.run("UPDATE tasks SET status='running',attempt=attempt+1,started_at=?,updated_at=? WHERE id=? AND status='queued'", now(), now(), taskId);
+      if (!claimed?.changes) return;
+      task = this.db.one('SELECT * FROM tasks WHERE id=?', taskId);
       this.event(taskId, task.workspace_id, 'info', 'started', '任务开始执行');
       const context = {
         taskId,
@@ -66,10 +72,23 @@ class TaskService {
         }
       };
       const result = await handler(context);
+      // Do not publish success after a cancellation/pause request raced with
+      // the final handler step. The conditional update is the durable gate.
       const status = result?.status === 'partial' ? 'partial' : 'succeeded';
-      this.db.run('UPDATE tasks SET status=?,progress=100,result_json=?,finished_at=?,updated_at=? WHERE id=?',
-        status, JSON.stringify(result || {}), now(), now(), taskId);
-      this.event(taskId, task.workspace_id, status === 'partial' ? 'warn' : 'info', status, status === 'partial' ? '任务部分完成' : '任务执行成功', result || {});
+      const finished = now();
+      const committed = this.db.transaction(() => {
+        const update = this.db.run("UPDATE tasks SET status=?,progress=100,result_json=?,finished_at=?,updated_at=? WHERE id=? AND status='running' AND cancel_requested=0 AND pause_requested=0",
+          status, JSON.stringify(result || {}), finished, finished, taskId);
+        if (!update?.changes) return false;
+        this.event(taskId, task.workspace_id, status === 'partial' ? 'warn' : 'info', status, status === 'partial' ? '任务部分完成' : '任务执行成功', result || {});
+        return true;
+      });
+      if (!committed) {
+        const current = this.db.one('SELECT cancel_requested,pause_requested FROM tasks WHERE id=?', taskId);
+        if (current?.cancel_requested) throw new AppError(409, 'TASK_CANCELLED', '任务已取消');
+        if (current?.pause_requested) throw new AppError(409, 'TASK_PAUSED', '任务已在安全检查点暂停');
+        throw new AppError(409, 'TASK_STATE_CHANGED', '任务状态已发生变化');
+      }
       this.audit.append({ workspaceId: task.workspace_id, action: `task.${status}`, objectType: 'task', objectId: taskId, details: { type: task.type } });
     } catch (error) {
       const cancelled = error.code === 'TASK_CANCELLED';
@@ -81,8 +100,9 @@ class TaskService {
         const releaseId = parseJson(task.input_json, {}).releaseId;
         if (releaseId) this.db.run("UPDATE knowledge_releases SET status='failed',quality_json=?,manifest_json=? WHERE id=? AND workspace_id=? AND status NOT IN ('active','ready')", JSON.stringify({ valid: false, errorCode: code, errorMessage: message, failedAt: now() }), JSON.stringify({ releaseId, failed: true, errorCode: code }), releaseId, task.workspace_id);
       }
-      this.db.run("UPDATE tasks SET status=?,progress=?,result_json='{}',error_code=?,error_message=?,finished_at=?,updated_at=? WHERE id=?",
-        status, 0, code, message, paused ? null : now(), now(), taskId);
+      const finished = paused ? null : now();
+      this.db.run("UPDATE tasks SET status=?,result_json='{}',error_code=?,error_message=?,finished_at=?,updated_at=?,pause_requested=0 WHERE id=? AND status='running'",
+        status, code, message, finished, now(), taskId);
       this.event(taskId, task.workspace_id, cancelled || paused ? 'warn' : 'error', status, message, { code });
       this.audit.append({ workspaceId: task.workspace_id, action: `task.${status}`, objectType: 'task', objectId: taskId, result: status, details: { type: task.type, code } });
     } finally {
@@ -113,12 +133,17 @@ class TaskService {
 
   cancel(taskId, workspaceId) {
     const task = this.get(taskId, workspaceId);
-    if (!['queued','running','paused'].includes(task.status)) throw new AppError(409, 'INVALID_STATE', '当前任务状态不可取消');
+    if (TERMINAL_STATES.has(task.status)) throw new AppError(409, 'INVALID_STATE', '当前任务状态不可取消');
+    const timestamp = now();
     if (task.status === 'queued') {
-      this.db.run("UPDATE tasks SET status='cancelled',cancel_requested=1,finished_at=?,updated_at=? WHERE id=?", now(), now(), taskId);
+      this.db.run("UPDATE tasks SET status='cancelled',cancel_requested=1,pause_requested=0,finished_at=?,updated_at=? WHERE id=? AND workspace_id=? AND status='queued'", timestamp, timestamp, taskId, workspaceId);
       this.event(taskId, workspaceId, 'warn', 'cancelled', '任务在执行前取消');
+    } else if (task.status === 'paused') {
+      // A paused task is not running and can transition directly to a durable terminal state.
+      this.db.run("UPDATE tasks SET status='cancelled',cancel_requested=1,pause_requested=0,finished_at=?,updated_at=? WHERE id=? AND workspace_id=? AND status='paused'", timestamp, timestamp, taskId, workspaceId);
+      this.event(taskId, workspaceId, 'warn', 'cancelled', '已取消已暂停任务');
     } else {
-      this.db.run('UPDATE tasks SET cancel_requested=1,updated_at=? WHERE id=?', now(), taskId);
+      this.db.run("UPDATE tasks SET cancel_requested=1,pause_requested=0,updated_at=? WHERE id=? AND workspace_id=? AND status='running'", timestamp, taskId, workspaceId);
       this.event(taskId, workspaceId, 'warn', 'cancel_requested', '已请求在安全检查点取消');
     }
     return this.get(taskId, workspaceId);
@@ -127,7 +152,8 @@ class TaskService {
   pause(taskId, workspaceId) {
     const task = this.get(taskId, workspaceId);
     if (task.status !== 'running') throw new AppError(409, 'INVALID_STATE', '只有运行中的任务可以暂停');
-    this.db.run('UPDATE tasks SET pause_requested=1,updated_at=? WHERE id=?', now(), taskId);
+    const result = this.db.run("UPDATE tasks SET pause_requested=1,cancel_requested=0,updated_at=? WHERE id=? AND workspace_id=? AND status='running'", now(), taskId, workspaceId);
+    if (!result?.changes) throw new AppError(409, 'INVALID_STATE', '任务状态已发生变化');
     this.event(taskId, workspaceId, 'warn', 'pause_requested', '已请求在安全检查点暂停');
     return this.get(taskId, workspaceId);
   }
@@ -135,7 +161,8 @@ class TaskService {
   resume(taskId, workspaceId) {
     const task = this.get(taskId, workspaceId);
     if (task.status !== 'paused') throw new AppError(409, 'INVALID_STATE', '只有已暂停任务可以继续');
-    this.db.run("UPDATE tasks SET status='queued',progress=0,result_json='{}',pause_requested=0,cancel_requested=0,error_code=NULL,error_message=NULL,finished_at=NULL,updated_at=? WHERE id=?", now(), taskId);
+    const result = this.db.run("UPDATE tasks SET status='queued',pause_requested=0,cancel_requested=0,error_code=NULL,error_message=NULL,finished_at=NULL,updated_at=? WHERE id=? AND workspace_id=? AND status='paused'", now(), taskId, workspaceId);
+    if (!result?.changes) throw new AppError(409, 'INVALID_STATE', '任务状态已发生变化');
     this.event(taskId, workspaceId, 'info', 'resume_queued', '任务已从持久化输入重新排队');
     setImmediate(() => this.execute(taskId));
     return this.get(taskId, workspaceId);

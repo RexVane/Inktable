@@ -21,6 +21,108 @@ function validateArchivePath(name) {
 
 function isNestedArchive(name) { return ARCHIVE_EXTENSIONS.has(extensionOf(name)); }
 
+function isWithin(root, candidate) {
+  const left = process.platform === 'win32' ? root.toLowerCase() : root;
+  const right = process.platform === 'win32' ? candidate.toLowerCase() : candidate;
+  const relative = path.relative(left, right);
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+function throwDirectorySecurity(code, message) {
+  throw new AppError(400, code, message);
+}
+
+function samePath(left, right) {
+  return isWithin(left, right) && isWithin(right, left);
+}
+
+// lstat every component, rather than only the leaf: a directory entry can be
+// swapped for a symlink between readdir and the eventual read.
+function assertNoSymlinkComponents(target) {
+  const resolved = path.resolve(target);
+  const parsed = path.parse(resolved);
+  let current = parsed.root;
+  for (const component of resolved.slice(parsed.root.length).split(path.sep).filter(Boolean)) {
+    current = path.join(current, component);
+    let stat;
+    try { stat = fs.lstatSync(current); }
+    catch (error) { if (error.code === 'ENOENT') throwDirectorySecurity('DIRECTORY_CHANGED', '授权目录或目录项在检查期间消失'); throw error; }
+    if (stat.isSymbolicLink()) throwDirectorySecurity('DIRECTORY_SYMLINK_REJECTED', '授权目录不允许包含符号链接');
+  }
+}
+
+function resolveAuthorizedRoot(directory) {
+  if (!directory) throwDirectorySecurity('DIRECTORY_INVALID', '授权目录不存在或不是目录');
+  const requested = path.resolve(String(directory));
+  let canonical;
+  try {
+    assertNoSymlinkComponents(requested);
+    canonical = fs.realpathSync(requested);
+    const stat = fs.statSync(canonical);
+    if (!stat.isDirectory()) throwDirectorySecurity('DIRECTORY_INVALID', '授权目录不存在或不是目录');
+    // Check the original spelling again after realpath. This closes the common
+    // rename-to-symlink race before a directory walk starts.
+    assertNoSymlinkComponents(requested);
+    const confirmed = fs.realpathSync(requested);
+    if (confirmed !== canonical) throwDirectorySecurity('DIRECTORY_CHANGED', '授权目录在检查期间发生变化');
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    if (['ENOENT', 'ENOTDIR', 'ELOOP'].includes(error.code)) throwDirectorySecurity('DIRECTORY_INVALID', '授权目录不存在或不是目录');
+    throw error;
+  }
+  return { requested, canonical };
+}
+
+function secureDirectoryPath(root, relativePath, { directory = false } = {}) {
+  const lexical = path.resolve(root.requested, relativePath || '');
+  if (!isWithin(root.requested, lexical) || (relativePath && path.isAbsolute(String(relativePath)))) {
+    throwDirectorySecurity('UNSAFE_PATH', '目录项超出授权根目录');
+  }
+  assertNoSymlinkComponents(lexical);
+  let canonical;
+  try { canonical = fs.realpathSync(lexical); }
+  catch (error) {
+    if (['ENOENT', 'ENOTDIR', 'ELOOP'].includes(error.code)) throwDirectorySecurity('DIRECTORY_CHANGED', '目录项在检查期间发生变化');
+    throw error;
+  }
+  if (!isWithin(root.canonical, canonical)) throwDirectorySecurity('UNSAFE_PATH', '目录项超出授权根目录');
+  const stat = fs.lstatSync(lexical);
+  if (stat.isSymbolicLink()) throwDirectorySecurity('DIRECTORY_SYMLINK_REJECTED', '目录导入不允许符号链接');
+  if (directory ? !stat.isDirectory() : !stat.isFile()) throwDirectorySecurity('DIRECTORY_CHANGED', '目录项在检查期间发生变化');
+  const confirmed = fs.realpathSync(lexical);
+  if (!isWithin(root.canonical, confirmed)) throwDirectorySecurity('UNSAFE_PATH', '目录项超出授权根目录');
+  return { lexical, canonical: confirmed, stat };
+}
+
+function sameFile(left, right) {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function readAuthorizedFile(root, relativePath, expectedSize, maxBytes) {
+  const checked = secureDirectoryPath(root, relativePath);
+  if (checked.stat.size !== expectedSize || checked.stat.size > maxBytes) throwDirectorySecurity('DIRECTORY_CHANGED', '文件在导入期间发生变化');
+  const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0);
+  let fd;
+  try {
+    fd = fs.openSync(checked.lexical, flags);
+    const opened = fs.fstatSync(fd);
+    if (!opened.isFile() || !sameFile(opened, checked.stat)) throwDirectorySecurity('DIRECTORY_CHANGED', '文件在导入期间被替换');
+    const openedPath = fs.realpathSync(checked.lexical);
+    if (!isWithin(root.canonical, openedPath)) throwDirectorySecurity('UNSAFE_PATH', '目录项超出授权根目录');
+    if (opened.size > maxBytes) throwDirectorySecurity('DIRECTORY_CHANGED', '文件在导入期间超过大小限制');
+    const data = fs.readFileSync(fd);
+    const after = fs.fstatSync(fd);
+    const afterPath = fs.realpathSync(checked.lexical);
+    const current = fs.lstatSync(checked.lexical);
+    if (!isWithin(root.canonical, afterPath) || current.isSymbolicLink() || !sameFile(opened, after) || !sameFile(opened, current) || after.size !== data.length || data.length > maxBytes) {
+      throwDirectorySecurity('DIRECTORY_CHANGED', '文件在导入期间被替换或修改');
+    }
+    return data;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
 async function extractTar(buffer, compressed, limits) {
   const input = compressed ? zlib.gunzipSync(buffer, { maxOutputLength: limits.maxBytes }) : buffer;
   const extract = tar.extract();
@@ -170,13 +272,16 @@ class IngestService {
   }
 
   directoryPreview(directory, rules = {}) {
-    const root = path.resolve(String(directory || ''));
-    if (!directory || !fs.existsSync(root) || !fs.statSync(root).isDirectory()) throw new AppError(400, 'DIRECTORY_INVALID', '授权目录不存在或不是目录');
+    const authorized = resolveAuthorizedRoot(directory);
+    const root = authorized.requested;
     const excluded = (rules.exclude || []).map(item => String(item).toLowerCase());
     const maxFiles = Math.min(Number(rules.maxFiles || this.config.maxArchiveFiles), this.config.maxArchiveFiles);
     const candidates = [];
     const walk = current => {
-      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      // Re-resolve every directory before reading it. A renamed directory can
+      // otherwise be replaced with a symlink after its parent was inspected.
+      const checkedDirectory = secureDirectoryPath(authorized, path.relative(root, current), { directory: true });
+      for (const entry of fs.readdirSync(checkedDirectory.lexical, { withFileTypes: true })) {
         if (candidates.length >= maxFiles) return;
         const absolute = path.join(current, entry.name);
         const relative = path.relative(root, absolute).replaceAll('\\', '/');
@@ -184,9 +289,9 @@ class IngestService {
         if (entry.isSymbolicLink()) continue;
         if (entry.isDirectory()) walk(absolute);
         else if (entry.isFile()) {
+          const checkedFile = secureDirectoryPath(authorized, relative);
           const extension = extensionOf(entry.name);
-          const stat = fs.statSync(absolute);
-          candidates.push({ relativePath: relative, sizeBytes: stat.size, supported: ALLOWED_EXTENSIONS.has(extension) && !ARCHIVE_EXTENSIONS.has(extension), extension });
+          candidates.push({ relativePath: relative, sizeBytes: checkedFile.stat.size, supported: ALLOWED_EXTENSIONS.has(extension) && !ARCHIVE_EXTENSIONS.has(extension), extension });
         }
       }
     };
@@ -204,9 +309,10 @@ class IngestService {
       const task = this.tasks.create({ workspaceId, type: 'directory.import', objectType: 'source', objectId: existing.object_id, idempotencyKey, input: existing.input || {} });
       return { duplicate: true, source, preview, task };
     }
+    const authorized = resolveAuthorizedRoot(preview.root);
     const source = this.knowledge.createSource(datasetId, { type: 'directory', name: path.basename(preview.root), locationHint: preview.root, config: { rules: input.rules || {}, authorizedAt: now() } }, workspaceId, requestId);
     const task = this.tasks.create({ workspaceId, type: 'directory.import', objectType: 'source', objectId: source.id,
-      idempotencyKey, input: { datasetId, sourceId: source.id, root: preview.root, rules: input.rules || {} } });
+      idempotencyKey, input: { datasetId, sourceId: source.id, root: preview.root, rootRealpath: authorized.canonical, candidates: preview.candidates, rules: input.rules || {} } });
     return { duplicate: false, source, preview, task };
   }
 
@@ -239,7 +345,16 @@ class IngestService {
   }
 
   async directoryTask({ workspaceId, input, checkpoint }) {
-    const preview = this.directoryPreview(input.root, input.rules || {});
+    const authorized = resolveAuthorizedRoot(input.root);
+    if (input.rootRealpath && !samePath(authorized.canonical, path.resolve(input.rootRealpath))) {
+      throwDirectorySecurity('DIRECTORY_CHANGED', '授权目录在导入前已被替换');
+    }
+    // Use the candidate snapshot captured during authorization. Re-previewing
+    // here would turn a queued import into a new authorization decision.
+    const candidates = Array.isArray(input.candidates)
+      ? input.candidates
+      : this.directoryPreview(authorized.requested, input.rules || {}).candidates;
+    const preview = { candidates };
     const manifest = [];
     for (let index = 0; index < preview.candidates.length; index += 1) {
       const item = preview.candidates[index];
@@ -247,16 +362,15 @@ class IngestService {
       else if (item.sizeBytes > this.config.maxFileBytes) manifest.push({ path: item.relativePath, status: 'resource_limit', sizeBytes: item.sizeBytes });
       else {
         try {
-          const absolute = path.resolve(input.root, item.relativePath);
-          if (!absolute.startsWith(`${path.resolve(input.root)}${path.sep}`)) throw new AppError(400, 'UNSAFE_PATH', '目录项超出授权根目录');
-          const registered = await this.knowledge.registerUpload(input.datasetId, input.sourceId, item.relativePath, fs.readFileSync(absolute), null, workspaceId);
+          const buffer = readAuthorizedFile(authorized, item.relativePath, item.sizeBytes, this.config.maxFileBytes);
+          const registered = await this.knowledge.registerUpload(input.datasetId, input.sourceId, item.relativePath, buffer, null, workspaceId);
           manifest.push({ path: item.relativePath, status: registered.duplicate ? 'duplicate' : 'queued', documentId: registered.document.id, taskId: registered.task?.id });
         } catch (error) { manifest.push({ path: item.relativePath, status: 'failed', code: error.code || 'IMPORT_FAILED', message: error.message }); }
       }
       checkpoint(5 + (index + 1) / Math.max(preview.candidates.length, 1) * 90, '导入授权目录', { processed: index + 1, total: preview.candidates.length });
     }
     const failures = manifest.filter(item => ['failed','unsupported','resource_limit'].includes(item.status));
-    this.db.run("UPDATE sources SET status=?,config_json=?,updated_at=? WHERE id=? AND workspace_id=?", failures.length ? 'partial' : 'queued', JSON.stringify({ root: input.root, rules: input.rules || {}, manifest }), now(), input.sourceId, workspaceId);
+    this.db.run("UPDATE sources SET status=?,config_json=?,updated_at=? WHERE id=? AND workspace_id=?", failures.length ? 'partial' : 'queued', JSON.stringify({ root: authorized.requested, rules: input.rules || {}, manifest }), now(), input.sourceId, workspaceId);
     this.audit.append({ workspaceId, action: 'directory.import', objectType: 'source', objectId: input.sourceId, details: { files: manifest.length, failures: failures.length } });
     return { status: failures.length ? 'partial' : 'succeeded', files: manifest.length, failures: failures.length, manifest };
   }
