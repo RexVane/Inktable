@@ -451,7 +451,8 @@
     async sendFeedback(messageId, payload) { return (await this.request(`/api/v1/messages/${messageId}/feedback`, { method: 'POST', body: JSON.stringify(payload) }))?.data; },
     async getTraces(params = {}) {
       const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')).toString();
-      return (await this.request(`/api/v1/traces${qs ? `?${qs}` : ''}`))?.data;
+      const response = await this.request(`/api/v1/traces${qs ? `?${qs}` : ''}`);
+      return this.collection(response?.data, response?.meta);
     },
     async getTrace(traceId) { return (await this.request(`/api/v1/traces/${traceId}`))?.data; },
     async openCitation(citationId) { return (await this.request(`/api/v1/citations/${citationId}`))?.data; },
@@ -1945,7 +1946,7 @@
                   const docTitle = doc.title || doc.name;
                   const docId = doc.id;
                   const docType = doc.media_type ? doc.media_type.split('/').pop().toUpperCase() : (doc.type || 'PDF');
-                  const docChunks = doc.chunk_count ?? doc.chunks ?? 128;
+                  const docChunks = doc.chunk_count ?? doc.chunks ?? 0;
                   const docStatus = doc.status || '已完成';
                   return `
                     <tr class="${idx === 0 ? 'selected' : ''}" style="cursor:pointer;" onclick="showToast('已选中：' + '${esc(docTitle)}');">
@@ -2001,7 +2002,7 @@
               </div>
               <div>
                 <div class="muted" style="font-size:12px;">知识块</div>
-                <b style="font-size:20px;font-weight:700;color:var(--ink-strong);display:block;margin-top:2px;">${docs[0]?.chunk_count || 142}</b>
+                <b style="font-size:20px;font-weight:700;color:var(--ink-strong);display:block;margin-top:2px;">${docs[0]?.chunk_count ?? 0}</b>
               </div>
             </div>
           </div>
@@ -2891,6 +2892,7 @@
     const dsId = state.selectedDatasetId || api?.context?.defaultDatasetId;
     if (!dsId || String(dsId).startsWith('ds-demo-')) return { desc: '知识块清洗、向量化计算与不可变版本构建发布', actions: '', html: emptyState('暂无可用数据集', '请先选择服务端数据集。', '<button class="btn primary" onclick="go(\\\'knowledge/datasets\\\')">前往数据集</button>') };
     const [chunks, releases] = await Promise.all([api.getChunks(dsId, { limit: 50 }), api.getReleases(dsId)]);
+    state.currentChunks = chunks;
     const activeRelease = (releases || []).find(item => item.status === 'active') || null;
     const selectedIds = new Set(state.indexSelectedChunkIds || []);
     const selected = chunks.find(item => item.id === state.selectedChunkId) || chunks[0] || null;
@@ -8412,6 +8414,13 @@
     render();
   };
 
+  window.handleToggleIndexChunk = function(chunkId, checked) {
+    const ids = new Set(state.indexSelectedChunkIds || []);
+    if (checked) ids.add(chunkId); else ids.delete(chunkId);
+    state.indexSelectedChunkIds = [...ids];
+    render();
+  };
+
   window.handleSaveChunkEdit = async function() {
     const textarea = document.getElementById('chunkEditorTextarea');
     const contentMd = textarea ? textarea.value : '';
@@ -8457,18 +8466,20 @@
   window.handleMergeChunk = async function() {
     const chunkId = state.selectedChunkId;
     const chunks = state.currentChunks || [];
+    const selectedIds = (state.indexSelectedChunkIds || []).filter(id => chunks.some(chunk => chunk.id === id));
     const idx = chunks.findIndex(c => c.id === chunkId);
     const curChunk = chunks[idx];
     const nextChunk = chunks[idx + 1];
-
-    if (!curChunk || !nextChunk || (curChunk.document_id && nextChunk.document_id && curChunk.document_id !== nextChunk.document_id)) {
-      showToast('合并约束：请选择同一文档中的相邻知识块（至少 2 个）', 'warn');
+    const ids = selectedIds.length >= 2 ? selectedIds : [curChunk?.id, nextChunk?.id].filter(Boolean);
+    const selectedChunks = ids.map(id => chunks.find(chunk => chunk.id === id)).filter(Boolean);
+    if (ids.length < 2 || selectedChunks.some(chunk => chunk.document_id !== selectedChunks[0].document_id)) {
+      showToast('合并约束：请选择同一文档中的至少两个知识块', 'warn');
       return;
     }
 
-    if (api && api.connected && !String(chunkId).startsWith('chunk_000')) {
-      showToast('正在合并相邻知识块...');
-      const res = await api.mergeChunks({ chunkRevisionIds: [curChunk.id, nextChunk.id] });
+    if (api && api.connected && ids.every(id => !String(id).startsWith('chunk_000'))) {
+      showToast('正在合并选中的知识块...');
+      const res = await api.mergeChunks({ chunkRevisionIds: ids });
       if (res) {
         showToast('✓ 相邻知识块已物理合并！', 'ok');
         if (state.selectedDatasetId) {
