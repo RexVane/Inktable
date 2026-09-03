@@ -737,7 +737,7 @@
 
           const ext = file.name.split('.').pop().toLowerCase();
           const newDoc = {
-            id: 'doc_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+            id: (uploaded && uploaded.document && uploaded.document.id) || ('doc_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6)),
             name: file.name,
             size: (file.size / 1024).toFixed(1) + ' KB',
             type: ext.toUpperCase(),
@@ -778,6 +778,13 @@
                     const quality = task.result && task.result.qualityStatus;
                     if (doc) { doc.status = quality === 'publishable' ? '已完成' : '需复核'; if (task.result && task.result.blockCount != null) doc.chunks = task.result.blockCount; }
                     if (parseEntry) { parseEntry.status = quality === 'publishable' ? '已完成' : '需复核'; parseEntry.quality = quality === 'publishable' ? 100 : 60; }
+                    if (api && api.connected && dsId) {
+                      try {
+                        const refreshed = await api.getDocuments(dsId, { limit: 20 });
+                        if (Array.isArray(refreshed)) state.datasetDocs = refreshed;
+                        else if (refreshed && refreshed.items) state.datasetDocs = refreshed.items;
+                      } catch (e) {}
+                    }
                     showToast(`${file.name} 解析${quality === 'publishable' ? '完成' : '结果需复核'}`, quality === 'publishable' ? 'ok' : '');
                   } else {
                     if (doc) doc.status = '解析失败';
@@ -1650,7 +1657,7 @@
                   加密密钥
                 </label>
                 <div style="position:relative;display:flex;align-items:center;">
-                  <input class="input" id="kbPassInput" type="password" value="ordo_internal_secret_managed" readonly style="height:38px;border-radius:6px;padding-right:36px;width:100%;background:var(--inset);color:var(--ink-dim);">
+                  <input class="input" id="kbPassInput" type="text" value="●●●●●●●● (已由系统密钥库安全托管)" placeholder="重置密钥请输入新密码" readonly style="height:38px;border-radius:6px;padding-right:36px;width:100%;background:var(--inset);color:var(--ink-dim);font-size:12.5px;">
                   <span style="position:absolute;right:12px;color:var(--ink-faint);cursor:pointer;user-select:none;" onclick="togglePasswordVisibility('#kbPassInput', this)">👁</span>
                 </div>
               </div>
@@ -1717,11 +1724,13 @@
       try { datasets = await api.getDatasets(kbId) || []; } catch (e) {}
     }
     if (!datasets.length) {
-      datasets = [
-        { id: 'ds-demo-1', name: '产品使用文档', counts: { documents: 1284, chunks: 8652 }, active_release_id: 'rel_1' },
-        { id: 'ds-demo-2', name: '技术资料', counts: { documents: 982, chunks: 6421 }, active_release_id: 'rel_2' },
-        { id: 'ds-demo-3', name: '市场资料', counts: { documents: 517, chunks: 4213 }, active_release_id: 'rel_3' }
-      ];
+      if (!api || !api.connected) {
+        datasets = [
+          { id: 'ds-demo-1', name: '产品使用文档 (演示)', counts: { documents: 1284, chunks: 8652 }, active_release_id: 'rel_1' },
+          { id: 'ds-demo-2', name: '技术资料 (演示)', counts: { documents: 982, chunks: 6421 }, active_release_id: 'rel_2' },
+          { id: 'ds-demo-3', name: '市场资料 (演示)', counts: { documents: 517, chunks: 4213 }, active_release_id: 'rel_3' }
+        ];
+      }
     }
     const activeDs = datasets.find(d => d.id === state.selectedDatasetId) || datasets[0];
     state.selectedDatasetId = activeDs.id;
@@ -1807,7 +1816,15 @@
                 </tr>
               </thead>
               <tbody>
-                ${docs.map((doc, idx) => {
+                ${docs.length === 0 ? `
+                  <tr>
+                    <td colspan="6" style="text-align:center;padding:40px 16px;color:var(--ink-dim);">
+                      <div style="font-size:32px;margin-bottom:8px;">📂</div>
+                      <b style="font-size:14px;color:var(--ink-strong);">该数据集暂无已登记文档</b>
+                      <div style="font-size:12px;margin-top:4px;">请通过上方「上传文件」或在「数据登记」中导入资料</div>
+                    </td>
+                  </tr>
+                ` : docs.map((doc, idx) => {
                   const docTitle = doc.title || doc.name;
                   const docId = doc.id;
                   const docType = doc.media_type ? doc.media_type.split('/').pop().toUpperCase() : (doc.type || 'PDF');
@@ -2126,7 +2143,7 @@
         const dsId = state.selectedDatasetId || (api?.context?.defaultDatasetId);
         if (dsId && !String(dsId).startsWith('ds-demo-')) {
           const docRes = await api.getDocuments(dsId, { limit: 10 });
-          if (docRes && docRes.items) regDocs = docRes.items;
+          regDocs = Array.isArray(docRes) ? docRes : (docRes?.items || []);
         }
       } catch (e) {}
     }
@@ -2835,22 +2852,26 @@
     }
 
     if (!chunks.length) {
-      chunks = [
-        { id: 'chunk_0000001', excluded: 0, content_text: '人工智能（Artificial Intelligence，简称 AI）是研究、开发用于模拟、延伸和扩展人类智能的理论、方法、技术及应用系统的一门新的技术科学。', token_count: 512, document_title: '人工智能导论.pdf', locator_page: 12 },
-        { id: 'chunk_0000002', excluded: 0, content_text: '机器学习（Machine Learning）是人工智能的核心研究领域之一，专门研究计算机怎样模拟或实现人类的学习行为。', token_count: 498, document_title: '人工智能导论.pdf', locator_page: 13 },
-        { id: 'chunk_0000003', excluded: 0, content_text: '深度学习（Deep Learning）是机器学习的一个重要分支，以人工神经网络为基础结构。', token_count: 623, document_title: '人工智能导论.pdf', locator_page: 14, warning: true },
-        { id: 'chunk_0000004', excluded: 0, content_text: '自然语言处理（NLP）研究人与计算机之间用自然语言进行有效通信的各种理论和方法。', token_count: 556, document_title: '人工智能导论.pdf', locator_page: 15 }
-      ];
+      if (!api || !api.connected) {
+        chunks = [
+          { id: 'chunk_0000001', excluded: 0, content_text: '人工智能（Artificial Intelligence，简称 AI）是研究、开发用于模拟、延伸和扩展人类智能的理论、方法、技术及应用系统的一门新的技术科学。', token_count: 512, document_title: '人工智能导论.pdf', locator_page: 12 },
+          { id: 'chunk_0000002', excluded: 0, content_text: '机器学习（Machine Learning）是人工智能的核心研究领域之一，专门研究计算机怎样模拟或实现人类的学习行为。', token_count: 498, document_title: '人工智能导论.pdf', locator_page: 13 },
+          { id: 'chunk_0000003', excluded: 0, content_text: '深度学习（Deep Learning）是机器学习的一个重要分支，以人工神经网络为基础结构。', token_count: 623, document_title: '人工智能导论.pdf', locator_page: 14, warning: true },
+          { id: 'chunk_0000004', excluded: 0, content_text: '自然语言处理（NLP）研究人与计算机之间用自然语言进行有效通信的各种理论和方法。', token_count: 556, document_title: '人工智能导论.pdf', locator_page: 15 }
+        ];
+      }
     }
 
     const curChunkId = state.selectedChunkId || chunks[0]?.id;
     const curChunk = chunks.find(c => c.id === curChunkId) || chunks[0];
     state.selectedChunkId = curChunk.id;
 
+    state.currentChunks = chunks;
+    state.activeReleaseId = activeRelease ? activeRelease.id : null;
     const totalChunks = chunks.length;
     const vectorizedChunks = chunks.filter(c => !c.excluded).length;
     const pendingChunks = chunks.filter(c => c.excluded || c.warning).length;
-    const releaseVersion = activeRelease ? 'v' + activeRelease.version : 'v7';
+    const releaseVersion = activeRelease ? 'v' + activeRelease.version : (api && api.connected ? '暂无发布' : 'v7');
 
     const html = `
     <!-- Top 4-Step Wizard Bar -->
@@ -3046,7 +3067,7 @@
     if (!traces.length) {
       if (state.lastTrace?.id) {
         traces = [{ id: state.lastTrace.id, query: '用户提问', status: state.lastTrace.status || 'succeeded', metrics: { totalMs: 1840 }, created_at: new Date().toISOString() }];
-      } else {
+      } else if (!api || !api.connected) {
         traces = [{ id: 'QA-DEMO-001', query: '如何为企业网站安装产品问答助手？', status: 'succeeded', metrics: { totalMs: 1840 }, created_at: '2025-05-20 10:25:00' }];
       }
     }
@@ -3645,11 +3666,11 @@
                     <div style="display:flex;align-items:center;gap:10px;">
                       <div style="width:34px;height:34px;border-radius:6px;background:var(--accent-soft);color:#16a34a;display:flex;align-items:center;justify-content:center;font-size:16px;">🌐</div>
                       <div>
-                        <b style="font-size:13px;color:var(--ink-strong);">知识图谱</b>
-                        <div class="muted" style="font-size:11.5px;margin-top:1px;">预估召回 <span style="color:var(--ink-strong);">24</span> · 置信度 <span style="color:var(--ink-strong);">0.45</span></div>
+                        <b style="font-size:13px;color:var(--ink-dim);">知识图谱 (Graph)</b>
+                        <div class="muted" style="font-size:11.5px;margin-top:1px;">暂未启用 · 规划红线 §14.5.2</div>
                       </div>
                     </div>
-                    <span class="badge ok" style="padding:2px 8px;font-size:11px;background:var(--accent-soft);color:#16a34a;border:1px solid var(--accent);">已启用</span>
+                    <span class="badge" style="padding:2px 8px;font-size:11px;background:var(--inset);color:var(--ink-faint);border:1px solid var(--line);">未启用</span>
                   </div>
 
                   <!-- Branch 4: 结构化查询 -->
@@ -3705,13 +3726,13 @@
                   <td style="padding:12px 14px;">0.0016 元</td>
                 </tr>
                 <tr>
-                  <td style="padding:12px 14px;font-weight:600;color:var(--ink-strong);">知识图谱</td>
-                  <td style="padding:12px 14px;"><span class="ok-text">● 已启用</span></td>
-                  <td style="padding:12px 14px;">15</td>
-                  <td style="padding:12px 14px;">600 ms</td>
-                  <td style="padding:12px 14px;">0.15</td>
-                  <td style="padding:12px 14px;">240 ms</td>
-                  <td style="padding:12px 14px;">0.0009 元</td>
+                  <td style="padding:12px 14px;color:var(--ink-dim);">知识图谱</td>
+                  <td style="padding:12px 14px;color:var(--ink-dim);">● 未启用 (规划红线)</td>
+                  <td style="padding:12px 14px;color:var(--ink-dim);">-</td>
+                  <td style="padding:12px 14px;color:var(--ink-dim);">-</td>
+                  <td style="padding:12px 14px;color:var(--ink-dim);">-</td>
+                  <td style="padding:12px 14px;color:var(--ink-dim);">-</td>
+                  <td style="padding:12px 14px;color:var(--ink-dim);">-</td>
                 </tr>
                 <tr>
                   <td style="padding:12px 14px;color:#94a3b8;">结构化查询</td>
@@ -5278,9 +5299,16 @@
   };
 
   window.handleOpenCitationDetail = async function(citationId) {
-    if (api && api.connected) {
+    let targetId = citationId;
+    // If passed an ordinal (e.g. 1, 2, 3), lookup the real citation ID from latest bot message
+    if (typeof citationId === 'number' || /^[0-9]+$/.test(String(citationId))) {
+      const lastBot = [...(state.chatMessages || [])].reverse().find(m => m.role === 'assistant' && m.citations);
+      const matched = lastBot?.citations?.find(c => c.ordinal === Number(citationId) || c.id === Number(citationId) || c.id === String(citationId));
+      if (matched && matched.citationId) targetId = matched.citationId;
+    }
+    if (api && api.connected && targetId && !String(targetId).startsWith('demo-')) {
       try {
-        const res = await api.openCitation(citationId);
+        const res = await api.openCitation(targetId);
         if (res) {
           const html = `
             <div class="modal-box" style="max-width:540px;">
@@ -5418,10 +5446,7 @@
             } else {
               // Format citations into clickable buttons
               const formattedText = esc(msg.text)
-                .replace(/\[1\]\[2\]/g, '<span class="cite-tag" onclick="handleHighlightCitation(1)">[1]</span><span class="cite-tag" onclick="handleHighlightCitation(2)">[2]</span>')
-                .replace(/\[1\]/g, '<span class="cite-tag" onclick="handleHighlightCitation(1)">[1]</span>')
-                .replace(/\[2\]/g, '<span class="cite-tag" onclick="handleHighlightCitation(2)">[2]</span>')
-                .replace(/\[3\]/g, '<span class="cite-tag" onclick="handleHighlightCitation(3)">[3]</span>')
+                .replace(/\[(\d+)\]/g, (m, n) => '<span class="cite-tag" style="cursor:pointer;background:var(--accent-soft);color:var(--accent);padding:1px 6px;border-radius:4px;font-weight:600;margin:0 2px;" onclick="window.handleOpenCitationDetail(' + n + ');window.handleHighlightCitation(' + n + ');">[' + n + ']</span>')
                 .replace(/\n/g, '<br>');
 
               return `
@@ -5435,8 +5460,9 @@
                     <div style="display:flex;gap:8px;margin-top:8px;">
                       <button class="btn sm" style="font-size:11.5px;padding:2px 8px;background:var(--card-bg);border:1px solid var(--line);" onclick="handleCopyChatText('${esc(msg.text)}')">📋 复制</button>
                       <button class="btn sm" style="font-size:11.5px;padding:2px 8px;background:var(--card-bg);border:1px solid var(--line);" onclick="window.handleRegenerateAnswer()">↻ 重新生成</button>
-                      <button class="btn sm" style="font-size:11.5px;padding:2px 8px;background:var(--card-bg);border:1px solid var(--line);" onclick="window.handleChatFeedback('positive')">👍 有帮助</button>
-                      <button class="btn sm" style="font-size:11.5px;padding:2px 8px;background:var(--card-bg);border:1px solid var(--line);" onclick="window.handleChatFeedback('negative')">👎 没帮助</button>
+                      <button class="btn sm" style="font-size:11.5px;padding:2px 8px;background:var(--card-bg);border:1px solid var(--line);" onclick="window.handleChatFeedback('${esc(msg.id || '')}', 1)">👍 有帮助</button>
+                      <button class="btn sm" style="font-size:11.5px;padding:2px 8px;background:var(--card-bg);border:1px solid var(--line);" onclick="window.handleChatFeedback('${esc(msg.id || '')}', -1)">👎 没帮助</button>
+                      <button class="btn sm" style="font-size:11.5px;padding:2px 8px;background:var(--card-bg);border:1px solid var(--line);color:var(--accent);" onclick="window.handleOrganizeWiki('${esc(msg.id || '')}')">📝 整理为 Wiki</button>
                     </div>
                   </div>
                 </div>
@@ -5995,10 +6021,13 @@
 
   /* 16 AI应用 > 智能助手 - 100% 对应 16-AI应用-智能助手.png */
   async function pageAssistants() {
-    const asts = (state.assistants && state.assistants.length) ? state.assistants : [
-      { id: 'ast-1', name: '产品问答助手', status: 'published', statusText: '已发布', kb: '产品文档库', version: 'v1.2.3', desc: '面向网站访客的产品信息问答助手。', requestsToday: 86 },
-      { id: 'ast-2', name: '技术支持助手', status: 'draft', statusText: '草稿', kb: '技术资料库', version: 'v0.9.1', desc: '内部研发与运维技术排查助手。', requestsToday: 32 }
-    ];
+    let asts = (state.assistants && state.assistants.length) ? state.assistants : [];
+    if (!asts.length && (!api || !api.connected)) {
+      asts = [
+        { id: 'ast-1', name: '产品问答助手 (演示)', status: 'published', statusText: '已发布', kb: '产品文档库', version: 'v1.2.3', desc: '面向网站访客的产品信息问答助手。', requestsToday: 86 },
+        { id: 'ast-2', name: '技术支持助手 (演示)', status: 'draft', statusText: '草稿', kb: '技术资料库', version: 'v0.9.1', desc: '内部研发与运维技术排查助手。', requestsToday: 32 }
+      ];
+    }
     const curId = state.selectedAssistantId || asts[0]?.id;
     const cur = asts.find(a => a.id === curId) || asts[0];
     state.selectedAssistantId = cur.id;
@@ -6434,22 +6463,22 @@
               </div>
               <div class="form-group">
                 <label>基础 URL</label>
-                <input class="input" value="${cur.url}">
+                <input class="input" id="modelBaseUrlInput" value="${cur.url}">
               </div>
               <div class="form-group">
                 <label>模型名称</label>
-                <input class="input" value="${cur.modelName}">
+                <input class="input" id="modelNameInput" value="${cur.modelName}">
               </div>
               <div class="form-group">
                 <label>API Key</label>
                 <div style="display:flex;gap:8px;">
-                  <input class="input" type="password" value="••••••••••••••••••••••••••••" style="flex:1;">
+                  <input class="input" id="modelApiKeyInput" type="password" placeholder="sk-*** (凭据已加密保存)" style="flex:1;">
                   <button class="btn sm" type="button" onclick="openReAuthModal()">重新授权</button>
                 </div>
               </div>
               <div class="form-group">
                 <label>请求超时 (秒)</label>
-                <input class="input" type="number" value="${cur.timeout}">
+                <input class="input" id="modelTimeoutInput" type="number" value="${cur.timeout}">
               </div>
             </div>
 
@@ -6457,7 +6486,7 @@
             <div>
               <div class="form-group">
                 <label>代理 (可选)</label>
-                <input class="input" value="${cur.proxy}" placeholder="http://proxy.example.com:8080">
+                <input class="input" id="modelProxyInput" value="${cur.proxy}" placeholder="http://proxy.example.com:8080">
                 <small class="muted">支持 HTTP/HTTPS/SOCKS5</small>
               </div>
               <div class="form-group" style="margin-top:14px;">
@@ -7006,27 +7035,8 @@
   };
 
   /* 22 全局快捷搜索 Modal (Cmd+K) - 100% 对应 22-状态-全局快捷搜索.png (实时过滤) */
-  function openSearchModal() {
-    const searchItems = [
-      { cat: '页面', title: '知识库 / 数据集', tag: '控制台', target: 'knowledge/datasets' },
-      { cat: '页面', title: '知识库 / 数据登记', tag: '控制台', target: 'knowledge/registry' },
-      { cat: '页面', title: '知识库 / 数据解析', tag: '流水线', target: 'knowledge/parsing' },
-      { cat: '页面', title: '知识库 / 构建知识索引', tag: '构建', target: 'knowledge/index' },
-      { cat: '页面', title: '问答流程 / 检索路由', tag: '流水线', target: 'qaflow/route' },
-      { cat: '页面', title: 'AI应用 / 智能助手', tag: '应用', target: 'apps/assistants' },
-      { cat: '页面', title: '设置 / 模型配置', tag: '设置', target: 'settings/models' },
-      { cat: '知识库', title: '产品文档库', tag: '知识库', target: 'knowledge/datasets' },
-      { cat: '知识库', title: '技术资料库', tag: '知识库', target: 'knowledge/datasets' },
-      { cat: '文件与 Wiki', title: '产品使用文档', tag: 'Wiki', target: 'knowledge/datasets' },
-      { cat: '文件与 Wiki', title: '产品问答助手使用指南.pdf', tag: '文件', target: 'knowledge/datasets' },
-      { cat: '文件与 Wiki', title: 'Web 集成开发指南.pdf', tag: '文件', target: 'knowledge/datasets' },
-      { cat: '智能助手', title: '产品问答助手', tag: '智能助手', target: 'apps/assistants' },
-      { cat: '智能助手', title: '技术支持助手', tag: '智能助手', target: 'apps/assistants' }
-    ];
-
-    
   window.filterSearchModal = async function(query) {
-    const list = document.getElementById('searchModalList');
+    const list = document.getElementById('spotlightResults') || document.getElementById('searchModalList');
     if (!list) return;
     const q = (query || '').trim();
     if (!q) {
@@ -7060,35 +7070,7 @@
     list.innerHTML = `<div style="padding:14px;text-align:center;color:var(--ink-dim);font-size:13px;">未找到与「${esc(q)}」匹配的知识库条目</div>`;
   };
 
-  window.filterSearchModal_old = function(query) {
-      const q = (query || '').toLowerCase().trim();
-      const listEl = document.getElementById('spotlightResults');
-      if (!listEl) return;
-
-      const filtered = q ? searchItems.filter(item => item.title.toLowerCase().includes(q) || item.cat.includes(q) || item.tag.includes(q)) : searchItems;
-
-      if (filtered.length === 0) {
-        listEl.innerHTML = '<div style="padding:24px;text-align:center;color:var(--ink-dim);font-size:13px;">未找到匹配结果</div>';
-        return;
-      }
-
-      let html = '';
-      let currentCat = '';
-      filtered.forEach(item => {
-        if (item.cat !== currentCat) {
-          currentCat = item.cat;
-          html += `<div class="search-category-title">${esc(currentCat)}</div>`;
-        }
-        html += `
-          <div class="search-result-row" style="cursor:pointer;" onclick="closeOverlay();go('${item.target}');">
-            📄 ${esc(item.title)}
-            <span class="muted" style="margin-left:auto;font-size:11px;">${esc(item.tag)}</span>
-          </div>
-        `;
-      });
-      listEl.innerHTML = html;
-    };
-
+  function openSearchModal() {
     const html = `
     <div class="search-palette">
       <div class="search-palette-top">
@@ -7107,6 +7089,7 @@
       window.filterSearchModal('');
     }, 50);
   }
+  window.openSearchModal = openSearchModal;
 
     document.addEventListener('keydown', e => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
@@ -7186,10 +7169,11 @@
       } catch (e) {}
     }
     if (!taskItems.length) {
-      taskItems = [
-        { title: '本地 SQLite 向量引擎就绪', status: '✓ 正常', time: '刚刚', tone: 'ok' },
-        { title: '企业工作空间隔离已生效', status: '✓ 就绪', time: '刚刚', tone: 'ok' }
-      ];
+      if (!api || !api.connected) {
+        taskItems = [
+          { title: '演示模式：本地向量引擎就绪', status: '✓ 就绪', time: '刚刚', tone: 'ok' }
+        ];
+      }
     }
 
     const pop = document.createElement('div');
@@ -7201,7 +7185,7 @@
         <span class="muted" style="cursor:pointer;font-size:12px;" onclick="this.closest('#ordoNotificationsPopover').remove();">✕</span>
       </div>
       <div style="display:flex;flex-direction:column;gap:6px;">
-        ${taskItems.map(item => `
+        ${taskItems.length > 0 ? taskItems.map(item => `
           <div style="padding:8px 10px;background:var(--inset);border-radius:6px;font-size:12.5px;">
             <div style="display:flex;justify-content:space-between;align-items:center;">
               <b>${esc(item.title)}</b>
@@ -7209,51 +7193,10 @@
             </div>
             <div class="muted" style="font-size:11px;margin-top:2px;">${esc(item.time)}</div>
           </div>
-        `).join('')}
+        `).join('') : '<div style="padding:20px;text-align:center;color:var(--ink-dim);font-size:12.5px;">暂无新任务与动态通知</div>'}
       </div>
     `;
     document.body.appendChild(pop);
-  };
-
-  window.toggleNotificationsPopover_old = function() {
-    let pop = document.getElementById('ordoNotificationsPopover');
-    if (pop) {
-      pop.remove();
-      return;
-    }
-    pop = document.createElement('div');
-    pop.id = 'ordoNotificationsPopover';
-    pop.style.cssText = 'position:fixed;top:48px;right:20px;width:320px;background:var(--card-bg);border:1px solid var(--line);box-shadow:0 10px 25px rgba(0,0,0,0.1);border-radius:8px;z-index:9999;padding:12px;';
-    pop.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line-soft);padding-bottom:8px;margin-bottom:8px;">
-        <b style="font-size:13px;color:var(--ink-strong);">系统通知 (3)</b>
-        <span style="font-size:11px;color:var(--accent);cursor:pointer;" onclick="this.closest('#ordoNotificationsPopover').remove();">全部已读</span>
-      </div>
-      <div style="display:flex;flex-direction:column;gap:8px;max-height:260px;overflow-y:auto;font-size:12px;">
-        <div style="padding:6px 8px;background:var(--accent-soft);border-radius:6px;border:1px solid var(--accent);">
-          <div style="font-weight:600;color:#16a34a;">✓ 知识库 v7 版本发布成功</div>
-          <div class="muted" style="font-size:11px;margin-top:2px;">${esc(cur.kb || "核心知识库")} ${(api && api.connected && state.dashboard?.chunks) || "8,652"} 个知识块已完成向量化索引</div>
-        </div>
-        <div style="padding:6px 8px;background:var(--warn-soft);border-radius:6px;border:1px solid var(--warn);">
-          <div style="font-weight:600;color:#d97706;">⚠️ 1 条文档解析告警</div>
-          <div class="muted" style="font-size:11px;margin-top:2px;">用户手册_产品A.pdf 第 45 页含重叠透明图层</div>
-        </div>
-        <div style="padding:6px 8px;background:var(--inset);border-radius:6px;border:1px solid var(--line);">
-          <div style="font-weight:600;color:var(--ink-strong);">🕒 自动增量备份完成</div>
-          <div class="muted" style="font-size:11px;margin-top:2px;">快照 snapshot_20250520 已写入本地安全存储</div>
-        </div>
-      </div>
-    `;
-    document.body.appendChild(pop);
-    setTimeout(() => {
-      const closeHandler = (e) => {
-        if (!pop.contains(e.target) && !e.target.closest('.bell-btn')) {
-          pop.remove();
-          document.removeEventListener('click', closeHandler);
-        }
-      };
-      document.addEventListener('click', closeHandler);
-    }, 10);
   };
 
   window.toggleWorkspaceSwitcher = function() {
@@ -7416,8 +7359,9 @@
   };
 
   window.handleToggleFeatureFlag = async function(flagKey, enabled) {
+    const boolVal = (enabled === true || enabled === 1 || enabled === 'true');
     if (api && api.connected) {
-      const res = await api.putFeatureFlag(flagKey, Boolean(enabled));
+      const res = await api.putFeatureFlag(flagKey, boolVal);
       if (res) {
         showToast(`特性开关 ${flagKey} 已更新为 ${enabled ? '开启' : '关闭'}`, 'ok');
         return;
@@ -7907,16 +7851,30 @@
 
   window.handleMergeChunk = async function() {
     const chunkId = state.selectedChunkId;
-    if (api && api.connected && chunkId && !String(chunkId).startsWith('chunk_000')) {
-      const res = await api.mergeChunks({ chunkRevisionIds: [chunkId] });
+    const chunks = state.currentChunks || [];
+    const idx = chunks.findIndex(c => c.id === chunkId);
+    const curChunk = chunks[idx];
+    const nextChunk = chunks[idx + 1];
+
+    if (!curChunk || !nextChunk || (curChunk.document_id && nextChunk.document_id && curChunk.document_id !== nextChunk.document_id)) {
+      showToast('合并约束：请选择同一文档中的相邻知识块（至少 2 个）', 'warn');
+      return;
+    }
+
+    if (api && api.connected && !String(chunkId).startsWith('chunk_000')) {
+      showToast('正在合并相邻知识块...');
+      const res = await api.mergeChunks({ chunkRevisionIds: [curChunk.id, nextChunk.id] });
       if (res) {
-        showToast('✓ 知识块已合并', 'ok');
+        showToast('✓ 相邻知识块已物理合并！', 'ok');
+        if (state.selectedDatasetId) {
+          state.currentChunks = await api.getChunks(state.selectedDatasetId, { limit: 20 }) || [];
+        }
         render();
       } else {
         showToast(api.lastError?.message || '合并失败（需同文档相邻块）', 'warn');
       }
     } else {
-      showToast('演示模式：已触发相邻块合并', 'ok');
+      showToast('演示模式：已与相邻块完成合并', 'ok');
     }
   };
 
