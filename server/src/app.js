@@ -167,6 +167,11 @@ async function createApp(overrides = {}) {
       const provided = String(request.headers['x-ordo-admin-token'] || '');
       if (!provided || provided.length !== config.remoteAdminToken.length || !crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(config.remoteAdminToken))) throw new AppError(401, 'REMOTE_AUTH_REQUIRED', '远程部署需要管理员初始化令牌');
     }
+    if (Date.now() - session.createdAt > session.maxAgeMs) {
+      session.token = crypto.randomBytes(32).toString('base64url');
+      session.csrf = crypto.randomBytes(24).toString('base64url');
+      session.createdAt = Date.now();
+    }
     reply.header('Set-Cookie', `ordo_session=${encodeURIComponent(session.token)}; Path=/; HttpOnly; SameSite=Strict${remoteHost && config.tlsTerminated ? '; Secure' : ''}; Max-Age=${Math.floor(session.maxAgeMs / 1000)}`);
     reply.header('Cache-Control', 'no-store');
     return data({ csrfToken: session.csrf, expiresAt: new Date(session.createdAt + session.maxAgeMs).toISOString(), workspaceId: config.localWorkspaceId });

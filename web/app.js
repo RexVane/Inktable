@@ -257,6 +257,12 @@
           this.lastError = null;
           return await res.json();
         }
+        if (res.status === 401 && !options._retried) {
+          const renewed = await this.bootstrap();
+          if (renewed) {
+            return await this.request(url, { ...options, _retried: true });
+          }
+        }
         const payload = await res.json().catch(() => null);
         this.lastError = { status: res.status, ...(payload && payload.error ? payload.error : {}), message: (payload && payload.error && payload.error.message) || `HTTP ${res.status}` };
         console.warn('[api] request failed:', url, res.status, this.lastError.message);
@@ -3078,8 +3084,52 @@
     '</div>';
   }
 
+  function renderTraceValue(value, depth = 0) {
+    if (value === null || value === undefined) return '<span class="muted">—</span>';
+    if (depth > 2) return `<code>${esc(typeof value === 'string' ? value : JSON.stringify(value))}</code>`;
+    if (Array.isArray(value)) {
+      if (!value.length) return '<span class="muted">空</span>';
+      return `<div style="display:flex;flex-direction:column;gap:6px;">${value.slice(0, 40).map(item => `<div style="padding:7px 9px;background:var(--inset);border-radius:5px;">${renderTraceValue(item, depth + 1)}</div>`).join('')}${value.length > 40 ? `<div class="muted">其余 ${value.length - 40} 项未展开</div>` : ''}</div>`;
+    }
+    if (typeof value === 'object') {
+      const entries = Object.entries(value);
+      if (!entries.length) return '<span class="muted">空对象</span>';
+      return `<div style="display:grid;grid-template-columns:minmax(120px, .45fr) 1fr;gap:7px 12px;align-items:start;">${entries.slice(0, 40).map(([key, item]) => `<span class="muted">${esc(key)}</span><div style="min-width:0;word-break:break-word;">${renderTraceValue(item, depth + 1)}</div>`).join('')}</div>`;
+    }
+    return `<span>${esc(String(value))}</span>`;
+  }
+
+  async function renderLiveQAStage(stageIndex, titleText) {
+    const { traces, activeTrace } = await getActiveQATrace();
+    const header = renderQATitleBar(titleText, activeTrace, traces);
+    if (!activeTrace) return { desc: '基于服务端 Query Trace 的八阶段执行详情', actions: '', html: header };
+    const stages = Array.isArray(activeTrace.stages) ? activeTrace.stages : [];
+    const stage = stages[stageIndex] || null;
+    const statusLabel = stage?.status === 'succeeded' ? '已完成' : stage?.status === 'degraded' ? '降级完成' : stage?.status === 'failed' ? '失败' : (stage?.status || '未执行');
+    const statusClass = stage?.status === 'failed' ? 'danger' : stage?.status === 'degraded' ? 'warn' : stage?.status === 'succeeded' ? 'ok' : '';
+    const output = stage?.output;
+    const html = `${renderQATraceHeader(stageIndex)}${header}
+      <div class="card" style="margin-bottom:16px;">
+        <div class="card-head" style="display:flex;justify-content:space-between;align-items:center;">
+          <span>${esc(stage?.name || flowNames[stageIndex] || titleText)}</span>
+          <span class="badge ${statusClass}">${esc(statusLabel)}</span>
+        </div>
+        <div class="card-body" style="padding:18px;">
+          <div style="display:flex;gap:28px;flex-wrap:wrap;margin-bottom:16px;font-size:13px;">
+            <span class="muted">阶段序号 <b style="color:var(--ink-strong);">${stage ? stageIndex + 1 : '—'} / ${flowNames.length}</b></span>
+            <span class="muted">耗时 <b class="mono" style="color:var(--ink-strong);">${stage?.durationMs != null ? `${stage.durationMs} ms` : '—'}</b></span>
+            <span class="muted">Trace <b class="mono" style="color:var(--ink-strong);">${esc(activeTrace.id)}</b></span>
+          </div>
+          ${stage ? `<div style="border:1px solid var(--line);border-radius:7px;padding:14px;background:var(--card-bg);"><div class="muted" style="font-size:12px;margin-bottom:8px;">服务端结构化输出</div>${renderTraceValue(output)}</div>` : emptyState('该 Trace 尚无此阶段数据', '请重新执行一次问答，或选择包含完整八阶段记录的 Trace。')}
+        </div>
+      </div>
+      <div class="card"><div class="card-head">执行约束</div><div class="card-body"><div class="muted" style="font-size:13px;line-height:1.7;">本页面只展示服务端返回的 Query Trace，不生成本地示例数据。未提供后端重跑或保存接口的操作在当前版本暂未接入。</div></div></div>`;
+    return { desc: '基于服务端 Query Trace 的八阶段执行详情', actions: '', html };
+  }
+
   /* 07 问答流程 > 问题解析 - 100% 对应 07-问答流程-问题解析.png */
   async function pageQA07_Parse() {
+    if (api && api.connected) return renderLiveQAStage(0, '问题解析');
     const traceHeader = renderQATraceHeader(0);
     const html = `
     ${traceHeader}
@@ -3284,6 +3334,7 @@
 
   /* 08 问答流程 > 问题向量化 - 100% 对应 08-问答流程-问题向量化.png */
   async function pageQA08_Embed() {
+    if (api && api.connected) return renderLiveQAStage(1, '问题向量化');
     const traceHeader = renderQATraceHeader(1);
     const html = `
     ${traceHeader}
@@ -3538,6 +3589,7 @@
 
   /* 09 问答流程 > 检索路由 - 100% 对应 09-问答流程-检索路由.png */
   async function pageQA09_Route() {
+    if (api && api.connected) return renderLiveQAStage(2, '检索路由');
     const traceHeader = renderQATraceHeader(2);
     const html = `
     ${traceHeader}
@@ -3805,6 +3857,7 @@
 
   /* 10 问答流程 > 多路召回 - 100% 对应 10-问答流程-多路召回.png */
   async function pageQA10_Recall() {
+    if (api && api.connected) return renderLiveQAStage(3, '多路召回');
     const traceHeader = renderQATraceHeader(3);
     const html = `
     ${traceHeader}
@@ -4092,6 +4145,7 @@
 
   /* 11 问答流程 > 结果融合 - 100% 对应 11-问答流程-结果融合.png */
   async function pageQA11_Fuse() {
+    if (api && api.connected) return renderLiveQAStage(4, '结果融合');
     const traceHeader = renderQATraceHeader(4);
     const html = `
     ${traceHeader}
@@ -4335,6 +4389,7 @@
 
   /* 12 问答流程 > 重排 - 100% 对应 12-问答流程-重排.png */
   async function pageQA12_Rerank() {
+    if (api && api.connected) return renderLiveQAStage(5, '重排');
     const traceHeader = renderQATraceHeader(5);
     const html = `
     ${traceHeader}
