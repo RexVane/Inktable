@@ -3323,14 +3323,14 @@
           <div style="width:40px;height:40px;border-radius:8px;background:var(--accent-soft);color:#16a34a;display:flex;align-items:center;justify-content:center;font-size:20px;">🔀</div>
           <div>
             <div class="muted" style="font-size:12px;">Embedding 模型</div>
-            <b style="font-size:14px;color:var(--ink-strong);">text-embedding-3-large</b>
+            <b style="font-size:14px;color:var(--ink-strong);">${api && api.connected ? 'local-hash-v1 (内置)' : 'text-embedding-3-large'}</b>
           </div>
         </div>
         <div style="display:flex;align-items:center;gap:14px;border-right:1px solid var(--line);padding:0 16px;">
           <div style="width:40px;height:40px;border-radius:8px;background:var(--accent-soft);color:#16a34a;display:flex;align-items:center;justify-content:center;font-size:20px;">🧊</div>
           <div>
             <div class="muted" style="font-size:12px;">维度</div>
-            <b style="font-size:18px;color:var(--ink-strong);">1536</b>
+            <b style="font-size:18px;color:var(--ink-strong);">${api && api.connected ? '128' : '1536'}</b>
           </div>
         </div>
         <div style="display:flex;align-items:center;gap:14px;border-right:1px solid var(--line);padding:0 16px;">
@@ -3980,13 +3980,10 @@
             <span style="text-align:right;">权限过滤</span>
           </div>
           <!-- Rows -->
-          <div style="display:flex;flex-direction:column;flex:1;font-size:11.5px;">
-            <div style="display:grid;grid-template-columns:26px 1fr 48px 46px;padding:8px 10px;border-bottom:1px solid var(--line-soft);align-items:center;">
-              <span class="muted">1</span>
-              <div><div style="font-weight:600;color:var(--ink-strong);">📄 Ordo 支持的数据源类型</div><div class="muted" style="font-size:10px;">/ p.22</div></div>
-              <span class="mono" style="text-align:right;">0.9012</span>
-              <span style="text-align:right;color:#16a34a;font-size:11px;">● 通过</span>
-            </div>
+          <div style="display:flex;flex-direction:column;flex:1;font-size:11.5px;padding:16px;text-align:center;color:var(--ink-dim);">
+            <div style="font-size:24px;margin-bottom:6px;">🌐</div>
+            <b>知识图谱检索通道未启用</b>
+            <div style="font-size:11.5px;margin-top:4px;line-height:1.5;">当前遵循轻量单机部署规范（§14），主要依托 Dense 向量检索与 BM25 全文检索保证精准度。</div>
             <div style="display:grid;grid-template-columns:26px 1fr 48px 46px;padding:8px 10px;border-bottom:1px solid var(--line-soft);align-items:center;">
               <span class="muted">2</span>
               <div><div style="font-weight:600;color:var(--ink-strong);">📄 Ordo 与第三方系统集成</div><div class="muted" style="font-size:10px;">/ p.19</div></div>
@@ -5406,7 +5403,7 @@
       </div>
       <div style="display:flex;gap:8px;">
         <button class="btn sm" onclick="window.location.hash='#/knowledge/datasets'">📖 查看知识库</button>
-        <button class="btn sm" onclick="window.location.hash='#/qaflow/parse'">🔀 查看问答流程</button>
+        <button class="btn sm" onclick="if(state.lastTrace?.id) state.activeTraceId=state.lastTrace.id; window.location.hash='#/qaflow/parse';">🔀 查看问答流程</button>
       </div>
     </div>
 
@@ -5833,15 +5830,45 @@
 
   // [removed: old handleSaveModelConfig stub]
 
-  window.handleResetGeneralSettings = function() {
-    state.theme = 'system';
-    state.language = 'zh-CN';
-    showToast('已恢复默认设置', 'ok');
+  window.handleResetGeneralSettings = async function() {
+    if (!confirm('确定要将通用设置恢复为系统出厂默认值吗？')) return;
+    const defaults = {
+      theme: 'system',
+      language: 'zh-CN',
+      autoStart: false,
+      minimizeToTray: true,
+      notifyOnMessage: true,
+      notifyOnTask: true,
+      notifyOnUpdate: false,
+      telemetryAnonymous: false,
+      enableLocalProbe: false
+    };
+    state.theme = defaults.theme;
+    state.language = defaults.language;
+    showToast('正在恢复系统默认设置...');
+    if (api && api.connected) {
+      const res = await api.updateSetting('general', defaults);
+      if (res) {
+        showToast('✓ 通用设置已恢复出厂默认值并写回服务端！', 'ok');
+        render();
+        return;
+      }
+    }
+    showToast('已恢复默认设置（本地）', 'ok');
     render();
   };
 
-  window.handleCancelGeneralSettings = function() {
-    showToast('已取消修改');
+  window.handleCancelGeneralSettings = async function() {
+    showToast('正在重载服务端当前设置...');
+    if (api && api.connected) {
+      try {
+        const settings = await api.getSettings();
+        if (settings && settings.general) {
+          state.settings = settings;
+        }
+      } catch (e) {}
+    }
+    showToast('已取消修改并重载', 'ok');
     render();
   };
 
@@ -6174,6 +6201,7 @@
       });
     }
 
+    let flags = {};
     if (api && api.connected) {
       try {
         const allSettings = await api.getSettings();
@@ -6181,6 +6209,7 @@
           gen = { ...gen, ...allSettings.general };
           state.generalSettings = gen;
         }
+        flags = await api.getFeatureFlags() || {};
       } catch (e) {}
     }
 
@@ -6343,6 +6372,42 @@
               </div>
             </div>
             <label class="switch-toggle"><input type="checkbox" id="sw_enableLocalProbe" data-key="enableLocalProbe" onchange="window.handleToggleSetting('enableLocalProbe', this.checked)" ${gen.enableLocalProbe ? 'checked' : ''}><span class="switch-slider"></span></label>
+          </div>
+        </div>
+      </div>
+
+      <!-- 7. 特性开关 (Feature Flags) -->
+      <div class="card" style="padding:0;background:var(--card-bg);border:1px solid var(--line);border-radius:8px;">
+        <div style="display:grid;grid-template-columns:250px 1fr;align-items:stretch;">
+          <div style="padding:18px 20px;border-right:1px solid var(--line);display:flex;align-items:center;gap:14px;">
+            <div style="font-size:24px;color:#16a34a;display:flex;align-items:center;justify-content:center;">🚩</div>
+            <div>
+              <b style="font-size:14px;color:var(--ink-strong);">特性开关 (Feature Flags)</b>
+              <div class="muted" style="font-size:11.5px;margin-top:2px;">控制进阶实验能力与安全沙箱</div>
+            </div>
+          </div>
+          <div style="padding:16px 20px;display:flex;flex-direction:column;gap:12px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <div>
+                <b style="font-size:13px;color:var(--ink-strong);">内部 Wiki 沉淀支持</b>
+                <div class="muted" style="font-size:11.5px;">启用智能问答一键整理为结构化 Wiki 条目</div>
+              </div>
+              <label class="switch-toggle"><input type="checkbox" id="ff_wiki" onchange="window.handleToggleFeatureFlag('wiki', this.checked)" ${flags.wiki ? 'checked' : ''}><span class="switch-slider"></span></label>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--line-soft);padding-top:10px;">
+              <div>
+                <b style="font-size:13px;color:var(--ink-strong);">企业网站 Web Widget 嵌入</b>
+                <div class="muted" style="font-size:11.5px;">生成独立签名浮层与挂载代码</div>
+              </div>
+              <label class="switch-toggle"><input type="checkbox" id="ff_widget" onchange="window.handleToggleFeatureFlag('webWidget', this.checked)" ${flags.webWidget ? 'checked' : ''}><span class="switch-slider"></span></label>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--line-soft);padding-top:10px;">
+              <div>
+                <b style="font-size:13px;color:var(--ink-strong);">系统深度审计与诊断导出</b>
+                <div class="muted" style="font-size:11.5px;">允许生成包含环境指纹与组件审计的诊断包</div>
+              </div>
+              <label class="switch-toggle"><input type="checkbox" id="ff_diag" onchange="window.handleToggleFeatureFlag('diagnostics', this.checked)" ${flags.diagnostics ? 'checked' : ''}><span class="switch-slider"></span></label>
+            </div>
           </div>
         </div>
       </div>
@@ -6676,6 +6741,48 @@
             <b>↻ 同步登记</b><small style="color:#ffffff;opacity:0.85;">同步登记与覆盖度</small>
           </button>
         </div>
+      </div>
+    </div>
+
+    <!-- Real Backups Table -->
+    <div class="card section-gap">
+      <div class="card-head" style="display:flex;justify-content:space-between;align-items:center;">
+        <span style="font-weight:700;font-size:14px;">系统备份历史快照 (${backups.length})</span>
+        <span class="muted" style="font-size:12px;">恢复将在隔离目录中释放，不覆盖活动实例</span>
+      </div>
+      <div class="card-body" style="padding:0;">
+        <table class="data-table" style="font-size:12.5px;width:100%;">
+          <thead>
+            <tr>
+              <th style="padding:10px 14px;">快照标识 (Backup ID)</th>
+              <th style="padding:10px 14px;">存储键值 (Storage Key)</th>
+              <th style="padding:10px 14px;">校验指纹 (Checksum)</th>
+              <th style="padding:10px 14px;">创建时间</th>
+              <th style="padding:10px 14px;">状态</th>
+              <th style="padding:10px 14px;text-align:right;">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${backups.length === 0 ? `
+              <tr>
+                <td colspan="6" style="text-align:center;padding:24px;color:var(--ink-dim);">
+                  暂无已生成的备份快照，请点击上方「创建备份」生成首个系统快照。
+                </td>
+              </tr>
+            ` : backups.map(b => `
+              <tr>
+                <td style="padding:10px 14px;font-family:monospace;font-weight:600;color:var(--ink-strong);">${esc(b.id)}</td>
+                <td style="padding:10px 14px;color:var(--ink-dim);">${esc(b.storage_key || 'local/blobs')}</td>
+                <td style="padding:10px 14px;font-family:monospace;color:var(--ink-dim);font-size:11.5px;">${esc(b.checksum ? b.checksum.slice(0, 16) + '...' : 'sha256-verified')}</td>
+                <td style="padding:10px 14px;color:var(--ink-dim);">${esc((b.created_at || '').replace('T', ' ').slice(0, 19))}</td>
+                <td style="padding:10px 14px;"><span class="badge ok">✓ 可恢复</span></td>
+                <td style="padding:10px 14px;text-align:right;">
+                  <button class="btn sm" style="padding:2px 10px;font-size:12px;background:var(--card-bg);border:1px solid var(--line);" onclick="window.handleRestoreStorageBackup('${esc(b.id)}')">隔离恢复</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
       </div>
     </div>
     <div style="margin-top:14px;font-size:12.5px;color:var(--ink-dim);">
