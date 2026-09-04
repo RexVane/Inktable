@@ -8,7 +8,7 @@ function resolveConfig(overrides = {}) {
   const dataRoot = path.resolve(overrides.dataRoot || process.env.ORDO_DATA_DIR || path.join(projectRoot, '.ordo-data'));
   return {
     projectRoot,
-    webRoot: path.resolve(overrides.webRoot || path.join(projectRoot, 'web')),
+    webRoot: path.resolve(overrides.webRoot || path.join(projectRoot, 'web', 'dist')),
     dataRoot,
     dbPath: path.join(dataRoot, 'metadata', 'ordo.sqlite3'),
     blobRoot: path.join(dataRoot, 'blobs'),

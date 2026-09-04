@@ -4,6 +4,14 @@
 # 依赖
 node_modules/
 
+# Python 虚拟环境与缓存（serverpy/.venv 体积巨大且含二进制）
+.venv/
+__pycache__/
+*.pyc
+
+# 前端构建产物（prestart 会重新生成）
+web/dist/
+
 # 日志
 *.log
 

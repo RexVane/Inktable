@@ -35,7 +35,7 @@ function createOpenApi(config) {
     'System': ['/api/v1/session/bootstrap','/api/v1/health','/api/v1/dashboard','/api/v1/version','/api/v1/diagnostics','/api/v1/openapi.json'],
     'Knowledge bases': ['/api/v1/knowledge-bases','/api/v1/knowledge-bases/{id}','/api/v1/knowledge-bases/{id}/impact','/api/v1/knowledge-bases/{id}/datasets','/api/v1/knowledge-bases/{id}/index-profiles','/api/v1/index-profiles/{id}','/api/v1/index-profiles/{id}/default'],
     'Datasets and ingest': ['/api/v1/datasets/{id}','/api/v1/datasets/{id}/sources','/api/v1/datasets/{id}/files','/api/v1/datasets/{id}/archives','/api/v1/datasets/{id}/directory/preview','/api/v1/datasets/{id}/directory/import','/api/v1/datasets/{id}/documents'],
-    'Documents and chunks': ['/api/v1/documents/{id}','/api/v1/artifacts/{id}/{kind}','/api/v1/datasets/{id}/chunks','/api/v1/chunks/{id}','/api/v1/chunks/{id}/revisions','/api/v1/chunks/{id}/restore','/api/v1/chunks/{id}/diff','/api/v1/chunks/{id}/split','/api/v1/chunks/merge'],
+    'Documents and chunks': ['/api/v1/documents/{id}','/api/v1/artifacts/{id}/{kind}','/api/v1/datasets/{id}/chunks','/api/v1/datasets/{id}/indexing/stats','/api/v1/datasets/{id}/indexing/pipeline','/api/v1/datasets/{id}/chapters','/api/v1/chunks/{id}','/api/v1/chunks/{id}/lineage','/api/v1/chunks/{id}/revisions','/api/v1/chunks/{id}/vectorize','/api/v1/chunks/{id}/toggle-disable','/api/v1/chunks/{id}/restore','/api/v1/chunks/{id}/diff','/api/v1/chunks/{id}/split','/api/v1/chunks/merge','/api/v1/datasets/{id}/indexing/vectorize-pending','/api/v1/datasets/{id}/indexing/rebuild-hnsw','/api/v1/datasets/{id}/indexing/optimize-index','/api/v1/datasets/{id}/indexing/rebuild-bm25','/api/v1/datasets/{id}/indexing/hybrid-weights'],
     'Releases and retrieval': ['/api/v1/datasets/{id}/releases','/api/v1/releases/{id}','/api/v1/releases/{id}/activate','/api/v1/releases/{id}/rollback','/api/v1/releases/{id}/impact','/api/v1/releases/{id}/search'],
     'Tasks': ['/api/v1/tasks','/api/v1/tasks/{id}','/api/v1/tasks/{id}/cancel','/api/v1/tasks/{id}/pause','/api/v1/tasks/{id}/resume','/api/v1/tasks/{id}/retry','/api/v1/tasks/{id}/wait'],
     'Connectors': ['/api/v1/connectors','/api/v1/connectors/{id}','/api/v1/connectors/{id}/test','/api/v1/connectors/{id}/schema','/api/v1/connectors/{id}/templates','/api/v1/query-templates/{id}/execute','/api/v1/query-templates/{id}/snapshot'],
@@ -49,7 +49,7 @@ function createOpenApi(config) {
     '/api/v1/session/bootstrap':['get'], '/api/v1/health':['get'], '/api/v1/dashboard':['get'], '/api/v1/version':['get'], '/api/v1/diagnostics':['get'], '/api/v1/openapi.json':['get'],
     '/api/v1/knowledge-bases':['get','post'], '/api/v1/knowledge-bases/{id}':['get','patch','delete'], '/api/v1/knowledge-bases/{id}/impact':['get'], '/api/v1/knowledge-bases/{id}/datasets':['get','post'], '/api/v1/knowledge-bases/{id}/index-profiles':['get','post'], '/api/v1/index-profiles/{id}':['get','patch','delete'], '/api/v1/index-profiles/{id}/default':['post'],
     '/api/v1/datasets/{id}':['get','patch','delete'], '/api/v1/datasets/{id}/sources':['get','post'], '/api/v1/datasets/{id}/files':['post'], '/api/v1/datasets/{id}/archives':['post'], '/api/v1/datasets/{id}/directory/preview':['post'], '/api/v1/datasets/{id}/directory/import':['post'], '/api/v1/datasets/{id}/documents':['get'],
-    '/api/v1/documents/{id}':['get','delete'], '/api/v1/artifacts/{id}/{kind}':['get'], '/api/v1/datasets/{id}/chunks':['get'], '/api/v1/chunks/{id}':['get'], '/api/v1/chunks/{id}/revisions':['post'], '/api/v1/chunks/{id}/restore':['post'], '/api/v1/chunks/{id}/diff':['get'], '/api/v1/chunks/{id}/split':['post'], '/api/v1/chunks/merge':['post'],
+    '/api/v1/documents/{id}':['get','delete'], '/api/v1/artifacts/{id}/{kind}':['get'], '/api/v1/datasets/{id}/chunks':['get'], '/api/v1/datasets/{id}/indexing/stats':['get'], '/api/v1/datasets/{id}/indexing/pipeline':['get'], '/api/v1/datasets/{id}/chapters':['get'], '/api/v1/chunks/{id}':['get'], '/api/v1/chunks/{id}/lineage':['get'], '/api/v1/chunks/{id}/revisions':['post'], '/api/v1/chunks/{id}/vectorize':['post'], '/api/v1/chunks/{id}/toggle-disable':['post'], '/api/v1/chunks/{id}/restore':['post'], '/api/v1/chunks/{id}/diff':['get'], '/api/v1/chunks/{id}/split':['post'], '/api/v1/chunks/merge':['post'], '/api/v1/datasets/{id}/indexing/vectorize-pending':['post'], '/api/v1/datasets/{id}/indexing/rebuild-hnsw':['post'], '/api/v1/datasets/{id}/indexing/optimize-index':['post'], '/api/v1/datasets/{id}/indexing/rebuild-bm25':['post'], '/api/v1/datasets/{id}/indexing/hybrid-weights':['put'],
     '/api/v1/datasets/{id}/releases':['get','post'], '/api/v1/releases/{id}':['get'], '/api/v1/releases/{id}/activate':['post'], '/api/v1/releases/{id}/rollback':['post'], '/api/v1/releases/{id}/impact':['get'], '/api/v1/releases/{id}/search':['post'],
     '/api/v1/tasks':['get'], '/api/v1/tasks/{id}':['get'], '/api/v1/tasks/{id}/cancel':['post'], '/api/v1/tasks/{id}/pause':['post'], '/api/v1/tasks/{id}/resume':['post'], '/api/v1/tasks/{id}/retry':['post'], '/api/v1/tasks/{id}/wait':['get'],
     '/api/v1/connectors':['get','post'], '/api/v1/connectors/{id}':['get'], '/api/v1/connectors/{id}/test':['post'], '/api/v1/connectors/{id}/schema':['get'], '/api/v1/connectors/{id}/templates':['get','post'], '/api/v1/query-templates/{id}/execute':['post'], '/api/v1/query-templates/{id}/snapshot':['post'],
@@ -227,12 +227,27 @@ async function createApp(overrides = {}) {
     return reply.send(buffer);
   });
   app.get('/api/v1/datasets/:id/chunks', async request => paginated(knowledge.listChunks(request.params.id, workspace(request), { ...page(request.query), query: request.query?.query, documentId: request.query?.documentId, type: request.query?.type, warning: request.query?.warning === 'true' })));
+  app.get('/api/v1/datasets/:id/indexing/stats', async request => data(knowledge.getIndexingStats(request.params.id, workspace(request))));
+  app.get('/api/v1/datasets/:id/indexing/pipeline', async request => data(knowledge.getIndexingPipeline(request.params.id, workspace(request))));
+  app.get('/api/v1/datasets/:id/chapters', async request => data(knowledge.getChapters(request.params.id, workspace(request))));
   app.get('/api/v1/chunks/:id', async request => data(knowledge.getChunk(request.params.id, workspace(request))));
+  app.get('/api/v1/chunks/:id/lineage', async request => data(knowledge.getChunkLineage(request.params.id, workspace(request))));
   app.post('/api/v1/chunks/:id/revisions', async request => data(knowledge.editChunk(request.params.id, request.body || {}, workspace(request), request.id)));
+  app.post('/api/v1/chunks/:id/vectorize', async request => data(knowledge.editChunk(request.params.id, { contentMd: (knowledge.getChunk(request.params.id, workspace(request))).content_md }, workspace(request), request.id)));
+  app.post('/api/v1/chunks/:id/toggle-disable', async request => {
+    const chunk = knowledge.getChunk(request.params.id, workspace(request));
+    const excluded = request.body?.excluded !== undefined ? request.body.excluded : !chunk.excluded;
+    return data(knowledge.editChunk(request.params.id, { contentMd: chunk.content_md, excluded }, workspace(request), request.id));
+  });
   app.post('/api/v1/chunks/:id/restore', async request => data(knowledge.restoreChunk(request.params.id, workspace(request), request.id)));
   app.get('/api/v1/chunks/:id/diff', async request => data(knowledge.diffChunk(request.params.id, request.query?.against, workspace(request))));
   app.post('/api/v1/chunks/:id/split', async request => data(knowledge.splitChunk(request.params.id, request.body || {}, workspace(request), request.id)));
   app.post('/api/v1/chunks/merge', async request => data(knowledge.mergeChunks(request.body || {}, workspace(request), request.id)));
+  app.post('/api/v1/datasets/:id/indexing/vectorize-pending', async request => data(knowledge.batchVectorizePending(request.params.id, workspace(request), request.id)));
+  app.post('/api/v1/datasets/:id/indexing/rebuild-hnsw', async request => data(knowledge.rebuildHnswIndex(request.params.id, workspace(request), request.id)));
+  app.post('/api/v1/datasets/:id/indexing/optimize-index', async request => data(knowledge.optimizeVectorIndex(request.params.id, workspace(request), request.id)));
+  app.post('/api/v1/datasets/:id/indexing/rebuild-bm25', async request => data(knowledge.rebuildBm25Index(request.params.id, workspace(request), request.id)));
+  app.put('/api/v1/datasets/:id/indexing/hybrid-weights', async request => data(knowledge.setHybridWeights(request.params.id, request.body || {}, workspace(request), request.id)));
 
   app.get('/api/v1/datasets/:id/releases', async request => data(knowledge.listReleases(request.params.id, workspace(request))));
   app.post('/api/v1/datasets/:id/releases', async request => data(knowledge.buildRelease(request.params.id, request.body || {}, workspace(request), request.id)));
