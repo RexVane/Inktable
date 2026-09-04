@@ -1418,7 +1418,6 @@ a:hover { text-decoration: underline; }
   height: 2.5px;
   background: var(--accent);
   border-radius: 1px;
-  transition: left 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .index-stepper-steps {
   display: grid;
@@ -1432,7 +1431,6 @@ a:hover { text-decoration: underline; }
   align-items: center;
   justify-content: center;
   position: relative;
-  cursor: pointer;
 }
 .index-stepper-pill {
   display: flex;
@@ -1444,12 +1442,6 @@ a:hover { text-decoration: underline; }
   background: var(--shell);
   padding: 0 14px;
   z-index: 2;
-  cursor: pointer;
-  transition: all 0.18s ease;
-  user-select: none;
-}
-.index-stepper-pill:hover {
-  color: var(--ink-strong);
 }
 .index-stepper-pill.active {
   color: var(--ink-strong);

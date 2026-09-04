@@ -65,4 +65,4 @@ npm --prefix server audit --registry=https://registry.npmjs.org
 - `planning/` — frozen decisions, feature specifications, acceptance baselines, and 22 directional page prototypes.
 - `server/src/` — database, storage, tasks, parsing, indexing, Q&A, connectors, graph, assistants, and the HTTP API.
 - `server/tests/` — real API end-to-end, security boundary, recovery, and public assistant tests.
-- `web/` — the React 18 + React Router + Vite product workbench; all primary data is read and written through `/api/v1`.
+- `web/` — the dependency-free browser workbench; all primary data is read and written through `/api/v1`.

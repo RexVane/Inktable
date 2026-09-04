@@ -35,10 +35,7 @@ jobs:
       - name: Install server dependencies
         run: npm --prefix server install
 
-      - name: Install web dependencies
-        run: npm --prefix web install
-
-      - name: Syntax check and web build
+      - name: Syntax check
         run: npm run check
 
       - name: Run tests

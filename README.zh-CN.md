@@ -65,4 +65,4 @@ npm --prefix server audit --registry=https://registry.npmjs.org
 - `planning/`：冻结决策、专项规范、验收基线和 22 张方向原型。
 - `server/src/`：数据库、存储、任务、解析、索引、问答、连接器、图谱、助手和 HTTP API。
 - `server/tests/`：真实 API 闭环、安全边界、恢复和公开助手测试。
-- `web/`：React 18 + React Router + Vite 产品工作台，所有主数据通过 `/api/v1` 读写。
+- `web/`：无依赖的浏览器工作台（原生 HTML/CSS/JS、无构建步骤），所有主数据通过 `/api/v1` 读写。
