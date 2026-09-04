@@ -1,4 +1,14 @@
-# Ordo
+<p align="center">
+  <img src="docs/github/social-preview.png" width="880" alt="Ordo — 本地优先知识工作台">
+</p>
+
+<h1 align="center">Ordo</h1>
+
+<p align="center">
+  <a href="https://github.com/RexVane/Ordo/actions/workflows/backend-tests.yml"><img src="https://github.com/RexVane/Ordo/actions/workflows/backend-tests.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg" alt="Windows, macOS, and Linux">
+</p>
 
 Ordo 是本地优先的知识管理与严格证据问答产品。当前工程提供统一 Web 工作台和版本化 API，可在单机上完成数据导入、解析、知识块修订、不可变 Release、混合检索、引用问答、Wiki、助手、审计、备份与隔离恢复。
 
@@ -11,7 +21,8 @@ Ordo 是本地优先的知识管理与严格证据问答产品。当前工程提
 ## 安装与启动
 
 ```powershell
-cd D:\AIApp\Ordo
+git clone https://github.com/RexVane/Ordo.git
+cd Ordo
 npm --prefix server install
 npm run seed
 npm start
@@ -50,4 +61,4 @@ npm --prefix server audit --registry=https://registry.npmjs.org
 - `planning/`：冻结决策、专项规范、验收基线和 22 张方向原型。
 - `server/src/`：数据库、存储、任务、解析、索引、问答、连接器、图谱、助手和 HTTP API。
 - `server/tests/`：真实 API 闭环、安全边界、恢复和公开助手测试。
-- `web/`：无构建步骤的产品工作台，所有主数据通过 `/api/v1` 读写。
+- `web/`：React 18 + React Router + Vite 产品工作台，所有主数据通过 `/api/v1` 读写。

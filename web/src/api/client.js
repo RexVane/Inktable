@@ -1,4 +1,4 @@
-// Ordo API Client for Vue 3
+// Ordo API Client for React
 // 会话模型：bootstrap() 获取 csrfToken（HttpOnly cookie 由后端下发），
 // 之后所有非 GET 请求自动携带 x-ordo-csrf；401 时自动重新 bootstrap 并重试一次。
 const BASE_URL = '';

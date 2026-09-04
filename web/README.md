@@ -1,6 +1,6 @@
 # Ordo Web
 
-Ordo Web 是统一产品服务提供的原生 HTML/CSS/JavaScript 工作台。它没有独立构建步骤，也不直连数据库；所有主数据和业务写操作通过同源 `/api/v1` 完成。
+Ordo Web 是统一产品服务提供的 React 18 工作台，使用 React Router 和 Vite 构建。它不直连数据库；所有主数据和业务写操作通过同源 `/api/v1` 完成。
 
 ## 启动
 
@@ -12,7 +12,15 @@ npm run seed
 npm start
 ```
 
-打开 `http://127.0.0.1:8790/`。不要再使用独立静态服务器运行产品，因为写请求需要统一服务创建的 HttpOnly 会话和 CSRF 令牌。
+`npm start` 会先构建 React 应用，再由统一 Fastify 服务托管 `web/dist`。打开 `http://127.0.0.1:8790/`。
+
+前端独立开发：
+
+```powershell
+npm --prefix web run dev
+```
+
+Vite 开发服务器位于 `http://127.0.0.1:5273/`，并将 `/api` 代理到统一服务。
 
 ## 页面范围
 
@@ -29,5 +37,5 @@ npm start
 
 ```powershell
 npm test
-node --check app.js
+npm run check
 ```

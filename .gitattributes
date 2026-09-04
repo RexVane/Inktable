@@ -1,0 +1,32 @@
+# 全仓统一 LF —— 不是风格洁癖，是修一类真实故障。
+#
+# 这个项目在 macOS 上写、在 Windows 上用。Windows 侧 git 常配着
+# `core.autocrlf=true`，编辑器一存就把整个文件换成 CRLF，而 `git diff` 因为
+# autocrlf 会归一化，**看不出行尾变了**。后果最狠的一处是
+# `apps/desktop/renderer/index.html`：它的内联脚本由 CSP sha256 白名单钉住，
+# 而 CSP 校验的是 HTML 解析器把 CRLF 规范化成 LF **之后**的文本 —— 文件存成
+# CRLF 会让两个哈希同时失效，Chromium 于是静默拦掉整块前端 JS。界面照常渲染，
+# 但没有任何交互、没有数据，控制台还拿不到报错。
+#
+# `eol=lf` 让工作区无论 autocrlf 怎么配都拿到 LF，从源头掐掉这条路。
+* text=auto eol=lf
+
+# 二进制：绝不做行尾或文本处理
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.icns  binary
+*.pdf   binary
+*.ttf   binary
+*.otf   binary
+*.woff  binary
+*.woff2 binary
+*.pfb   binary
+*.bcmap binary
+*.db    binary
+*.exe   binary
+*.dll   binary
+*.zip   binary
+*.blockmap binary

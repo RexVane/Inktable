@@ -1,0 +1,45 @@
+name: Ordo tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ordo-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Node 24 · npm test · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Install server dependencies
+        run: npm --prefix server install
+
+      - name: Install web dependencies
+        run: npm --prefix web install
+
+      - name: Syntax check and web build
+        run: npm run check
+
+      - name: Run tests
+        run: npm test
