@@ -1,5 +1,9 @@
 <p align="center">
-  <img src="docs/github/social-preview.png" width="880" alt="Ordo — 本地优先知识工作台">
+  <strong>English</strong> | <a href="./README.zh-CN.md">简体中文</a>
+</p>
+
+<p align="center">
+  <img src="docs/github/social-preview.png" width="880" alt="Ordo — local-first knowledge workbench">
 </p>
 
 <h1 align="center">Ordo</h1>
@@ -10,15 +14,15 @@
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg" alt="Windows, macOS, and Linux">
 </p>
 
-Ordo 是本地优先的知识管理与严格证据问答产品。当前工程提供统一 Web 工作台和版本化 API，可在单机上完成数据导入、解析、知识块修订、不可变 Release、混合检索、引用问答、Wiki、助手、审计、备份与隔离恢复。
+Ordo is a local-first knowledge management and strict evidence-grounded Q&A product. The current codebase provides a unified web workbench and a versioned API that handle data import, parsing, knowledge-block revision, immutable releases, hybrid retrieval, cited Q&A, wiki, assistants, audit, backup, and isolated recovery on a single machine.
 
-## 运行要求
+## Requirements
 
-- Windows、macOS 或 Linux
-- Node.js 24 或更高版本（使用内置 `node:sqlite`）
-- 首次安装需要访问 npm registry
+- Windows, macOS, or Linux
+- Node.js 24 or later (uses the built-in `node:sqlite` module)
+- The first install needs access to the npm registry
 
-## 安装与启动
+## Install and run
 
 ```powershell
 git clone https://github.com/RexVane/Ordo.git
@@ -28,37 +32,37 @@ npm run seed
 npm start
 ```
 
-打开 `http://127.0.0.1:8790/`。同一端口提供 Web 和 `/api/v1`，OpenAPI 3.1 契约位于 `http://127.0.0.1:8790/api/v1/openapi.json`。
+Open `http://127.0.0.1:8790/`. The same port serves both the web workbench and `/api/v1`; the OpenAPI 3.1 contract is available at `http://127.0.0.1:8790/api/v1/openapi.json`.
 
-`npm run seed` 会导入 [`server/fixtures/ordo-sample-knowledge.md`](./server/fixtures/ordo-sample-knowledge.md)，完成真实解析并构建活动 Release。命令可重复执行，内容哈希去重会避免重复文档和 Blob。
+`npm run seed` imports [`server/fixtures/ordo-sample-knowledge.md`](./server/fixtures/ordo-sample-knowledge.md), runs the real parsing pipeline, and builds the active release. The command is repeatable — content-hash deduplication prevents duplicate documents and blobs.
 
-## 数据与安全
+## Data and security
 
-默认数据目录是 `.ordo-data/`，可通过 `ORDO_DATA_DIR` 指向其他受管位置。目录包含 SQLite 元数据、内容寻址 Blob、标准产物、任务状态、备份、运行密钥和日志。
+The default data directory is `.ordo-data/`, which you can relocate to another managed location via `ORDO_DATA_DIR`. It contains SQLite metadata, content-addressed blobs, standard artifacts, task state, backups, runtime secrets, and logs.
 
-- 管理 API 使用随机本机会话 HttpOnly Cookie，所有写请求还需要 CSRF 令牌。
-- API Key 与数据库密码使用 AES-256-GCM 保存，业务记录和响应只保存 SecretRef 与掩码。
-- 上传和归档导入执行格式白名单、MIME、路径穿越、链接、嵌套包和资源预算检查。
-- SQLite/PostgreSQL 连接器只允许受控、参数化的只读查询模板。
-- 网站助手使用 HMAC、短期令牌、Origin 绑定、nonce 防重放和独立速率限制。
-- Release、块修订和 Wiki 修订不可变；审计事件形成可验证的追加哈希链。
-- 恢复只写入新的空目录并完成完整性检查，不覆盖当前运行实例。
+- The admin API uses random local-only session HttpOnly cookies; every write request additionally requires a CSRF token.
+- API keys and database passwords are stored with AES-256-GCM; business records and responses only keep SecretRefs and masked values.
+- Uploads and archive imports enforce format whitelists, MIME checks, path-traversal, symlink, nested-archive, and resource-budget checks.
+- The SQLite/PostgreSQL connectors only allow controlled, parameterized read-only query templates.
+- The website assistant uses HMAC, short-lived tokens, Origin binding, nonce replay protection, and an independent rate limit.
+- Releases, block revisions, and wiki revisions are immutable; audit events form a verifiable append-only hash chain.
+- Restore only writes into a new empty directory and completes integrity checks; it never overwrites the running instance.
 
-图片和扫描 PDF 在没有经过验证的 OCR/VLM Provider 时进入“需复核”，不会被伪装成解析成功。知识图谱和网站助手具备稳定后端契约，是否展示或启用由产品功能开关和已验证配置决定。
+Images and scanned PDFs enter a "needs review" state when no verified OCR/VLM provider is configured; they are never disguised as successful parses. The knowledge graph and website assistant have stable backend contracts; whether they are shown or enabled is decided by product feature flags and verified configuration.
 
-## 常用命令
+## Common commands
 
 ```powershell
-npm start          # 启动统一产品服务
-npm run seed       # 幂等导入模拟知识文档
-npm test           # 后端集成、安全测试与前端契约测试
-npm run check      # JavaScript 语法检查
+npm start          # Start the unified product service
+npm run seed       # Idempotently import the sample knowledge document
+npm test           # Backend integration & security tests plus frontend contract tests
+npm run check      # JavaScript syntax check
 npm --prefix server audit --registry=https://registry.npmjs.org
 ```
 
-## 目录
+## Layout
 
-- `planning/`：冻结决策、专项规范、验收基线和 22 张方向原型。
-- `server/src/`：数据库、存储、任务、解析、索引、问答、连接器、图谱、助手和 HTTP API。
-- `server/tests/`：真实 API 闭环、安全边界、恢复和公开助手测试。
-- `web/`：React 18 + React Router + Vite 产品工作台，所有主数据通过 `/api/v1` 读写。
+- `planning/` — frozen decisions, feature specifications, acceptance baselines, and 22 directional page prototypes.
+- `server/src/` — database, storage, tasks, parsing, indexing, Q&A, connectors, graph, assistants, and the HTTP API.
+- `server/tests/` — real API end-to-end, security boundary, recovery, and public assistant tests.
+- `web/` — the React 18 + React Router + Vite product workbench; all primary data is read and written through `/api/v1`.
