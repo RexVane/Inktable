@@ -16,6 +16,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException
+from starlette.middleware.gzip import GZipMiddleware
 
 from .config import resolve_config
 from .core import AppError
@@ -112,6 +113,12 @@ class Gateway:
                 headers.extend([(b'x-request-id', request_id.encode('ascii', 'replace')), (b'x-content-type-options', b'nosniff')])
                 if path.startswith('/api/'):
                     headers.append((b'cache-control', b'no-store'))
+                elif path == '/' or path.endswith('.html'):
+                    headers.append((b'cache-control', b'no-cache'))
+                elif path in ('/app.js', '/app.css', '/api.js', '/theme-init.js'):
+                    headers.append((b'cache-control', b'public, max-age=31536000, immutable'))
+                else:
+                    headers.append((b'cache-control', b'public, max-age=604800'))
                 if cors:
                     headers.extend([(b'access-control-allow-origin', cors.encode()), (b'vary', b'Origin')])
                 message = {**message, 'headers': headers}
@@ -150,6 +157,7 @@ def create_app(overrides=None):
     app.state.services = services
     session = {'token': secrets.token_urlsafe(32), 'csrf': secrets.token_urlsafe(24), 'expires': time.time() + 43200}
     app.add_middleware(Gateway, config=config, session=session, db=db)
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
     @app.exception_handler(AppError)
     async def app_error(request: Request, error: AppError):
         return JSONResponse(error_envelope(error.code, error.message, request.state.request_id, error.details), status_code=error.status_code)

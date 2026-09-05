@@ -168,37 +168,43 @@ class KnowledgeWorkbench:
                 'node3_collection': {'name': chunk['dataset_id'], 'vectorCount': stats['vectorizedChunks'], 'status': 'active', 'label': '集合 (Collection)'},
                 'node4_index': {'name': 'exact-cosine', 'type': 'exact-cosine', 'status': 'ready', 'label': '向量索引'}}
 
-    def batch_vectorize_pending(self, dataset_id, workspace_id, request_id=None):
+    async def batch_vectorize_pending(self, dataset_id, workspace_id, request_id=None):
         chunks = [item for item in self._current_chunks(dataset_id, workspace_id) if not item.get('embedding')]
-        result = self.db.transaction(lambda: [self.vectorize_chunk(item['id'], workspace_id, request_id)['id'] for item in chunks])
+        result = await asyncio.to_thread(
+            lambda: self.db.transaction(lambda: [self.vectorize_chunk(item['id'], workspace_id, request_id)['id'] for item in chunks]))
         return {'status': 'success', 'vectorizedCount': len(result), 'chunkIds': result, 'progress': 100}
 
-    def rebuild_hnsw_index(self, dataset_id, workspace_id, request_id=None):
+    async def rebuild_hnsw_index(self, dataset_id, workspace_id, request_id=None):
         from .vector_index import build
         start = time.monotonic()
         chunks = [item for item in self._current_chunks(dataset_id, workspace_id) if not item['excluded']]
-        graph = build(chunks)
-        self._projection(dataset_id, 'hnsw', workspace_id, graph)
+        graph = await asyncio.to_thread(build, chunks)
+        await asyncio.to_thread(self._projection, dataset_id, 'hnsw', workspace_id, graph)
         return {'status': 'success', 'algorithm': 'HNSW', 'totalNodes': len(chunks), 'latencyMs': round((time.monotonic() - start) * 1000), 'maxLevel': graph['maxLevel'], 'message': 'HNSW 图投影已重建；发布版本默认使用精确余弦检索'}
 
-    def optimize_vector_index(self, dataset_id, workspace_id, request_id=None):
+    async def optimize_vector_index(self, dataset_id, workspace_id, request_id=None):
         self.ensure_dataset(dataset_id, workspace_id)
         before = self.config['dbPath'].stat().st_size
-        self.db.run("INSERT INTO chunks_fts(chunks_fts) VALUES('optimize')")
-        self.db.run('PRAGMA optimize')
-        self.db.run('PRAGMA wal_checkpoint(PASSIVE)')
-        freed = max(0, before - self.config['dbPath'].stat().st_size)
+        def optimize():
+            self.db.run("INSERT INTO chunks_fts(chunks_fts) VALUES('optimize')")
+            self.db.run('PRAGMA optimize')
+            self.db.run('PRAGMA wal_checkpoint(PASSIVE)')
+            return self.config['dbPath'].stat().st_size
+        freed = max(0, before - await asyncio.to_thread(optimize))
         return {'status': 'success', 'freedBytes': freed, 'freedMb': round(freed / 1048576, 2), 'message': '完成 FTS 合并和 SQLite 查询规划优化'}
 
-    def rebuild_bm25_index(self, dataset_id, workspace_id, request_id=None):
+    async def rebuild_bm25_index(self, dataset_id, workspace_id, request_id=None):
         self.ensure_dataset(dataset_id, workspace_id)
-        # Include historical revisions: immutable releases still reference them.
-        chunks = self.db.all('SELECT cr.*,d.title document_title FROM chunk_revisions cr JOIN documents d ON d.id=cr.document_id WHERE cr.dataset_id=? AND cr.workspace_id=?', dataset_id, workspace_id)
-        def persist():
-            self.db.run('DELETE FROM chunks_fts WHERE dataset_id=? AND workspace_id=?', dataset_id, workspace_id)
-            for item in chunks:
-                self.db.run('INSERT INTO chunks_fts(chunk_revision_id,workspace_id,dataset_id,title,breadcrumb,content) VALUES(?,?,?,?,?,?)', item['id'], workspace_id, dataset_id, item['document_title'], item['type'], item['content_text'])
-        self.db.transaction(persist)
+        def rebuild():
+            # Include historical revisions: immutable releases still reference them.
+            chunks = self.db.all('SELECT cr.*,d.title document_title FROM chunk_revisions cr JOIN documents d ON d.id=cr.document_id WHERE cr.dataset_id=? AND cr.workspace_id=?', dataset_id, workspace_id)
+            def persist():
+                self.db.run('DELETE FROM chunks_fts WHERE dataset_id=? AND workspace_id=?', dataset_id, workspace_id)
+                for item in chunks:
+                    self.db.run('INSERT INTO chunks_fts(chunk_revision_id,workspace_id,dataset_id,title,breadcrumb,content) VALUES(?,?,?,?,?,?)', item['id'], workspace_id, dataset_id, item['document_title'], item['type'], item['content_text'])
+            self.db.transaction(persist)
+            return chunks
+        chunks = await asyncio.to_thread(rebuild)
         return {'status': 'success', 'indexedChunks': len(chunks), 'provider': 'sqlite-fts5', 'message': '全文索引已重建'}
 
     def set_hybrid_weights(self, dataset_id, input, workspace_id, request_id=None):

@@ -90,20 +90,22 @@ async def create_backup(service, context):
         for prefix, directory in [('blobs', service.config['blobRoot']), ('artifacts', service.config['artifactRoot'])]:
             files.extend((prefix + '/' + path.relative_to(directory).as_posix(), path)
                          for path in directory.rglob('*') if path.is_file() and not path.is_symlink())
-        with tarfile.open(root / 'archive.tar.gz', 'w:gz') as pack:
-            for index, (name, file) in enumerate(files):
-                assert_within(service.config['dataRoot'], file)
-                info = pack.gettarinfo(str(file), arcname=name)
-                info.mode = 0o600
-                with file.open('rb') as stream:
-                    pack.addfile(info, stream)
-                manifest['files'].append({'name': name, 'sizeBytes': info.size, 'sha256': digest(file)})
-                if index % 25 == 0:
-                    await checkpoint(20 + index / max(len(files), 1) * 60, '打包主数据', {'packed': index, 'total': len(files)})
-            content = stable_json(manifest).encode()
-            info = tarfile.TarInfo('backup-manifest.json')
-            info.size, info.mode = len(content), 0o600
-            pack.addfile(info, io.BytesIO(content))
+        await checkpoint(20, '打包主数据', {'total': len(files)})
+        def pack_archive():
+            with tarfile.open(root / 'archive.tar.gz', 'w:gz') as pack:
+                for name, file in files:
+                    assert_within(service.config['dataRoot'], file)
+                    info = pack.gettarinfo(str(file), arcname=name)
+                    info.mode = 0o600
+                    with file.open('rb') as stream:
+                        pack.addfile(info, stream)
+                    manifest['files'].append({'name': name, 'sizeBytes': info.size, 'sha256': digest(file)})
+                content = stable_json(manifest).encode()
+                info = tarfile.TarInfo('backup-manifest.json')
+                info.size, info.mode = len(content), 0o600
+                pack.addfile(info, io.BytesIO(content))
+        await asyncio.to_thread(pack_archive)
+        await checkpoint(85, '打包完成')
         await asyncio.to_thread(crypt_file, root / 'archive.tar.gz', root / 'encrypted', key_for(service, ws, backup_id))
         checksum = digest(root / 'encrypted')
         await checkpoint(95, '校验备份包完整性')
@@ -139,26 +141,30 @@ async def restore_backup(service, context):
         stage.mkdir()
         plain = temp_root / 'archive.tar.gz'
         await asyncio.to_thread(crypt_file, archive, plain, key_for(service, ws, backup['id']), True)
-        with tarfile.open(plain, 'r:gz') as pack:
-            for member in pack:
-                name = member.name
-                logical = PurePosixPath(name)
-                if '\\' in name or ':' in name or logical.is_absolute() or '..' in logical.parts or not member.isfile() or name in seen:
-                    raise AppError(422, 'BACKUP_ENTRY_INVALID', '备份包含不安全条目')
-                if name != 'backup-manifest.json' and name not in expected:
-                    raise AppError(422, 'BACKUP_ENTRY_INVALID', '备份含清单之外的文件')
-                budget = expected[name]['sizeBytes'] if name in expected else 16 * 1024 * 1024
-                if member.size > budget or (name in expected and member.size != budget):
-                    raise AppError(422, 'BACKUP_SIZE_INVALID', '备份文件大小不匹配')
-                file = Path(assert_within(stage, stage / name))
-                file.parent.mkdir(parents=True, exist_ok=True)
-                with pack.extractfile(member) as source, file.open('xb') as destination:
-                    shutil.copyfileobj(source, destination, 1024 * 1024)
-                seen.add(name)
-                if name in expected and digest(file) != expected[name]['sha256']:
-                    raise AppError(422, 'BACKUP_FILE_HASH_INVALID', '备份文件摘要不匹配')
-                if len(seen) % 25 == 0:
-                    await checkpoint(30 + len(seen) / max(len(expected) + 1, 1) * 50, '验证恢复文件')
+        await checkpoint(30, '解压并验证恢复文件')
+        def extract_all():
+            extracted = set()
+            with tarfile.open(plain, 'r:gz') as pack:
+                for member in pack:
+                    name = member.name
+                    logical = PurePosixPath(name)
+                    if '\\' in name or ':' in name or logical.is_absolute() or '..' in logical.parts or not member.isfile() or name in extracted:
+                        raise AppError(422, 'BACKUP_ENTRY_INVALID', '备份包含不安全条目')
+                    if name != 'backup-manifest.json' and name not in expected:
+                        raise AppError(422, 'BACKUP_ENTRY_INVALID', '备份含清单之外的文件')
+                    budget = expected[name]['sizeBytes'] if name in expected else 16 * 1024 * 1024
+                    if member.size > budget or (name in expected and member.size != budget):
+                        raise AppError(422, 'BACKUP_SIZE_INVALID', '备份文件大小不匹配')
+                    file = Path(assert_within(stage, stage / name))
+                    file.parent.mkdir(parents=True, exist_ok=True)
+                    with pack.extractfile(member) as source, file.open('xb') as destination:
+                        shutil.copyfileobj(source, destination, 1024 * 1024)
+                    extracted.add(name)
+                    if name in expected and digest(file) != expected[name]['sha256']:
+                        raise AppError(422, 'BACKUP_FILE_HASH_INVALID', '备份文件摘要不匹配')
+            return extracted
+        seen = await asyncio.to_thread(extract_all)
+        await checkpoint(85, '恢复文件校验完成')
         if seen != set(expected) | {'backup-manifest.json'}:
             raise AppError(422, 'BACKUP_FILES_MISSING', '备份缺少必要文件')
         if json.loads((stage / 'backup-manifest.json').read_text('utf-8')) != manifest:

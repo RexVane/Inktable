@@ -168,21 +168,25 @@ class ConnectorService:
         config = record.get('config') or {}
         timeout_ms = min(int(config.get('timeoutMs') or 5000), 30000)
         if record['type'] == 'sqlite':
+            import asyncio
             import sqlite3
-            try:
-                connection = sqlite3.connect(Path(config['path']).as_uri() + '?mode=ro', uri=True, timeout=timeout_ms / 1000)
-                connection.row_factory = sqlite3.Row
-                connection.execute('PRAGMA query_only=ON')
-                connection.execute('PRAGMA trusted_schema=OFF')
-                connection.execute(f'PRAGMA busy_timeout={timeout_ms}')
-                deadline = time.monotonic() + timeout_ms / 1000
-                connection.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 1000)
-            except Exception:
-                raise AppError(502, 'CONNECTOR_UNREACHABLE', '无法以只读方式打开 SQLite 数据库')
-            try:
-                return await fn({'type': 'sqlite', 'raw': connection})
-            finally:
-                connection.close()
+            def _run_sqlite():
+                try:
+                    connection = sqlite3.connect(Path(config['path']).as_uri() + '?mode=ro', uri=True, timeout=timeout_ms / 1000)
+                    connection.row_factory = sqlite3.Row
+                    connection.execute('PRAGMA query_only=ON')
+                    connection.execute('PRAGMA trusted_schema=OFF')
+                    connection.execute(f'PRAGMA busy_timeout={timeout_ms}')
+                    deadline = time.monotonic() + timeout_ms / 1000
+                    connection.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 1000)
+                except Exception:
+                    raise AppError(502, 'CONNECTOR_UNREACHABLE', '无法以只读方式打开 SQLite 数据库')
+                try:
+                    # 连接仅在工作线程内创建与使用；闭包的 sqlite 分支是纯同步代码。
+                    return asyncio.run(fn({'type': 'sqlite', 'raw': connection}))
+                finally:
+                    connection.close()
+            return await asyncio.to_thread(_run_sqlite)
         # postgresql
         import psycopg
         credentials = record.get('_credentials') or json.loads(self.secret_store.resolve(record['secret_ref'], workspace_id))

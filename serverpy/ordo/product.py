@@ -28,6 +28,7 @@ class ProductService:
         self.artifact_store = artifact_store
         self.secret_store = secret_store
         self.config = config
+        self._autostart_cache = None
         tasks.register('backup.create', self.backup_task)
         tasks.register('backup.restore', self.restore_task)
 
@@ -123,6 +124,7 @@ class ProductService:
                         winreg.DeleteValue(run_key, 'Ordo')
                     except FileNotFoundError:
                         pass
+                self._autostart_cache = bool(value['autoStart'])
         self.db.run('INSERT INTO settings(workspace_id,key,value_json,updated_at) VALUES(?,?,?,?) ON CONFLICT(workspace_id,key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at', ws, key, stable_json(value), now())
         self.audit.append(workspace_id=ws, action='setting.update', object_type='setting', object_id=key, request_id=request_id, details={'fields': list(value)})
         return {'key': key, 'value': value, 'updatedAt': now()}
@@ -276,12 +278,15 @@ class ProductService:
     def _windows_autostart_enabled(self):
         if sys.platform != 'win32':
             return False
+        if self._autostart_cache is not None:
+            return self._autostart_cache
         try:
             out = subprocess.run(['reg', 'query', r'HKCU\Software\Microsoft\Windows\CurrentVersion\Run', '/v', 'Ordo'],
                                  capture_output=True, timeout=2).stdout.decode('utf-8', errors='ignore')
-            return 'Ordo' in out and 'REG_SZ' in out
+            self._autostart_cache = 'Ordo' in out and 'REG_SZ' in out
         except Exception:  # noqa: BLE001
-            return False
+            self._autostart_cache = False
+        return self._autostart_cache
 
     def request_backup(self, input=None, workspace_id=None, request_id=None):
         input, ws = input or {}, workspace_id or self.workspace_id()

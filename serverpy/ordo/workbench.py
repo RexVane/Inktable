@@ -1,4 +1,5 @@
 """Dataset file management and parsing workbench backed by persisted records."""
+import asyncio
 import base64
 import difflib
 import json
@@ -230,7 +231,11 @@ class WorkbenchService:
             stages[key] = {'name': name, 'completed': count, 'total': total, 'status': 'completed' if count == total else 'processing'}
         return {'totalDocuments': total, 'stages': stages}
 
-    def document_page(self, document_id, page_num, ws, mode='page'):
+    async def document_page(self, document_id, page_num, ws, mode='page'):
+        # PDF 渲染与 base64 编码是 CPU/IO 密集操作，放到工作线程避免阻塞事件循环。
+        return await asyncio.to_thread(self._document_page, document_id, page_num, ws, mode)
+
+    def _document_page(self, document_id, page_num, ws, mode='page'):
         started = time.monotonic()
         document = self.knowledge.get_document(document_id, ws)
         revision = next(row for row in document['revisions'] if row['id'] == document['current_revision_id'])

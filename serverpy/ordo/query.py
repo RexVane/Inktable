@@ -355,10 +355,8 @@ class QueryService:
 
         if on_event and not tokens_streamed:
             text = str(generated.get('content') or '')
-            for i in range(0, len(text), 4):
-                on_event('token', {'delta': text[i:i + 4]})
-                import asyncio
-                await asyncio.sleep(0.01)
+            if text:
+                on_event('token', {'delta': text})
         final_result = {
             'userMessage': self.db.one('SELECT * FROM messages WHERE id=?', user_message_id),
             'assistantMessage': dict(self.db.one('SELECT * FROM messages WHERE id=?', assistant_message_id),

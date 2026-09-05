@@ -278,7 +278,7 @@ def mount_routes(app, services, bootstrap):
             return {'items': filtered[offset:offset+limit], 'total': len(filtered), 'limit': limit, 'offset': offset}
         page_modes = {'getDocumentPreviewPages': 'pages', 'getDocumentPage': 'page', 'getDocumentPageInspect': 'inspect', 'getDocumentPageDiff': 'diff'}
         if operation in page_modes:
-            return w.document_page(path['documentId'], path.get('pageNum', 1), ws, page_modes[operation])
+            return await w.document_page(path['documentId'], path.get('pageNum', 1), ws, page_modes[operation])
         if operation == 'quickParse':
             conversation = q.get_conversation(body['conversationId'], ws) if body.get('conversationId') else {'workspace_id': ws, 'dataset_id': body.get('datasetId'), 'release_id': None, 'strict_evidence': True}
             return parse_question(required(body.get('query', body.get('question')), 'query'), conversation)
