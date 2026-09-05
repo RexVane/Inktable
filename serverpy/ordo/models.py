@@ -157,6 +157,9 @@ async def timed_fetch(url, options=None, timeout_ms=15_000, allow_local=False, o
         raise AppError(502, 'MODEL_UNREACHABLE', '无法连接模型服务')
 
 
+MODEL_PURPOSES = ('generation', 'embedding', 'rerank', 'vlm', 'ocr', 'parsing')
+
+
 class ModelService:
     def __init__(self, db, secret_store, audit, config):
         self.db = db
@@ -199,6 +202,9 @@ class ModelService:
         provider = input.get('provider') or 'openai-compatible'
         if provider not in ('openai-compatible', 'ollama', 'local-extractive'):
             raise AppError(400, 'PROVIDER_UNSUPPORTED', '当前仅支持 OpenAI 兼容、Ollama 和本地证据抽取 Provider')
+        purpose = input.get('purpose') or 'generation'
+        if purpose not in MODEL_PURPOSES:
+            raise AppError(400, 'VALIDATION_ERROR', '模型用途必须是 generation、embedding、rerank、vlm、ocr 或 parsing')
         if provider != 'local-extractive' and not self.external_models_enabled(workspace_id):
             raise AppError(403, 'FEATURE_DISABLED', '外部模型功能未启用')
         connection_id = gen_id('model')
@@ -235,6 +241,9 @@ class ModelService:
     async def update(self, connection_id, input, workspace_id=None, request_id=None):
         workspace_id = workspace_id or self.config['localWorkspaceId']
         current = self.get(connection_id, workspace_id, include_secret_ref=True)
+        purpose = input.get('purpose') or current['purpose']
+        if purpose not in MODEL_PURPOSES:
+            raise AppError(400, 'VALIDATION_ERROR', '模型用途必须是 generation、embedding、rerank、vlm、ocr 或 parsing')
         if input.get('baseUrl') is None:
             base_url = current['base_url']
         elif current['provider'] == 'local-extractive':

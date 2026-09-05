@@ -165,6 +165,7 @@
         state.modelsData[m.id] = {
           backendId: m.id,
           name: m.name,
+          purpose: m.purpose || 'generation',
           provider: m.provider === 'openai-compatible' ? 'OpenAI 兼容接口' : m.provider === 'ollama' ? '本地 Ollama / vLLM' : '本地证据抽取',
           url: m.base_url || '',
           modelName: m.model_id || '',
@@ -6813,11 +6814,11 @@ function iconSearch(size = 14) {
 
     // Group models into categories
     const categories = [
-      { id: 'llm', label: '回答模型', match: m => m.provider === 'local-extractive' || (m.provider || '').includes('OpenAI') || (m.provider || '').includes('Ollama') || (m.name || '').includes('GPT') || (m.name || '').includes('Qwen') || (m.name || '').includes('本地') },
-      { id: 'embed', label: 'Embedding', match: m => (m.name || '').includes('embedding') || (m.modelName || '').includes('embedding') || (m.name || '').includes('向量') },
-      { id: 'rerank', label: '重排模型', match: m => (m.name || '').includes('rerank') || (m.modelName || '').includes('rerank') || (m.name || '').includes('重排') },
-      { id: 'vlm', label: 'VLM', match: m => (m.name || '').includes('MinerU') || (m.name || '').includes('vlm') || (m.name || '').includes('视觉') },
-      { id: 'ocr', label: 'OCR / 解析服务', match: m => (m.name || '').includes('Paddle') || (m.name || '').includes('OCR') || (m.name || '').includes('解析') }
+      { id: 'llm', label: '回答模型', match: m => (m.purpose || 'generation') === 'generation' || m.provider === 'local-extractive' || (m.provider || '').includes('OpenAI') || (m.provider || '').includes('Ollama') || (m.name || '').includes('GPT') || (m.name || '').includes('Qwen') || (m.name || '').includes('本地') },
+      { id: 'embed', label: 'Embedding', match: m => m.purpose === 'embedding' || (m.name || '').includes('embedding') || (m.modelName || '').includes('embedding') || (m.name || '').includes('向量') },
+      { id: 'rerank', label: '重排模型', match: m => m.purpose === 'rerank' || (m.name || '').includes('rerank') || (m.modelName || '').includes('rerank') || (m.name || '').includes('重排') },
+      { id: 'vlm', label: 'VLM', match: m => m.purpose === 'vlm' || (m.name || '').includes('MinerU') || (m.name || '').includes('vlm') || (m.name || '').includes('视觉') },
+      { id: 'ocr', label: 'OCR / 解析服务', match: m => m.purpose === 'ocr' || m.purpose === 'parsing' || (m.name || '').includes('Paddle') || (m.name || '').includes('OCR') || (m.name || '').includes('解析') }
     ];
 
     const categorizedKeys = new Set();
@@ -6920,6 +6921,18 @@ function iconSearch(size = 14) {
                   <option ${cur.provider === 'MinerU Server' ? 'selected' : ''}>MinerU Server</option>
                   <option ${cur.provider === 'Paddle Server' ? 'selected' : ''}>Paddle Server</option>
                 </select>
+              </div>
+              <div class="form-group">
+                <label>模型用途</label>
+                <select class="select" id="modelPurposeSelect">
+                  <option value="generation" ${!cur.purpose || cur.purpose === 'generation' ? 'selected' : ''}>回答模型 (LLM)</option>
+                  <option value="embedding" ${cur.purpose === 'embedding' ? 'selected' : ''}>Embedding 向量化</option>
+                  <option value="rerank" ${cur.purpose === 'rerank' ? 'selected' : ''}>重排 (Rerank)</option>
+                  <option value="vlm" ${cur.purpose === 'vlm' ? 'selected' : ''}>视觉语言模型 (VLM)</option>
+                  <option value="ocr" ${cur.purpose === 'ocr' ? 'selected' : ''}>OCR 文字识别</option>
+                  <option value="parsing" ${cur.purpose === 'parsing' ? 'selected' : ''}>文档解析服务</option>
+                </select>
+                <small class="muted">流水线与助手按用途取用已登记的模型连接</small>
               </div>
               <div class="form-group">
                 <label>基础 URL</label>
@@ -8146,6 +8159,10 @@ function iconSearch(size = 14) {
     if (modelTimeoutInput && modelTimeoutInput.value) {
       payload.config = { timeoutMs: Number(modelTimeoutInput.value) * 1000 };
     }
+    const purposeSelect = document.getElementById('modelPurposeSelect');
+    if (purposeSelect?.value) {
+      payload.purpose = purposeSelect.value;
+    }
     showToast('正在更新模型配置...');
     const curModel = state.modelsData[modelId];
     const targetId = curModel?.backendId || modelId;
@@ -8792,6 +8809,17 @@ function iconSearch(size = 14) {
       </div>
       <div class="modal-body" style="padding:16px 20px;">
         <div style="margin-bottom:12px;">
+          <label class="form-label" style="display:block;font-size:12.5px;font-weight:600;margin-bottom:4px;">模型用途 (Purpose)</label>
+          <select class="input" id="newModelPurpose" style="width:100%;">
+            <option value="generation">回答模型 (LLM)</option>
+            <option value="embedding">Embedding 向量化</option>
+            <option value="rerank">重排 (Rerank)</option>
+            <option value="vlm">视觉语言模型 (VLM)</option>
+            <option value="ocr">OCR 文字识别</option>
+            <option value="parsing">文档解析服务</option>
+          </select>
+        </div>
+        <div style="margin-bottom:12px;">
           <label class="form-label" style="display:block;font-size:12.5px;font-weight:600;margin-bottom:4px;">服务提供商 (Provider)</label>
           <select class="input" id="newModelProvider" style="width:100%;">
             <option value="OpenAI">OpenAI 兼容接口</option>
@@ -8827,6 +8855,7 @@ function iconSearch(size = 14) {
     const providerLabel = document.getElementById('newModelProvider')?.value || 'DeepSeek';
     const url = document.getElementById('newModelUrl')?.value || 'https://api.deepseek.com/v1';
     const apiKey = document.getElementById('newModelKey')?.value || '';
+    const purpose = document.getElementById('newModelPurpose')?.value || 'generation';
     const providerMap = { 'OpenAI': 'openai-compatible', 'DeepSeek': 'openai-compatible', 'Anthropic': 'openai-compatible', 'BAAI': 'openai-compatible', 'Ollama': 'ollama' };
     if (api && api.connected) {
       const created = await api.createModel({
@@ -8834,7 +8863,7 @@ function iconSearch(size = 14) {
         provider: providerMap[providerLabel] || 'openai-compatible',
         baseUrl: url,
         modelId: name,
-        purpose: 'generation',
+        purpose,
         ...(apiKey ? { apiKey } : {})
       });
       if (!created) {
@@ -8845,6 +8874,7 @@ function iconSearch(size = 14) {
       state.modelsData[key] = {
         backendId: created.id,
         name: created.name || name,
+        purpose: created.purpose || purpose,
         provider: providerLabel,
         url: created.base_url || url,
         modelName: created.model_id || name,
