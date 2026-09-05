@@ -79,18 +79,22 @@ class ProductService:
         }
 
     def dashboard(self, workspace_id=None):
-        ws = workspace_id or self.workspace_id()
+        ws = self.workspace_id() if workspace_id is None else workspace_id
         tables = {'knowledgeBases': ('knowledge_bases', "status='active'"),
                   'datasets': ('datasets', "status='active'"), 'documents': ('documents', "status!='deleted'"),
                   'chunks': ('chunk_logicals', '1=1'), 'activeReleases': ('knowledge_releases', "status='active'"),
                   'conversations': ('conversations', 'deleted_at IS NULL'), 'requests': ('messages', "role='user'"),
-                  'pendingTasks': ('tasks', "status IN ('queued','running','paused')"), 'failedTasks': ('tasks', "status='failed'"),
                   'modelConnections': ('model_connections', '1=1'), 'wikiPages': ('wiki_pages', '1=1'),
                   'assistants': ('assistants', "status!='deleted'")}
+        task_summary = self.db.all('SELECT status,COUNT(*) count FROM tasks WHERE workspace_id=? GROUP BY status', ws)
+        summary = {row['status']: row['count'] for row in task_summary}
         counts = {key: self.db.one(f'SELECT COUNT(*) n FROM {table} WHERE workspace_id=? AND {where}', ws)['n']
                   for key, (table, where) in tables.items()}
+        # 任务计数从同一条 GROUP BY 派生，避免对 tasks 表再扫两遍。
+        counts['pendingTasks'] = sum(summary.get(status, 0) for status in ('queued', 'running', 'paused'))
+        counts['failedTasks'] = summary.get('failed', 0)
         return {'generatedAt': now(), 'deploymentProfile': self.config['deploymentProfile'], 'status': 'ready', 'counts': counts,
-                'taskSummary': self.db.all('SELECT status,COUNT(*) count FROM tasks WHERE workspace_id=? GROUP BY status', ws),
+                'taskSummary': task_summary,
                 'recentTasks': self.tasks.list(ws, limit=10)['items'], 'recentKnowledgeBases': self.knowledge.list_knowledge_bases(ws)[:10],
                 'requestTrend': self.db.all("SELECT substr(created_at,1,10) day,COUNT(*) count FROM messages WHERE workspace_id=? AND role='user' AND created_at>=datetime('now','-6 days') GROUP BY day ORDER BY day", ws),
                 'evidence': self.db.all('SELECT evidence_status,COUNT(*) count FROM query_traces WHERE workspace_id=? GROUP BY evidence_status', ws),

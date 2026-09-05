@@ -155,7 +155,7 @@ async def test_schema_four_data_and_secrets_survive_python_upgrade(tmp_path):
     app = create_app({'dataRoot': config['dataRoot']})
     async with app.router.lifespan_context(app):
         service = app.state.services
-        assert service['product'].schema_version() == 5
+        assert service['product'].schema_version() == MIGRATIONS[-1]['version']
         # Node packs iv + tag + ciphertext rather than cryptography's ciphertext + tag.
         iv = bytes(range(12))
         encrypted = AESGCM(master).encrypt(iv, b'legacy-api-key', None)

@@ -619,6 +619,15 @@ CREATE TABLE index_projections (
 ) STRICT;
 '''})
 
+MIGRATIONS.append({
+    'version': 6, 'name': 'hot_path_indexes', 'sql': '''
+CREATE INDEX IF NOT EXISTS idx_citations_trace ON citations(trace_id, ordinal);
+CREATE INDEX IF NOT EXISTS idx_query_traces_conversation ON query_traces(workspace_id, conversation_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_document_revisions_dedupe ON document_revisions(workspace_id, content_hash);
+CREATE INDEX IF NOT EXISTS idx_graph_relations_source ON graph_relations(workspace_id, source_entity_id);
+CREATE INDEX IF NOT EXISTS idx_graph_relations_target ON graph_relations(workspace_id, target_entity_id);
+'''})
+
 
 def assert_fts5_available(connection):
     try:

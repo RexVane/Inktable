@@ -2,6 +2,7 @@ import hashlib
 import json
 import math
 import re
+from collections import OrderedDict
 from pathlib import Path
 
 from .core import AppError, gen_id, now, hash_bytes, parse_json, required, stable_json
@@ -85,6 +86,7 @@ class KnowledgeService(KnowledgeWorkbench):
     def __init__(self, db, blob_store, artifact_store, tasks, audit, config):
         self.db, self.blob_store, self.artifact_store = db, blob_store, artifact_store
         self.tasks, self.audit, self.config = tasks, audit, config
+        self._release_cache = OrderedDict()
         tasks.register('document.parse', self.parse_revision_task)
         tasks.register('release.build', self.build_release_task)
 
@@ -543,6 +545,24 @@ class KnowledgeService(KnowledgeWorkbench):
         count = lambda sql: (self.db.one(sql, release_id, workspace_id) or {}).get('count', 0)
         return {'releaseId': release_id, 'datasetId': release['dataset_id'], 'version': release['version'], 'status': release['status'], 'conversations': count('SELECT COUNT(*) count FROM conversations WHERE release_id=? AND workspace_id=? AND deleted_at IS NULL'), 'traces': count('SELECT COUNT(*) count FROM query_traces WHERE release_id=? AND workspace_id=?'), 'citations': count('SELECT COUNT(*) count FROM citations WHERE release_id=? AND workspace_id=?'), 'assistantReleases': count('SELECT COUNT(*) count FROM assistant_releases WHERE knowledge_release_id=? AND workspace_id=?'), 'active': release['status'] == 'active'}
 
+    def _release_chunks_cached(self, release_id, workspace_id):
+        # 发布版本的块内容不可变，按 release_id 缓存解析后的向量，避免每次问答全量重读并重复 JSON 解析。
+        key = (workspace_id, release_id)
+        cached = self._release_cache.get(key)
+        if cached is not None:
+            self._release_cache.move_to_end(key)
+            return cached
+        rows = self.db.all('SELECT cr.*,d.title document_title FROM release_chunks rc JOIN chunk_revisions cr ON cr.id=rc.chunk_revision_id JOIN documents d ON d.id=cr.document_id WHERE rc.release_id=? AND cr.workspace_id=? ORDER BY rc.ordinal', release_id, workspace_id)
+        entries = []
+        for row in rows:
+            item = dict(row)
+            embedding = parse_json(item.pop('embedding_json', None), []) or local_embedding(item['content_text'])
+            entries.append((item, embedding))
+        self._release_cache[key] = entries
+        while len(self._release_cache) > 4:
+            self._release_cache.popitem(last=False)
+        return entries
+
     def search_release(self, release_id, query, workspace_id, limit=10, overrides=None):
         query = required(query, 'query')
         release = self.get_release(release_id, workspace_id)
@@ -556,9 +576,9 @@ class KnowledgeService(KnowledgeWorkbench):
         limit = max(1, min(50, int(limit or 10)))
         vector_limit = max(limit * 2, int(fusion.get('vectorTopK', 20)))
         full_text_limit = max(limit * 2, int(fusion.get('fullTextTopK', 20)))
-        rows = self.db.all('SELECT cr.*,d.title document_title FROM release_chunks rc JOIN chunk_revisions cr ON cr.id=rc.chunk_revision_id JOIN documents d ON d.id=cr.document_id WHERE rc.release_id=? AND cr.workspace_id=? ORDER BY rc.ordinal', release_id, workspace_id)
+        entries = self._release_chunks_cached(release_id, workspace_id)
         query_vector = local_embedding(query)
-        vector = sorted(({'chunk': row, 'score': cosine(query_vector, parse_json(row.get('embedding_json'), []) or local_embedding(row['content_text']))} for row in rows), key=lambda item: item['score'], reverse=True)[:vector_limit]
+        vector = sorted(({'chunk': row, 'score': cosine(query_vector, embedding)} for row, embedding in entries), key=lambda item: item['score'], reverse=True)[:vector_limit]
         if not channels.get('vector', True):
             vector = []
         terms = [term.replace('"', '""') for term in str(query).strip().split() if term]
@@ -573,7 +593,7 @@ class KnowledgeService(KnowledgeWorkbench):
         scores = {}
         for rank, item in enumerate(vector, 1):
             scores[item['chunk']['id']] = {'chunk': item['chunk'], 'vectorScore': item['score'], 'vectorRank': rank, 'fullTextScore': None, 'fullTextRank': None, 'rrf': weights['denseWeight'] / (fusion_k + rank)}
-        by_id = {row['id']: row for row in rows}
+        by_id = {row['id']: row for row, _ in entries}
         for rank, item in enumerate(full_text, 1):
             chunk = by_id.get(item['chunk_revision_id'])
             if not chunk:

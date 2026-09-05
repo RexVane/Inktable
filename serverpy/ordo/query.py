@@ -388,7 +388,9 @@ class QueryService:
             clauses.append('conversation_id=?')
             params.append(conversation_id)
         total = (self.db.one(f'SELECT COUNT(*) AS count FROM query_traces WHERE {" AND ".join(clauses)}', *params) or {}).get('count', 0)
-        items = self.db.all(f'SELECT * FROM query_traces WHERE {" AND ".join(clauses)} ORDER BY created_at DESC LIMIT ? OFFSET ?', *params, limit, offset)
+        rows = self.db.all(f'SELECT * FROM query_traces WHERE {" AND ".join(clauses)} ORDER BY created_at DESC LIMIT ? OFFSET ?', *params, limit, offset)
+        # 列表不携带 stages_json（单条可达 MB 级，详情接口才返回）。
+        items = [{key: value for key, value in dict(row).items() if key != 'stages_json'} for row in rows]
         return {'items': items, 'total': total, 'limit': limit, 'offset': offset}
 
     async def replay_trace(self, trace_id, input=None, workspace_id=None, request_id=None, idempotency_key=None, on_event=None):

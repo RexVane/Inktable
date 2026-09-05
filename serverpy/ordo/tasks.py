@@ -16,6 +16,7 @@ class TaskService:
         self._scheduled = {}
         self._closing = False
         self.parsing_manual = set()
+        self._slot_changed = asyncio.Condition()
         self.db.run("UPDATE tasks SET status='queued',progress=0,started_at=NULL,finished_at=NULL,cancel_requested=0,pause_requested=0,error_code=NULL,error_message=NULL,updated_at=? WHERE status='running'", now())
 
     def register(self, task_type, handler):
@@ -82,7 +83,11 @@ class TaskService:
                 active = self.db.one("SELECT COUNT(*) n FROM tasks WHERE workspace_id=? AND type='document.parse' AND status='running'", queued['workspace_id'])['n']
                 if active < limit:
                     break
-                await asyncio.sleep(0.05)
+                try:
+                    async with self._slot_changed:
+                        await asyncio.wait_for(self._slot_changed.wait(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    pass
             if self._closing:
                 return
         handler = self.handlers.get(queued['type'])
@@ -128,6 +133,8 @@ class TaskService:
             self._fail(task_id, task, AppError(500, 'TASK_FAILED', str(error) or '任务执行失败'))
         finally:
             self.running.discard(task_id)
+            async with self._slot_changed:
+                self._slot_changed.notify_all()
 
     def _commit_success(self, task_id, workspace_id, status, result, finished):
         update = self.db.run("UPDATE tasks SET status=?,progress=100,result_json=?,finished_at=?,updated_at=? WHERE id=? AND status='running' AND cancel_requested=0 AND pause_requested=0",
@@ -242,9 +249,12 @@ class TaskService:
 
     async def wait(self, task_id, workspace_id, timeout_ms=10_000):
         deadline = time.monotonic() + timeout_ms / 1000
-        while time.monotonic() < deadline:
-            task = self.get(task_id, workspace_id)
-            if task['status'] in ('succeeded', 'partial', 'failed', 'cancelled', 'paused'):
-                return task
-            await asyncio.sleep(0.025)
-        raise AppError(408, 'TASK_WAIT_TIMEOUT', '等待任务完成超时')
+        while True:
+            row = self.db.one('SELECT status FROM tasks WHERE id=? AND workspace_id=?', task_id, workspace_id)
+            if not row:
+                raise AppError(404, 'NOT_FOUND', '任务不存在或不可访问')
+            if row['status'] in ('succeeded', 'partial', 'failed', 'cancelled', 'paused'):
+                return self.get(task_id, workspace_id)
+            if time.monotonic() >= deadline:
+                raise AppError(408, 'TASK_WAIT_TIMEOUT', '等待任务完成超时')
+            await asyncio.sleep(0.25)
