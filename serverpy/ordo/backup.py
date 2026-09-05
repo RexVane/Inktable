@@ -83,7 +83,10 @@ async def create_backup(service, context):
             with closing(sqlite3.connect(service.config['dbPath'])) as src, closing(sqlite3.connect(snapshot)) as dst:
                 src.backup(dst)
         await asyncio.to_thread(copy_database)
-        files = [('metadata/ordo.sqlite3', snapshot), ('runtime/master.key', service.config['keyPath'])]
+        # The active key may come from ORDO_MASTER_KEY rather than a key file.
+        master_file = root / 'master.key'
+        master_file.write_bytes(service.secret_store.key)
+        files = [('metadata/ordo.sqlite3', snapshot), ('runtime/master.key', master_file)]
         for prefix, directory in [('blobs', service.config['blobRoot']), ('artifacts', service.config['artifactRoot'])]:
             files.extend((prefix + '/' + path.relative_to(directory).as_posix(), path)
                          for path in directory.rglob('*') if path.is_file() and not path.is_symlink())

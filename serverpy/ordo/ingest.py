@@ -5,7 +5,7 @@ import tarfile
 import zipfile
 from pathlib import Path
 
-from .core import AppError, gen_id, hash_bytes, now, safe_name, stable_json
+from .core import AppError, gen_id, hash_bytes, now, required, safe_name, stable_json
 from .parsers import ALLOWED_EXTENSIONS, ARCHIVE_EXTENSIONS, extension_of
 
 
@@ -167,7 +167,7 @@ class IngestService:
 
     def _directory_scan(self, directory, rules=None):
         rules = rules or {}
-        root = Path(directory).resolve()
+        root = Path(required(directory, 'directory')).resolve()
         if not root.exists() or not root.is_dir():
             raise AppError(400, 'DIRECTORY_INVALID', '授权目录不存在或不是目录')
         excluded = [str(item).lower() for item in (rules.get('exclude') or [])]
@@ -187,13 +187,17 @@ class IngestService:
                     walk(entry)
                 elif entry.is_file():
                     extension = extension_of(entry.name)
+                    info = entry.stat()
                     candidates.append({
-                        'relativePath': relative, 'sizeBytes': entry.stat().st_size,
+                        'relativePath': relative, 'sizeBytes': info.st_size,
+                        'mtimeNs': info.st_mtime_ns, 'inode': info.st_ino, 'device': info.st_dev,
                         'supported': extension in ALLOWED_EXTENSIONS and extension not in ARCHIVE_EXTENSIONS,
                         'extension': extension,
                     })
         walk(root)
         total_bytes = sum(item['sizeBytes'] for item in candidates)
+        if total_bytes > self.config['maxArchiveBytes']:
+            raise AppError(413, 'DIRECTORY_RESOURCE_LIMIT', '目录导入超过总大小预算')
         return {'root': str(root), 'count': len(candidates), 'totalBytes': total_bytes,
                 'truncated': len(candidates) >= max_files, 'candidates': candidates}
 
@@ -274,14 +278,27 @@ class IngestService:
                 manifest.append({'path': item['relativePath'], 'status': 'resource_limit', 'sizeBytes': item['sizeBytes']})
             else:
                 try:
-                    path = Path(input['root']) / item['relativePath']
-                    buffer = path.read_bytes()
+                    root = Path(input['root']).resolve()
+                    path = root / item['relativePath']
+                    if not _within(root, path.resolve()) or any(part.is_symlink() for part in [path, *list(path.parents)[:len(path.relative_to(root).parts)-1]]):
+                        raise AppError(400, 'DIRECTORY_SYMLINK_REJECTED', '授权目录中的文件路径已变化')
+                    before = path.stat()
+                    if any(item.get(key) is not None and item[key] != value for key, value in [('sizeBytes', before.st_size), ('mtimeNs', before.st_mtime_ns), ('inode', before.st_ino), ('device', before.st_dev)]):
+                        raise AppError(409, 'DIRECTORY_FILE_CHANGED', '文件在授权后已变化，请重新预览导入')
+                    with os.fdopen(os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_BINARY', 0)), 'rb') as stream:
+                        opened = os.fstat(stream.fileno())
+                        if (opened.st_ino, opened.st_dev) != (before.st_ino, before.st_dev):
+                            raise AppError(409, 'DIRECTORY_FILE_CHANGED', '文件在读取前已变化')
+                        buffer = stream.read(self.config['maxFileBytes'] + 1)
+                        after = os.fstat(stream.fileno())
+                    if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+                        raise AppError(409, 'DIRECTORY_FILE_CHANGED', '文件在读取中已变化')
                     registered = self.knowledge.register_upload(input['datasetId'], input['sourceId'], item['relativePath'],
                                                                       buffer, None, workspace_id)
                     manifest.append({'path': item['relativePath'], 'status': 'duplicate' if registered['duplicate'] else 'queued',
                                      'documentId': registered['document']['id'], 'taskId': (registered.get('task') or {}).get('id')})
-                except AppError as error:
-                    manifest.append({'path': item['relativePath'], 'status': 'failed', 'code': error.code or 'IMPORT_FAILED', 'message': error.message})
+                except (AppError, OSError) as error:
+                    manifest.append({'path': item['relativePath'], 'status': 'failed', 'code': getattr(error, 'code', 'IMPORT_FAILED'), 'message': getattr(error, 'message', '授权文件无法读取')})
             await checkpoint(5 + (index + 1) / max(len(candidates), 1) * 90, '导入授权目录', {'processed': index + 1, 'total': len(candidates)})
         failures = [item for item in manifest if item['status'] in ('failed', 'unsupported', 'resource_limit')]
         self.db.run("UPDATE sources SET status=?,config_json=?,updated_at=? WHERE id=? AND workspace_id=?",

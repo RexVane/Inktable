@@ -178,5 +178,9 @@ def create_app(overrides=None):
         return response
     from .routes import mount_routes
     mount_routes(app, services, bootstrap)
+    from fastapi.openapi.docs import get_swagger_ui_html
+    @app.get('/api/docs', include_in_schema=False)
+    async def docs():
+        return get_swagger_ui_html(openapi_url='/api/v1/openapi.json', title='Ordo API')
     app.mount('/', StaticFiles(directory=str(config['webRoot']), html=True), name='web')
     return app

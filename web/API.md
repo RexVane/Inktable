@@ -5,8 +5,8 @@
 ## 覆盖范围与后端边界
 
 - `planning/前端API清单/` 的逐页契约与总览经去重后有 **203 个方法/路径组合**，全部已有客户端封装或等价路径映射。
-- 客户端目录提供 **224 个接口操作**，同时覆盖当前 Node 后端 OpenAPI 中全部 **151 个接口操作**。
-- 其中 **73 个接口操作尚未在当前后端注册**。封装保留规划中的请求路径与请求体；调用失败返回 `null` 并写入 `lastError`，或按调用选项抛出 `ApiError`。客户端不生成模拟成功响应。
+- 客户端目录提供 **224 个接口操作**，全部已由 Python/FastAPI 后端注册，另保留 Wiki 兼容地址。
+- 原先缺失的 **73 个操作**已接入 Python 处理器。未配置 OCR、额外向量模型等外部能力时返回明确的能力不可用错误；本地算法与重放方式详见 [后端能力说明](../serverpy/README.md)。调用失败返回 `null` 并写入 `lastError`，或按选项抛出 `ApiError`。
 - 清单中的 `POST /api/v1/messages/:id/wiki` 使用 `saveMessageWiki()` / `wikiFromMessage()` 映射至现有 `POST /api/v1/wiki/from-message/:messageId`。
 - “后端已注册”只表示存在路由，不代表算法、数据和业务功能已经完整验收；客户端不会把注册状态当作功能健康状态。
 
@@ -52,7 +52,7 @@ await ordoApi.directoryImport(datasetId, { directory, rules, idempotencyKey });
 await ordoApi.restoreBackup(backupId, { targetRoot, idempotencyKey });
 await ordoApi.uploadDocument(datasetId, file, sourceId);
 await ordoApi.uploadArchive(datasetId, file);
-await ordoApi.uploadFile(file, { datasetId }); // 规划中的全局文件登记接口
+await ordoApi.uploadFile(file, { datasetId }); // 可省略 datasetId，先登记后归入数据集
 ```
 
 上传使用 FormData，`sourceId` 放在文件字段前，由浏览器设置 multipart boundary。助手客户端创建接受旧 `origins` 并转换为 `allowedOrigins`；返回保留后端字段，同时提供现有弹窗使用的 `client` 和列表使用的 `origins`。
@@ -91,9 +91,9 @@ await ordoApi.sendWidgetMessage(visitor.id, { question }, { token: token.token }
 
 ## 验证
 
-`npm test` 包含清单覆盖、页面调用方法完整性、参数与分页、上传、会话续期、错误、SSE，以及通过真实 Fastify API 执行的上传到恢复闭环。`npm run check` 检查新模块语法。
+`npm test` 包含 Python API 的上传到恢复闭环、数据迁移、安全与流式传输测试，以及现有前端测试和真实 FastAPI HTTP 服务下的浏览器客户端对接测试。`npm run check` 检查 Python 导入和语法以及前端 JavaScript 语法。
 
-以下矩阵依据本次工作区中的 `server/src/app.js` OpenAPI 目录核对。它是接口对照，不是后端功能完成声明。
+以下矩阵与 `serverpy/ordo/api_contract.json` 和 FastAPI 实际 OpenAPI 比对。注册状态不等同于所有外部 Provider 已配置。
 
 ## 接口矩阵
 
@@ -250,76 +250,76 @@ await ordoApi.sendWidgetMessage(visitor.id, { question }, { token: token.token }
 | `restoreBackup` | POST | `/api/v1/backups/:backupId/restore` | 已注册 |
 | `getAudit` | GET | `/api/v1/audit` | 已注册 |
 | `verifyAudit` | GET | `/api/v1/audit/verify` | 已注册 |
-| `getAllDatasets` | GET | `/api/v1/datasets` | 待后端实现 |
-| `createUnscopedDataset` | POST | `/api/v1/datasets` | 待后端实现 |
-| `getRegisteredSources` | GET | `/api/v1/sources` | 待后端实现 |
-| `getSourceTree` | GET | `/api/v1/sources/tree` | 待后端实现 |
-| `uploadFile` | POST | `/api/v1/files` | 待后端实现 |
-| `assignSourceDataset` | PATCH | `/api/v1/sources/:sourceId/dataset` | 待后端实现 |
-| `getRecentSources` | GET | `/api/v1/sources/recent` | 待后端实现 |
-| `getSourceActivities` | GET | `/api/v1/sources/recent-activities` | 待后端实现 |
-| `getSourceAttentionItems` | GET | `/api/v1/sources/attention-items` | 待后端实现 |
-| `testConnectorConfig` | POST | `/api/v1/connectors/test` | 待后端实现 |
-| `deleteSource` | DELETE | `/api/v1/sources/:sourceId` | 待后端实现 |
-| `getDatasetTree` | GET | `/api/v1/datasets/:datasetId/tree` | 待后端实现 |
-| `getDatasetFiles` | GET | `/api/v1/datasets/:datasetId/files` | 待后端实现 |
-| `inspectFile` | GET | `/api/v1/files/:fileId/inspect` | 待后端实现 |
-| `createDatasetFolder` | POST | `/api/v1/datasets/:datasetId/folders` | 待后端实现 |
-| `deleteDatasetFile` | DELETE | `/api/v1/datasets/:datasetId/files/:fileId` | 待后端实现 |
-| `batchDeleteDatasetFiles` | POST | `/api/v1/datasets/:datasetId/files/batch-delete` | 待后端实现 |
-| `moveDatasetFile` | PATCH | `/api/v1/datasets/:datasetId/files/:fileId/move` | 待后端实现 |
-| `batchMoveDatasetFiles` | POST | `/api/v1/datasets/:datasetId/files/batch-move` | 待后端实现 |
-| `getParsingProfiles` | GET | `/api/v1/parsing/profiles` | 待后端实现 |
-| `startParsing` | POST | `/api/v1/parsing/start` | 待后端实现 |
-| `pauseParsing` | POST | `/api/v1/parsing/pause` | 待后端实现 |
-| `resumeParsing` | POST | `/api/v1/parsing/resume` | 待后端实现 |
-| `retryFailedParsing` | POST | `/api/v1/parsing/retry-failed` | 待后端实现 |
-| `getParsingPipelineStats` | GET | `/api/v1/parsing/pipeline-stats` | 待后端实现 |
-| `getParsingTasks` | GET | `/api/v1/parsing/tasks` | 待后端实现 |
-| `clearPendingParsingTasks` | POST | `/api/v1/parsing/tasks/clear-pending` | 待后端实现 |
-| `getParsingSettings` | GET | `/api/v1/parsing/settings` | 待后端实现 |
-| `updateParsingSettings` | PATCH | `/api/v1/parsing/settings` | 待后端实现 |
-| `exportParsingLogs` | GET | `/api/v1/parsing/logs/export` | 待后端实现 |
-| `getDocumentPreviewPages` | GET | `/api/v1/documents/:documentId/preview/pages` | 待后端实现 |
-| `getDocumentPage` | GET | `/api/v1/documents/:documentId/pages/:pageNum` | 待后端实现 |
-| `getDocumentPageInspect` | GET | `/api/v1/documents/:documentId/pages/:pageNum/inspect` | 待后端实现 |
-| `getDocumentPageDiff` | GET | `/api/v1/documents/:documentId/pages/:pageNum/diff` | 待后端实现 |
-| `getSystemResources` | GET | `/api/v1/system/resources` | 待后端实现 |
-| `getTraceParseStage` | GET | `/api/v1/traces/:traceId/stages/parse` | 待后端实现 |
-| `quickParse` | POST | `/api/v1/traces/quick-parse` | 待后端实现 |
-| `getConversationContext` | GET | `/api/v1/conversations/:conversationId/context` | 待后端实现 |
-| `reparseTrace` | POST | `/api/v1/traces/:traceId/stages/parse/reparse` | 待后端实现 |
-| `updateTraceParse` | PUT | `/api/v1/traces/:traceId/stages/parse` | 待后端实现 |
-| `getTraceParseLogs` | GET | `/api/v1/traces/:traceId/stages/parse/logs` | 待后端实现 |
-| `classifyTraceIntent` | POST | `/api/v1/traces/:traceId/stages/parse/classify-intent` | 待后端实现 |
-| `extractTraceEntities` | POST | `/api/v1/traces/:traceId/stages/parse/extract-entities` | 待后端实现 |
-| `updateTraceKeywords` | PATCH | `/api/v1/traces/:traceId/stages/parse/keywords` | 待后端实现 |
-| `updateNormalizedQuery` | PATCH | `/api/v1/traces/:traceId/stages/parse/normalized-query` | 待后端实现 |
-| `rewriteTraceQuery` | POST | `/api/v1/traces/:traceId/stages/parse/rewrite-query` | 待后端实现 |
-| `updateRewrittenQuery` | PATCH | `/api/v1/traces/:traceId/stages/parse/rewritten-query` | 待后端实现 |
-| `updateTraceFilters` | PATCH | `/api/v1/traces/:traceId/stages/parse/filters` | 待后端实现 |
-| `updateTraceRawJson` | PUT | `/api/v1/traces/:traceId/stages/parse/raw-json` | 待后端实现 |
-| `getTraceEmbedStage` | GET | `/api/v1/traces/:traceId/stages/embed` | 待后端实现 |
-| `recomputeEmbedding` | POST | `/api/v1/traces/:traceId/stages/embed/recompute` | 待后端实现 |
-| `getEmbeddingScatter` | GET | `/api/v1/traces/:traceId/stages/embed/scatter` | 待后端实现 |
-| `compareEmbeddingModels` | POST | `/api/v1/traces/:traceId/stages/embed/compare-models` | 待后端实现 |
-| `getEmbeddingVector` | GET | `/api/v1/traces/:traceId/stages/embed/vector` | 待后端实现 |
-| `getEmbeddingLogs` | GET | `/api/v1/traces/:traceId/stages/embed/logs` | 待后端实现 |
-| `updateTraceRoute` | PUT | `/api/v1/traces/:traceId/stages/route` | 待后端实现 |
-| `simulateTraceRoute` | POST | `/api/v1/traces/:traceId/stages/route/simulate` | 待后端实现 |
-| `getTraceRouteIndexes` | GET | `/api/v1/traces/:traceId/stages/route/indexes` | 待后端实现 |
-| `getTraceRouteIntent` | GET | `/api/v1/traces/:traceId/stages/route/intent` | 待后端实现 |
-| `getTraceRouteLogs` | GET | `/api/v1/traces/:traceId/stages/route/logs` | 待后端实现 |
-| `getRecallChannel` | GET | `/api/v1/traces/:traceId/stages/recall/channels/:channelId` | 待后端实现 |
-| `getTracePromptStage` | GET | `/api/v1/traces/:traceId/stages/prompt` | 待后端实现 |
-| `updateTracePrompt` | PUT | `/api/v1/traces/:traceId/stages/prompt` | 待后端实现 |
-| `getPromptVersions` | GET | `/api/v1/traces/:traceId/stages/prompt/versions` | 待后端实现 |
-| `maskPrompt` | POST | `/api/v1/traces/:traceId/stages/prompt/mask` | 待后端实现 |
-| `scanPromptSensitiveData` | GET | `/api/v1/traces/:traceId/stages/prompt/sensitive-scan` | 待后端实现 |
-| `getTraceGenerationStage` | GET | `/api/v1/traces/:traceId/stages/generation` | 待后端实现 |
-| `regenerateAnswer` | POST | `/api/v1/traces/:traceId/stages/generation/regenerate` | 待后端实现 |
-| `sendTraceFeedback` | POST | `/api/v1/traces/:traceId/feedback` | 待后端实现 |
-| `saveTraceQa` | POST | `/api/v1/traces/:traceId/save-qa` | 待后端实现 |
-| `getTraceWaterfall` | GET | `/api/v1/traces/:traceId/waterfall` | 待后端实现 |
-| `replayAll` | POST | `/api/v1/traces/:traceId/replay-all` | 待后端实现 |
-| `deleteAssistant` | DELETE | `/api/v1/assistants/:assistantId` | 待后端实现 |
+| `getAllDatasets` | GET | `/api/v1/datasets` | 已注册 |
+| `createUnscopedDataset` | POST | `/api/v1/datasets` | 已注册 |
+| `getRegisteredSources` | GET | `/api/v1/sources` | 已注册 |
+| `getSourceTree` | GET | `/api/v1/sources/tree` | 已注册 |
+| `uploadFile` | POST | `/api/v1/files` | 已注册 |
+| `assignSourceDataset` | PATCH | `/api/v1/sources/:sourceId/dataset` | 已注册 |
+| `getRecentSources` | GET | `/api/v1/sources/recent` | 已注册 |
+| `getSourceActivities` | GET | `/api/v1/sources/recent-activities` | 已注册 |
+| `getSourceAttentionItems` | GET | `/api/v1/sources/attention-items` | 已注册 |
+| `testConnectorConfig` | POST | `/api/v1/connectors/test` | 已注册 |
+| `deleteSource` | DELETE | `/api/v1/sources/:sourceId` | 已注册 |
+| `getDatasetTree` | GET | `/api/v1/datasets/:datasetId/tree` | 已注册 |
+| `getDatasetFiles` | GET | `/api/v1/datasets/:datasetId/files` | 已注册 |
+| `inspectFile` | GET | `/api/v1/files/:fileId/inspect` | 已注册 |
+| `createDatasetFolder` | POST | `/api/v1/datasets/:datasetId/folders` | 已注册 |
+| `deleteDatasetFile` | DELETE | `/api/v1/datasets/:datasetId/files/:fileId` | 已注册 |
+| `batchDeleteDatasetFiles` | POST | `/api/v1/datasets/:datasetId/files/batch-delete` | 已注册 |
+| `moveDatasetFile` | PATCH | `/api/v1/datasets/:datasetId/files/:fileId/move` | 已注册 |
+| `batchMoveDatasetFiles` | POST | `/api/v1/datasets/:datasetId/files/batch-move` | 已注册 |
+| `getParsingProfiles` | GET | `/api/v1/parsing/profiles` | 已注册 |
+| `startParsing` | POST | `/api/v1/parsing/start` | 已注册 |
+| `pauseParsing` | POST | `/api/v1/parsing/pause` | 已注册 |
+| `resumeParsing` | POST | `/api/v1/parsing/resume` | 已注册 |
+| `retryFailedParsing` | POST | `/api/v1/parsing/retry-failed` | 已注册 |
+| `getParsingPipelineStats` | GET | `/api/v1/parsing/pipeline-stats` | 已注册 |
+| `getParsingTasks` | GET | `/api/v1/parsing/tasks` | 已注册 |
+| `clearPendingParsingTasks` | POST | `/api/v1/parsing/tasks/clear-pending` | 已注册 |
+| `getParsingSettings` | GET | `/api/v1/parsing/settings` | 已注册 |
+| `updateParsingSettings` | PATCH | `/api/v1/parsing/settings` | 已注册 |
+| `exportParsingLogs` | GET | `/api/v1/parsing/logs/export` | 已注册 |
+| `getDocumentPreviewPages` | GET | `/api/v1/documents/:documentId/preview/pages` | 已注册 |
+| `getDocumentPage` | GET | `/api/v1/documents/:documentId/pages/:pageNum` | 已注册 |
+| `getDocumentPageInspect` | GET | `/api/v1/documents/:documentId/pages/:pageNum/inspect` | 已注册 |
+| `getDocumentPageDiff` | GET | `/api/v1/documents/:documentId/pages/:pageNum/diff` | 已注册 |
+| `getSystemResources` | GET | `/api/v1/system/resources` | 已注册 |
+| `getTraceParseStage` | GET | `/api/v1/traces/:traceId/stages/parse` | 已注册 |
+| `quickParse` | POST | `/api/v1/traces/quick-parse` | 已注册 |
+| `getConversationContext` | GET | `/api/v1/conversations/:conversationId/context` | 已注册 |
+| `reparseTrace` | POST | `/api/v1/traces/:traceId/stages/parse/reparse` | 已注册 |
+| `updateTraceParse` | PUT | `/api/v1/traces/:traceId/stages/parse` | 已注册 |
+| `getTraceParseLogs` | GET | `/api/v1/traces/:traceId/stages/parse/logs` | 已注册 |
+| `classifyTraceIntent` | POST | `/api/v1/traces/:traceId/stages/parse/classify-intent` | 已注册 |
+| `extractTraceEntities` | POST | `/api/v1/traces/:traceId/stages/parse/extract-entities` | 已注册 |
+| `updateTraceKeywords` | PATCH | `/api/v1/traces/:traceId/stages/parse/keywords` | 已注册 |
+| `updateNormalizedQuery` | PATCH | `/api/v1/traces/:traceId/stages/parse/normalized-query` | 已注册 |
+| `rewriteTraceQuery` | POST | `/api/v1/traces/:traceId/stages/parse/rewrite-query` | 已注册 |
+| `updateRewrittenQuery` | PATCH | `/api/v1/traces/:traceId/stages/parse/rewritten-query` | 已注册 |
+| `updateTraceFilters` | PATCH | `/api/v1/traces/:traceId/stages/parse/filters` | 已注册 |
+| `updateTraceRawJson` | PUT | `/api/v1/traces/:traceId/stages/parse/raw-json` | 已注册 |
+| `getTraceEmbedStage` | GET | `/api/v1/traces/:traceId/stages/embed` | 已注册 |
+| `recomputeEmbedding` | POST | `/api/v1/traces/:traceId/stages/embed/recompute` | 已注册 |
+| `getEmbeddingScatter` | GET | `/api/v1/traces/:traceId/stages/embed/scatter` | 已注册 |
+| `compareEmbeddingModels` | POST | `/api/v1/traces/:traceId/stages/embed/compare-models` | 已注册 |
+| `getEmbeddingVector` | GET | `/api/v1/traces/:traceId/stages/embed/vector` | 已注册 |
+| `getEmbeddingLogs` | GET | `/api/v1/traces/:traceId/stages/embed/logs` | 已注册 |
+| `updateTraceRoute` | PUT | `/api/v1/traces/:traceId/stages/route` | 已注册 |
+| `simulateTraceRoute` | POST | `/api/v1/traces/:traceId/stages/route/simulate` | 已注册 |
+| `getTraceRouteIndexes` | GET | `/api/v1/traces/:traceId/stages/route/indexes` | 已注册 |
+| `getTraceRouteIntent` | GET | `/api/v1/traces/:traceId/stages/route/intent` | 已注册 |
+| `getTraceRouteLogs` | GET | `/api/v1/traces/:traceId/stages/route/logs` | 已注册 |
+| `getRecallChannel` | GET | `/api/v1/traces/:traceId/stages/recall/channels/:channelId` | 已注册 |
+| `getTracePromptStage` | GET | `/api/v1/traces/:traceId/stages/prompt` | 已注册 |
+| `updateTracePrompt` | PUT | `/api/v1/traces/:traceId/stages/prompt` | 已注册 |
+| `getPromptVersions` | GET | `/api/v1/traces/:traceId/stages/prompt/versions` | 已注册 |
+| `maskPrompt` | POST | `/api/v1/traces/:traceId/stages/prompt/mask` | 已注册 |
+| `scanPromptSensitiveData` | GET | `/api/v1/traces/:traceId/stages/prompt/sensitive-scan` | 已注册 |
+| `getTraceGenerationStage` | GET | `/api/v1/traces/:traceId/stages/generation` | 已注册 |
+| `regenerateAnswer` | POST | `/api/v1/traces/:traceId/stages/generation/regenerate` | 已注册 |
+| `sendTraceFeedback` | POST | `/api/v1/traces/:traceId/feedback` | 已注册 |
+| `saveTraceQa` | POST | `/api/v1/traces/:traceId/save-qa` | 已注册 |
+| `getTraceWaterfall` | GET | `/api/v1/traces/:traceId/waterfall` | 已注册 |
+| `replayAll` | POST | `/api/v1/traces/:traceId/replay-all` | 已注册 |
+| `deleteAssistant` | DELETE | `/api/v1/assistants/:assistantId` | 已注册 |

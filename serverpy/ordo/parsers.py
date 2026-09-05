@@ -83,10 +83,13 @@ def make_result(filename, blocks, warnings=None, quality_status='publishable', m
 
 def parse_pdf(buffer, filename):
     try:
-        import fitz
-        document = fitz.open(stream=buffer, filetype='pdf')
+        import pymupdf
+        document = pymupdf.open(stream=buffer, filetype='pdf')
     except Exception as error:
         raise AppError(422, 'PARSE_FAILED', 'PDF 无法读取或已损坏') from error
+    if document.needs_pass:
+        document.close()
+        raise AppError(422, 'NEEDS_PASSWORD', 'PDF 已加密，需要密码')
     blocks, warnings = [], []
     for number, page in enumerate(document, 1):
         text = normalize_text(page.get_text('text')).strip()
@@ -94,7 +97,9 @@ def parse_pdf(buffer, filename):
             blocks.append({'type': 'paragraph', 'contentMd': f'<!-- page:{number} -->\n{text}', 'contentText': text, 'locator': {'type': 'page', 'page': number}, 'generatedBy': 'pymupdf', 'confidence': .92, 'warnings': []})
         else:
             warnings.append({'code': 'VISUAL_PAGE_REVIEW_REQUIRED', 'page': number, 'message': '页面没有可靠文字层，需要 OCR/VLM Provider'})
-    return make_result(filename, blocks, warnings, 'publishable' if blocks and not warnings else 'review_required', {'pages': document.page_count, 'parser': 'pymupdf-lightweight'})
+    page_count = document.page_count
+    document.close()
+    return make_result(filename, blocks, warnings, 'publishable' if blocks and not warnings else 'review_required', {'pages': page_count, 'parser': 'pymupdf-lightweight'})
 
 
 def parse_csv(buffer, filename):

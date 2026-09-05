@@ -178,13 +178,17 @@ class SecretStore:
         iv = os.urandom(12)
         sealed = AESGCM(self.key).encrypt(iv, str(value).encode('utf-8'), None)
         # packed = iv(12) + tag(16) + ciphertext，与 node:crypto createCipheriv 输出一致
-        return base64.b64encode(iv + sealed).decode('ascii')
+        return base64.b64encode(iv + sealed[-16:] + sealed[:-16]).decode('ascii')
 
     def decrypt(self, payload):
         packed = base64.b64decode(payload)
         iv = packed[:12]
-        sealed = packed[12:]
-        return AESGCM(self.key).decrypt(iv, sealed, None).decode('utf-8')
+        from cryptography.exceptions import InvalidTag
+        try:
+            return AESGCM(self.key).decrypt(iv, packed[28:] + packed[12:28], None).decode('utf-8')
+        except InvalidTag:
+            # Also read secrets written by the early Python prototype.
+            return AESGCM(self.key).decrypt(iv, packed[12:], None).decode('utf-8')
 
     def _mask(self, text):
         return '••••' if len(text) <= 4 else f'••••{text[-4:]}'

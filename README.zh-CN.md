@@ -19,22 +19,25 @@ Ordo 是本地优先的知识管理与严格证据问答产品。当前工程提
 ## 运行要求
 
 - Windows、macOS 或 Linux
-- Node.js 24 或更高版本（使用内置 `node:sqlite`）
-- 首次安装需要访问 npm registry
+- Python 3.11 或更高版本，SQLite 需要启用 FTS5
+- 首次安装需要访问 PyPI；Node.js 24 仅用于前端测试
 
 ## 安装与启动
 
 ```powershell
 git clone https://github.com/RexVane/Ordo.git
 cd Ordo
-npm --prefix server install
-npm run seed
-npm start
+python -m venv serverpy/.venv
+serverpy/.venv/Scripts/python -m pip install -r serverpy/requirements.txt
+python ordo.py seed
+python ordo.py serve
 ```
 
 打开 `http://127.0.0.1:8790/`。同一端口提供 Web 和 `/api/v1`，OpenAPI 3.1 契约位于 `http://127.0.0.1:8790/api/v1/openapi.json`。
 
-`npm run seed` 会导入 [`server/fixtures/ordo-sample-knowledge.md`](./server/fixtures/ordo-sample-knowledge.md)，完成真实解析并构建活动 Release。命令可重复执行，内容哈希去重会避免重复文档和 Blob。
+macOS/Linux 安装依赖时使用 `serverpy/.venv/bin/python`。`python ordo.py` 会自动选择项目虚拟环境。`python ordo.py seed` 会创建示例知识库、执行真实解析并激活知识版本，可重复执行；已有数据的工作区不必运行 seed。
+
+后端统一使用 Python/FastAPI/Uvicorn，前端 224 个 API 操作及 Wiki 兼容地址均已注册，现有页面显示保持不变。详见[后端运行与能力说明](serverpy/README.md)。
 
 ## 数据与安全
 
@@ -53,16 +56,18 @@ npm start
 ## 常用命令
 
 ```powershell
-npm start          # 启动统一产品服务
-npm run seed       # 幂等导入模拟知识文档
-npm test           # 后端集成、安全测试与前端契约测试
-npm run check      # JavaScript 语法检查
-npm --prefix server audit --registry=https://registry.npmjs.org
+python ordo.py serve   # 启动 FastAPI 与现有前端
+python ordo.py seed    # 创建可选示例知识库
+python ordo.py test -q # Python 集成与安全测试
+python ordo.py check   # Python 语法与导入检查
+npm test              # Python 测试加前端客户端、页面测试
+npm run check         # Python 与前端 JavaScript 语法检查
 ```
 
 ## 目录
 
 - `planning/`：冻结决策、专项规范、验收基线和 22 张方向原型。
-- `server/src/`：数据库、存储、任务、解析、索引、问答、连接器、图谱、助手和 HTTP API。
-- `server/tests/`：真实 API 闭环、安全边界、恢复和公开助手测试。
+- `serverpy/ordo/`：Python/FastAPI 后端，包含数据库、任务进程、解析、索引、问答、连接器、图谱、助手与恢复。
+- `serverpy/tests/`：Python API、集成、安全、迁移及恢复测试。
+- `server/`：保留的旧 Node 实现，供迁移对照；产品启动与默认测试已不再使用。
 - `web/`：无依赖的浏览器工作台（原生 HTML/CSS/JS、无构建步骤），所有主数据通过 `/api/v1` 读写。

@@ -388,7 +388,10 @@ class KnowledgeService(KnowledgeWorkbench):
     def update_index_profile(self, profile_id, input, workspace_id, request_id=None):
         current = self.get_index_profile(profile_id, workspace_id)
         if current['releaseCount']: raise AppError(409, 'INDEX_PROFILE_IMMUTABLE', '已被 Release 使用的索引配置不可原地修改，请创建新配置')
-        return self.create_index_profile(current['knowledge_base_id'], {'name': input.get('name', current['name']), 'config': input.get('config', current['config'])}, workspace_id, request_id)
+        config = validate_index_config(deep_merge(current['config'], input.get('config') or {}))
+        self.db.run('UPDATE index_profiles SET name=?,config_json=?,config_hash=? WHERE id=? AND workspace_id=?', required(input.get('name', current['name']), 'name'), stable_json(config), hash_bytes(stable_json(config)), profile_id, workspace_id)
+        self.audit.append(workspace_id=workspace_id, action='index_profile.update', object_type='index_profile', object_id=profile_id, request_id=request_id)
+        return self.get_index_profile(profile_id, workspace_id)
 
     def set_default_index_profile(self, kb_id, profile_id, workspace_id, request_id=None):
         kb, profile = self.ensure_kb(kb_id, workspace_id), self.get_index_profile(profile_id, workspace_id)

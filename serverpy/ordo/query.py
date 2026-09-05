@@ -1,3 +1,4 @@
+import asyncio
 import re
 import time
 
@@ -47,6 +48,7 @@ def _is_evidence_refusal(content):
 
 class QueryService:
     def __init__(self, db, knowledge, models, audit, config):
+        self._replay_lock = asyncio.Lock()
         self.db = db
         self.knowledge = knowledge
         self.models = models
@@ -99,7 +101,7 @@ class QueryService:
             conversation_id, workspace_id)
         if not conversation:
             raise AppError(404, 'NOT_FOUND', '会话不存在或不可访问')
-        messages = self.db.all('SELECT * FROM messages WHERE conversation_id=? AND workspace_id=? ORDER BY created_at,id', conversation_id, workspace_id)
+        messages = self.db.all('SELECT * FROM messages WHERE conversation_id=? AND workspace_id=? ORDER BY created_at,rowid', conversation_id, workspace_id)
         for message in messages:
             message['citations'] = self.db.all(
                 'SELECT id,title,locator_json,excerpt,ordinal,document_id,document_revision_id,chunk_revision_id,release_id FROM citations WHERE message_id=? AND workspace_id=? ORDER BY ordinal',
@@ -212,7 +214,7 @@ class QueryService:
         prompt_summary = {'templateVersion': 'strict-evidence-v1', 'strictEvidence': bool(conversation['strict_evidence']),
                           'evidenceCount': len(selected), 'maxEvidenceChars': 12000,
                           'security': {'evidenceTreatedAsUntrusted': True, 'hiddenReasoningStored': False, 'secretsIncluded': False}}
-        history = [{'role': m['role'], 'content': m['content']} for m in (conversation.get('messages') or []) if m['role'] in ('user', 'assistant')][-6:]
+        history = trace_metadata.get('history', [{'role': m['role'], 'content': m['content']} for m in (conversation.get('messages') or []) if m['role'] in ('user', 'assistant')][-6:])
         prompt_summary['messages'] = build_prompt(question, selected, bool(conversation['strict_evidence']), history, stage_overrides.get('prompt'))
         stage('构建提示词', stage_start, 'succeeded', prompt_summary)
 
@@ -220,8 +222,6 @@ class QueryService:
         generated = None
         degraded = False
         tokens_streamed = False
-        history = [{'role': m['role'], 'content': m['content']} for m in (conversation.get('messages') or [])
-                   if m['role'] in ('user', 'assistant')][-6:]
 
         def on_model_token(delta):
             nonlocal tokens_streamed
@@ -266,39 +266,43 @@ class QueryService:
             'modelConnectionId': conversation.get('model_connection_id'), 'strictEvidence': bool(conversation['strict_evidence']),
             'topK': input.get('topK') or 8}
         input_snapshot = trace_metadata.get('inputSnapshot') or {
+            'history': history,
             'question': question, 'topK': input.get('topK') or 8,
             **({'idempotencyKey': trace_metadata['idempotencyKey']} if trace_metadata.get('idempotencyKey') else {})}
         permission_snapshot = trace_metadata.get('permissionSnapshot') or {
             'workspaceId': workspace_id, 'conversationId': conversation_id, 'datasetId': conversation['dataset_id'],
             'releaseId': conversation['release_id']}
         staged = {'stages_json': stable_json(stages)}
-        self.db.transaction(lambda: (
-            self.db.run('INSERT INTO messages(id,workspace_id,conversation_id,role,content,metadata_json,created_at) VALUES(?,?,?,?,?,?,?)',
-                        user_message_id, workspace_id, conversation_id, 'user', question, '{}', finished),
-            self.db.run('INSERT INTO messages(id,workspace_id,conversation_id,role,content,evidence_status,trace_id,metadata_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)',
-                        assistant_message_id, workspace_id, conversation_id, 'assistant', generated['content'], evidence_status, trace_id,
-                        stable_json({'provider': generated.get('provider'), 'modelId': generated.get('modelId'), 'degraded': degraded}), finished),
-            self.db.run('''INSERT INTO query_traces(id,workspace_id,conversation_id,message_id,release_id,query,status,evidence_status,stages_json,metrics_json,created_at,parent,root,trace_type,replay_from_stage,config_snapshot,input_snapshot,permission_snapshot,retention)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-                        trace_id, workspace_id, conversation_id, assistant_message_id, conversation['release_id'], question,
-                        'degraded' if degraded else 'succeeded', evidence_status, staged['stages_json'],
-                        stable_json({'totalMs': round((time.monotonic() - started) * 1000), 'candidateCount': len(candidates),
-                                     'selectedEvidence': len(selected)}), finished,
-                        trace_metadata.get('parentTraceId'), trace_metadata.get('rootTraceId') or trace_id,
-                        trace_metadata.get('traceType') or 'original', trace_metadata.get('replayFromStage'),
-                        stable_json(config_snapshot), stable_json(input_snapshot), stable_json(permission_snapshot),
-                        trace_metadata.get('retention') or 'standard')))
-        for ordinal, item in enumerate(selected, 1):
-            if ordinal not in valid_ordinals:
-                continue
-            self.db.run('INSERT INTO citations(id,workspace_id,trace_id,message_id,release_id,document_id,document_revision_id,chunk_revision_id,title,locator_json,excerpt,ordinal,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                        gen_id('cite'), workspace_id, trace_id, assistant_message_id, conversation['release_id'],
-                        item['documentId'], item['documentRevisionId'], item['chunkRevisionId'], item['title'],
-                        stable_json(item.get('locator') or {}), str(item['content'])[:500], ordinal, finished)
-        if conversation['title'] == '新对话':
-            self.db.run('UPDATE conversations SET title=?,updated_at=? WHERE id=? AND workspace_id=?', question[:60], finished, conversation_id, workspace_id)
-        else:
-            self.db.run('UPDATE conversations SET updated_at=? WHERE id=? AND workspace_id=?', finished, conversation_id, workspace_id)
+        def persist_answer():
+            self.db.transaction(lambda: (
+                self.db.run('INSERT INTO messages(id,workspace_id,conversation_id,role,content,metadata_json,created_at) VALUES(?,?,?,?,?,?,?)',
+                            user_message_id, workspace_id, conversation_id, 'user', question, '{}', finished),
+                self.db.run('INSERT INTO messages(id,workspace_id,conversation_id,role,content,evidence_status,trace_id,metadata_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)',
+                            assistant_message_id, workspace_id, conversation_id, 'assistant', generated['content'], evidence_status, trace_id,
+                            stable_json({'provider': generated.get('provider'), 'modelId': generated.get('modelId'), 'degraded': degraded}), finished),
+                self.db.run('''INSERT INTO query_traces(id,workspace_id,conversation_id,message_id,release_id,query,status,evidence_status,stages_json,metrics_json,created_at,parent,root,trace_type,replay_from_stage,config_snapshot,input_snapshot,permission_snapshot,retention)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                            trace_id, workspace_id, conversation_id, assistant_message_id, conversation['release_id'], question,
+                            'degraded' if degraded else 'succeeded', evidence_status, staged['stages_json'],
+                            stable_json({'totalMs': round((time.monotonic() - started) * 1000), 'candidateCount': len(candidates),
+                                         'selectedEvidence': len(selected)}), finished,
+                            trace_metadata.get('parentTraceId'), trace_metadata.get('rootTraceId') or trace_id,
+                            trace_metadata.get('traceType') or 'original', trace_metadata.get('replayFromStage'),
+                            stable_json(config_snapshot), stable_json(input_snapshot), stable_json(permission_snapshot),
+                            trace_metadata.get('retention') or 'standard')))
+            for ordinal, item in enumerate(selected, 1):
+                if ordinal not in valid_ordinals:
+                    continue
+                self.db.run('INSERT INTO citations(id,workspace_id,trace_id,message_id,release_id,document_id,document_revision_id,chunk_revision_id,title,locator_json,excerpt,ordinal,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                            gen_id('cite'), workspace_id, trace_id, assistant_message_id, conversation['release_id'],
+                            item['documentId'], item['documentRevisionId'], item['chunkRevisionId'], item['title'],
+                            stable_json(item.get('locator') or {}), str(item['content'])[:500], ordinal, finished)
+            if conversation['title'] == '新对话':
+                self.db.run('UPDATE conversations SET title=?,updated_at=? WHERE id=? AND workspace_id=?', question[:60], finished, conversation_id, workspace_id)
+            else:
+                self.db.run('UPDATE conversations SET updated_at=? WHERE id=? AND workspace_id=?', finished, conversation_id, workspace_id)
+
+        self.db.transaction(persist_answer)
 
         if on_event and not tokens_streamed:
             text = str(generated.get('content') or '')
@@ -341,6 +345,10 @@ class QueryService:
         return {'items': items, 'total': total, 'limit': limit, 'offset': offset}
 
     async def replay_trace(self, trace_id, input=None, workspace_id=None, request_id=None, idempotency_key=None, on_event=None):
+        async with self._replay_lock:
+            return await self._replay_trace(trace_id, input, workspace_id, request_id, idempotency_key, on_event)
+
+    async def _replay_trace(self, trace_id, input=None, workspace_id=None, request_id=None, idempotency_key=None, on_event=None):
         workspace_id = workspace_id or self.config['localWorkspaceId']
         source = self.get_trace(trace_id, workspace_id)
         body = input if isinstance(input, dict) else {}
@@ -379,9 +387,11 @@ class QueryService:
             'topK': overrides.get('topK') if 'topK' in overrides else (source['config_snapshot'] or {}).get('topK', 8),
         }
         result = await self.ask_stream(source['conversation_id'], replay_input, workspace_id, request_id, on_event, {
+            'history': (source.get('input_snapshot') or {}).get('history', []),
             'parentTraceId': trace_id, 'rootTraceId': source.get('root') or source['id'], 'traceType': 'replay',
             'replayFromStage': from_stage or '问题解析', 'configSnapshot': config_snapshot,
             'inputSnapshot': {'sourceTraceId': trace_id, 'fromStage': from_stage or '问题解析', 'overrides': replay_input,
+                              'history': (source.get('input_snapshot') or {}).get('history', []),
                               'idempotencyKey': str(idempotency_key) if idempotency_key else None,
                               'requestFingerprint': request_fingerprint},
             'permissionSnapshot': source.get('permission_snapshot') or {'workspaceId': workspace_id,

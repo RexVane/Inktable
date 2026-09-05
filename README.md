@@ -19,22 +19,25 @@ Ordo is a local-first knowledge management and strict evidence-grounded Q&A prod
 ## Requirements
 
 - Windows, macOS, or Linux
-- Node.js 24 or later (uses the built-in `node:sqlite` module)
-- The first install needs access to the npm registry
+- Python 3.11 or later, with SQLite FTS5 enabled
+- The first install needs access to PyPI; Node.js 24 is only needed to run frontend tests
 
 ## Install and run
 
 ```powershell
 git clone https://github.com/RexVane/Ordo.git
 cd Ordo
-npm --prefix server install
-npm run seed
-npm start
+python -m venv serverpy/.venv
+serverpy/.venv/Scripts/python -m pip install -r serverpy/requirements.txt
+python ordo.py seed
+python ordo.py serve
 ```
 
 Open `http://127.0.0.1:8790/`. The same port serves both the web workbench and `/api/v1`; the OpenAPI 3.1 contract is available at `http://127.0.0.1:8790/api/v1/openapi.json`.
 
-`npm run seed` imports [`server/fixtures/ordo-sample-knowledge.md`](./server/fixtures/ordo-sample-knowledge.md), runs the real parsing pipeline, and builds the active release. The command is repeatable — content-hash deduplication prevents duplicate documents and blobs.
+On macOS/Linux, use `serverpy/.venv/bin/python` for dependency installation. `python ordo.py` automatically selects the project virtual environment. `python ordo.py seed` creates a small sample knowledge base once, runs parsing and activates a release. Seeding is optional for an existing workspace.
+
+The backend is Python/FastAPI/Uvicorn throughout. All 224 frontend operations and the legacy Wiki alias are registered; the existing browser UI is preserved. See [backend setup and capability notes](serverpy/README.md).
 
 ## Data and security
 
@@ -53,16 +56,18 @@ Images and scanned PDFs enter a "needs review" state when no verified OCR/VLM pr
 ## Common commands
 
 ```powershell
-npm start          # Start the unified product service
-npm run seed       # Idempotently import the sample knowledge document
-npm test           # Backend integration & security tests plus frontend contract tests
-npm run check      # JavaScript syntax check
-npm --prefix server audit --registry=https://registry.npmjs.org
+python ordo.py serve   # Start FastAPI and the existing web workbench
+python ordo.py seed    # Create the optional sample knowledge base
+python ordo.py test -q # Python integration and security tests
+python ordo.py check   # Python syntax and imports
+npm test              # Python tests plus browser client/UI tests
+npm run check         # Python and frontend JavaScript syntax checks
 ```
 
 ## Layout
 
 - `planning/` — frozen decisions, feature specifications, acceptance baselines, and 22 directional page prototypes.
-- `server/src/` — database, storage, tasks, parsing, indexing, Q&A, connectors, graph, assistants, and the HTTP API.
-- `server/tests/` — real API end-to-end, security boundary, recovery, and public assistant tests.
+- `serverpy/ordo/` — Python/FastAPI backend, database, task workers, parsers, indexing, Q&A, connectors, graph, assistants and recovery.
+- `serverpy/tests/` — Python API, integration, security, migration and recovery tests.
+- `server/` — retained legacy Node implementation for migration reference; no longer used by product start or tests.
 - `web/` — the dependency-free browser workbench; all primary data is read and written through `/api/v1`.

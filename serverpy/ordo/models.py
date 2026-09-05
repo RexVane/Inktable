@@ -199,6 +199,8 @@ class ModelService:
         provider = input.get('provider') or 'openai-compatible'
         if provider not in ('openai-compatible', 'ollama', 'local-extractive'):
             raise AppError(400, 'PROVIDER_UNSUPPORTED', '当前仅支持 OpenAI 兼容、Ollama 和本地证据抽取 Provider')
+        if provider != 'local-extractive' and not self.external_models_enabled(workspace_id):
+            raise AppError(403, 'FEATURE_DISABLED', '外部模型功能未启用')
         connection_id = gen_id('model')
         base_url = None
         if provider != 'local-extractive':

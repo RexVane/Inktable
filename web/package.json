@@ -4,7 +4,8 @@
   "private": true,
   "description": "Ordo 网页端（原生 HTML/CSS/JS，无构建步骤；当前为独立静态工作台）",
   "scripts": {
-    "start": "node scripts/start-web.js",
+    "start": "python ../ordo.py serve",
+    "preview": "node scripts/start-web.js",
     "test": "node --test tests/*.test.js"
   }
 }
