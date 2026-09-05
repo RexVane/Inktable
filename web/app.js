@@ -43,60 +43,26 @@
 
   const state = {
     page: readPage(),
+    bootstrapping: true,
+    connectionError: null,
     currentTheme: localStorage.getItem('ordo.theme') || '跟随系统',
     open: localStorage.getItem('ordo.openRail') || 'qaflow',
     collapsed: localStorage.getItem('ordo.sidebarCollapsed') === 'true',
     currentWorkspace: 'Ordo 企业空间',
-    datasetDocs: [
-      { id: 'd1', name: 'Ordo 产品快速入门指南.pdf', icon: 'PDF', type: 'PDF', status: '已完成', chunks: 256, time: '2025-05-20 10:21' },
-      { id: 'd2', name: 'Ordo 安装部署手册.pdf', icon: 'PDF', type: 'PDF', status: '已完成', chunks: 312, time: '2025-05-20 10:18' },
-      { id: 'd3', name: 'Ordo 用户管理说明.docx', icon: 'DOCX', type: 'DOCX', status: '已完成', chunks: 198, time: '2025-05-20 10:15' },
-      { id: 'd4', name: 'Ordo 数据管理指南.pdf', icon: 'PDF', type: 'PDF', status: '已完成', chunks: 305, time: '2025-05-20 10:12' },
-      { id: 'd5', name: 'Ordo 工作流功能介绍.pptx', icon: 'PPTX', type: 'PPTX', status: '已完成', chunks: 186, time: '2025-05-20 10:10' }
-    ],
+    datasetDocs: [],
 
     // Chat Interactive State
-    selectedChatKb: '产品文档库',
-    chatConversations: [
-      { id: 'c1', title: '如何为企业网站安装产品问答助手？', time: '10:24', active: true },
-      { id: 'c2', title: '产品问答助手支持哪些网站平台？', time: '09:58', active: false }
-    ],
-    chatMessages: [
-      {
-        role: 'user',
-        text: '如何为企业网站安装产品问答助手？',
-        time: '10:24'
-      },
-      {
-        role: 'assistant',
-        text: '要为企业网站安装产品问答助手，请按以下步骤操作：\n\n1. **获取安装代码**：在「智能助手」应用中选择你的助手，复制生成的嵌入脚本代码。[1]\n2. **添加到网站**：将代码粘贴到企业网站所有页面的 `</body>` 标签前。[1][2]\n3. **验证与发布**：刷新网站页面确认助手悬浮图标正常显示，并在 Ordo 控制台检查接入健康度。[3]',
-        time: '10:25',
-        citations: [
-          { id: 1, title: '用户手册_产品A.pdf', page: 'P.12-13', quote: '在「产品问答助手」中创建助手后，进入「发布」页面，可获取安装代码...' },
-          { id: 2, title: 'Web 集成开发指南.pdf', page: 'P.25-26', quote: '将安装代码粘贴到网站所有页面的 body 标签前，即可在前端加载 widget.js 脚本组件...' },
-          { id: 3, title: '部署与发布规范.pdf', page: 'P.5', quote: '完成脚本植入后，访问网站首页确认右下角智能客服入口图标正常弹出...' }
-        ],
-        wikis: [
-          '产品问答助手简介',
-          '问答助手配置项说明',
-          '企业网站嵌入代码规范'
-        ]
-      }
-    ],
+    selectedChatKb: '',
+    chatConversations: [],
+    chatMessages: [],
     chatInput: '',
     chatLoading: false,
     highlightedCitationId: null,
 
     // Parsing Interactive State
-    parsingTasks: [
-      { id: 'p1', name: '用户手册_产品A.pdf', status: 'processing', pages: '第 45 页/共 128 页', totalPages: 128, curPage: 45, density: '78%', parser: 'pypdf', latency: '42 ms', quality: 96 },
-      { id: 'p2', name: '常见问题_产品A.pdf', status: 'processing', pages: '第 12 页/共 32 页', totalPages: 32, curPage: 12, density: '85%', parser: 'pypdf', latency: '38 ms', quality: 98 },
-      { id: 'p3', name: '规格书_产品A.pdf', status: 'processing', pages: '第 3 页/共 56 页', totalPages: 56, curPage: 3, density: '62%', parser: 'MinerU', latency: '120 ms', quality: 94 },
-      { id: 'p4', name: '白皮书_行业研究.pdf', status: 'failed', error: '解析失败 (格式损坏)', totalPages: 40, curPage: 1, density: '0%', parser: 'OCR', latency: '超时', quality: 0 },
-      { id: 'p5', name: '价格表_2024Q1.pdf', status: 'failed', error: '解析失败 (加密受限)', totalPages: 15, curPage: 1, density: '0%', parser: 'OCR', latency: '失败', quality: 0 }
-    ],
-    parsingSelectedDocId: 'p1',
-    parsingCurrentPage: 45,
+    parsingTasks: [],
+    parsingSelectedDocId: null,
+    parsingCurrentPage: 1,
     parsingZoom: 90,
     parsingHighlightDiff: true,
     parsingWarningExpanded: true,
@@ -105,68 +71,8 @@
     parsingConcurrency: 4,
 
     // Assistants Interactive State
-    assistants: [
-      {
-        id: 'ast-1',
-        name: '产品问答助手',
-        status: 'published',
-        statusText: '已发布',
-        health: '健康',
-        url: 'www.example.com',
-        kb: '产品文档库',
-        version: 'v1.2.3',
-        desc: '解答客户关于产品功能、价格策略和使用方法的常见问题。',
-        tone: '专业且友好',
-        welcome: '你好！我是产品问答助手，请问有什么可以帮助你的？',
-        questions: [
-          '产品支持私有化部署吗？',
-          '如何升级企业版？',
-          '如何申请免费试用？'
-        ],
-        requestsToday: 86,
-        successRate: '96.2%'
-      },
-      {
-        id: 'ast-2',
-        name: '技术支持助手',
-        status: 'draft',
-        statusText: '草稿',
-        health: '未接入',
-        url: 'docs.internal.com',
-        kb: '技术资料库',
-        version: 'v0.9.1',
-        desc: '面向内部研发与运维人员的技术支持与故障排查助手。',
-        tone: '精确客观',
-        welcome: '你好！技术支持助手已就绪，请输入错误码或故障描述。',
-        questions: [
-          '如何排查 504 网关超时？',
-          '如何重置管理员密码？',
-          '备份还原命令是什么？'
-        ],
-        requestsToday: 32,
-        successRate: '98.5%'
-      },
-      {
-        id: 'ast-3',
-        name: '内部知识助理',
-        status: 'published',
-        statusText: '已发布',
-        health: '健康',
-        url: 'oa.internal.com',
-        kb: '全库',
-        version: 'v2.0.0',
-        desc: '企业内部协同办公与制度查询。',
-        tone: '亲和热情',
-        welcome: '你好！我是你的内部办公知识助理。',
-        questions: [
-          '年假请假流程是怎样的？',
-          '差旅报销标准是多少？'
-        ],
-        requestsToday: 110,
-        successRate: '99.1%'
-      }
-    ],
-    selectedAssistantId: 'ast-1',
+    assistants: [],
+    selectedAssistantId: null,
     assistantTab: 'basic',
 
     // Datasets & Documents Interactive State
@@ -177,16 +83,9 @@
     datasetCurrentPage: 1,
 
     // Models Interactive State
-    selectedModel: 'gpt-5',
+    selectedModel: null,
     modelTab: 'credentials',
-    modelsData: {
-      'gpt-5': { name: 'OpenAI GPT-5', provider: 'OpenAI', url: 'https://api.openai.com/v1', modelName: 'gpt-5', timeout: 60, proxy: 'http://proxy.example.com:8080', notes: '', status: 'ok', statusText: '正常', latency: '352 ms', time: '2025-05-20 11:18:24' },
-      'qwen': { name: '本地 Qwen', provider: 'Ollama', url: 'http://localhost:11434/v1', modelName: 'qwen2.5:72b', timeout: 120, proxy: '', notes: '本地 Ollama 部署', status: 'ok', statusText: '正常', latency: '18 ms', time: '2025-05-20 11:15:10' },
-      'text-embedding': { name: 'text-embedding-3-large', provider: 'OpenAI', url: 'https://api.openai.com/v1', modelName: 'text-embedding-3-large', timeout: 30, proxy: '', notes: '嵌入向量模型', status: 'ok', statusText: '正常', latency: '98 ms', time: '2025-05-20 11:12:00' },
-      'reranker': { name: 'bge-reranker-v2-m3', provider: 'BAAI', url: 'http://localhost:8000/v1', modelName: 'bge-reranker-v2-m3', timeout: 30, proxy: '', notes: '本地重排服务', status: 'ok', statusText: '正常', latency: '65 ms', time: '2025-05-20 11:10:00' },
-      'mineru': { name: 'MinerU', provider: 'MinerU Server', url: 'http://localhost:8088', modelName: 'mineru-v1', timeout: 180, proxy: '', notes: '视觉版面理解', status: 'ok', statusText: '正常', latency: '210 ms', time: '2025-05-20 11:05:00' },
-      'paddleocr': { name: 'PaddleOCR', provider: 'Paddle Server', url: 'http://localhost:8866', modelName: 'paddle-ocr-v4', timeout: 60, proxy: '', notes: 'OCR 服务异常排查中', status: 'danger', statusText: '异常', latency: '超时', time: '2025-05-20 10:50:00' }
-    },
+    modelsData: {},
 
     // Rerank Interactive State
     rerankSelectedChunkId: 1,
@@ -205,42 +104,63 @@
     ...window.OrdoApi.createClient(),
 
     async bootstrap() {
-      const session = await this.bootstrapSession();
-      if (!session) return false;
       try {
+        const session = await this.bootstrapSession();
+        if (!session) throw new Error('FastAPI 服务未返回本机会话');
         await this.syncContext();
+        state.connectionError = null;
+        return true;
+      } catch (error) {
+        this.connected = false;
+        state.connectionError = error?.message || '无法连接 FastAPI 服务';
+        console.warn('[api] bootstrap failed:', state.connectionError);
+        return false;
+      } finally {
+        state.bootstrapping = false;
         if (typeof render === 'function') render();
-      } catch (error) { console.warn('[api] syncContext failed:', error && error.message); }
-      return true;
+      }
     },
 
-    // 启动后预取后端上下文（知识库/模型/助手/默认数据集/版本）；失败保持离线演示模式
+    // 启动后预取后端上下文，所有工作台页面只使用服务端记录。
     async syncContext() {
-      const ctx = { knowledgeBases: [], models: [], assistants: [], defaultKbId: null, defaultDatasetId: null };
-      const [kbs, models, assistants, ver] = await Promise.all([
+      const ctx = { knowledgeBases: [], datasets: [], models: [], assistants: [], conversations: [], activeConversation: null, defaultKbId: null, defaultDatasetId: null };
+      const [kbs, models, assistants, ver, conversationPage, parsingSettings] = await Promise.all([
         this.getKnowledgeBases().catch(() => []),
         this.getModels().catch(() => []),
         this.getAssistants().catch(() => []),
-        this.getVersion().catch(() => null)
+        this.getVersion().catch(() => null),
+        this.getConversations({ limit: 30 }).catch(() => ({ items: [] })),
+        this.getParsingSettings().catch(() => null)
       ]);
       ctx.knowledgeBases = kbs || [];
       ctx.models = models || [];
       ctx.assistants = assistants || [];
+      ctx.conversations = Array.isArray(conversationPage) ? conversationPage : (conversationPage?.items || []);
       if (ver) state.version = ver;
+      if (parsingSettings) {
+        state.autoParsingEnabled = Boolean(parsingSettings.autoParsingEnabled);
+        state.parsingConcurrency = parsingSettings.concurrency || 4;
+      }
       const firstKb = ctx.knowledgeBases.find(kb => kb.status === 'active' || !kb.status) || ctx.knowledgeBases[0];
       if (firstKb) {
         ctx.defaultKbId = firstKb.id;
-        const datasets = await this.getDatasets(firstKb.id);
-        const withRelease = (datasets || []).find(d => d.active_release_id);
-        ctx.defaultDatasetId = (withRelease || (datasets || [])[0] || {}).id || null;
+        ctx.datasets = await this.getDatasets(firstKb.id).catch(() => []);
+        const withRelease = ctx.datasets.find(d => d.active_release_id);
+        ctx.defaultDatasetId = (withRelease || ctx.datasets[0] || {}).id || null;
+      }
+      if (ctx.conversations.length) {
+        const selected = ctx.conversations.find(c => c.id === state.activeConversationId) || ctx.conversations[0];
+        ctx.activeConversation = await this.getConversation(selected.id).catch(() => null);
       }
       this.context = ctx;
       this.applyContextToState(ctx);
       return ctx;
     },
 
-    // 把真实后端对象映射进工作台状态；无法映射的本地示例条目标记“未接入”
+    // 把真实后端对象映射进工作台状态。
     applyContextToState(ctx) {
+      if (Object.prototype.hasOwnProperty.call(ctx, 'models')) {
+      state.modelsData = {};
       (ctx.models || []).forEach(m => {
         state.modelsData[m.id] = {
           backendId: m.id,
@@ -257,17 +177,10 @@
           time: m.updated_at || ''
         };
       });
-      if ((ctx.models || []).length) {
-        Object.keys(state.modelsData).forEach(key => {
-          if (!state.modelsData[key].backendId) {
-            state.modelsData[key].status = 'demo';
-            state.modelsData[key].statusText = '未接入';
-          }
-        });
-        state.selectedModel = ctx.models[0].id;
+      state.selectedModel = state.modelsData[state.selectedModel] ? state.selectedModel : (ctx.models?.[0]?.id || null);
       }
-      if ((ctx.assistants || []).length) {
-        state.assistants = ctx.assistants.map(a => {
+      if (Object.prototype.hasOwnProperty.call(ctx, 'assistants')) {
+      state.assistants = (ctx.assistants || []).map(a => {
           let config = {};
           try { config = typeof a.draft_config_json === 'string' ? JSON.parse(a.draft_config_json) : (a.draft_config_json || {}); } catch (e) { config = {}; }
           return {
@@ -288,7 +201,23 @@
             successRate: '—'
           };
         });
+      state.selectedAssistantId = state.assistants.some(a => a.id === state.selectedAssistantId) ? state.selectedAssistantId : (state.assistants[0]?.id || null);
       }
+      if (!Object.prototype.hasOwnProperty.call(ctx, 'conversations')) return;
+      state.selectedKbId = state.selectedKbId || ctx.defaultKbId;
+      state.selectedDatasetId = state.selectedDatasetId || ctx.defaultDatasetId;
+      state.selectedChatKb = (ctx.knowledgeBases || []).find(kb => kb.id === state.selectedKbId)?.name || ctx.knowledgeBases?.[0]?.name || '';
+      state.chatConversations = (ctx.conversations || []).map((c, index) => ({
+        id: c.id,
+        title: c.title || '未命名会话',
+        time: String(c.updated_at || c.created_at || '').replace('T', ' ').slice(11, 16),
+        active: c.id === (ctx.activeConversation?.id || ctx.conversations?.[0]?.id),
+        knowledgeBaseId: c.knowledge_base_id,
+        datasetId: c.dataset_id
+      }));
+      state.activeConversationId = ctx.activeConversation?.id || null;
+      if (!state.chatLoading) state.chatMessages = (ctx.activeConversation?.messages || []).map(mapChatMessage);
+      state.chatReleaseVersion = ctx.activeConversation?.release_version || null;
     },
 
     parseCitationLocator(citation) {
@@ -302,18 +231,66 @@
     }
   };
 
-  // 页面加载即建立本机会话（CSRF + Cookie）；未连接时页面保持离线演示模式
+  // Legacy renderers consume arrays; the API client retains pagination envelopes.
+  for (const name of ['getDocuments', 'getChunks', 'getTasks', 'getTraces', 'getConversations']) {
+    api[name] = async function(...args) {
+      const result = await this.call(name, args, { throwOnError: true });
+      return Array.isArray(result) ? result : (result?.items || []);
+    };
+  }
+
+  for (const name of ['getDatasetFiles', 'getRegisteredSources', 'getParsingTasks']) {
+    api[name] = async function(...args) {
+      const result = await this.call(name, args, { throwOnError: true, envelope: true });
+      const data = result?.data;
+      if (Array.isArray(data)) return { items: data, total: data.length, ...result.meta };
+      return data || { items: [], total: 0 };
+    };
+  }
+
+  function requireConnection() {
+    if (api.connected) return true;
+    showToast('服务未连接，请启动 FastAPI 服务后重试', 'error');
+    return false;
+  }
+
+  async function serverAction(operation, args, success) {
+    if (!requireConnection()) return null;
+    try {
+      const result = await api.call(operation, args, { throwOnError: true });
+      if (success) showToast(typeof success === 'function' ? success(result) : success, 'ok');
+      return result;
+    } catch (error) {
+      showToast(error.message || '操作失败，请重试', 'error');
+      return null;
+    }
+  }
+
+  // 页面加载即建立本机会话（CSRF + Cookie）。
   api.bootstrap();
 
   // Expose api & state globally for debugging & testing
   if (typeof window !== 'undefined') {
     window.ordoApi = api;
     window.ordoState = state;
+    window.state = state;
+    window.render = render;
   }
 
 
   const app = document.getElementById('app');
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+
+  const jsArg = value => esc(JSON.stringify(value ?? ''));
+
+  function mapChatMessage(message) {
+    return {
+      ...message, text: message.content ?? message.text ?? '',
+      time: String(message.created_at || '').slice(11, 16) || '刚刚',
+      citations: (message.citations || []).map(c => ({ ...c, citationId: c.id, id: c.ordinal, page: api.parseCitationLocator(c), quote: c.excerpt || '' })),
+      traceId: message.trace_id || message.traceId || null
+    };
+  }
 
   function readPage() {
     const hash = window.location.hash.replace(/^#\/?/, '').split('?')[0];
@@ -575,7 +552,7 @@ function iconSearch(size = 14) {
 
   /* Global QA Flow 8-Stage Progress Stepper - 100% 对应设计原图，独立连线彻底避免穿字 */
   function renderQATraceHeader(activeIdx, stageDurations = null) {
-    const defaultDurations = ['120ms', '98ms', '35ms', '346ms', '210ms', '512ms', '140ms', '379ms'];
+    const defaultDurations = Array(8).fill('—');
     const steps = [
       '问题解析', '问题向量化', '检索路由', '多路召回',
       '结果融合', '重排', '构建提示词', '回答生成'
@@ -843,7 +820,11 @@ function iconSearch(size = 14) {
           }
         }
 
-        showToast(`成功导入 ${files.length} 个文件！${api && api.connected ? '已登记入库并开始解析' : '已加入解析与切块队列（演示模式）'}`, 'ok');
+        if (api && api.connected) {
+          showToast(`成功导入 ${files.length} 个文件！已登记入库并开始解析`, 'ok');
+        } else {
+          showToast('未连接后端服务，文件未能登记入库', 'error');
+        }
         nativeFileInputEl.value = '';
         render();
       });
@@ -1313,14 +1294,50 @@ function iconSearch(size = 14) {
       try { comp = await api.compareRerank(activeTrace.id); } catch (e) {}
     }
     if (!comp) {
-      comp = {
-        ndcgAt10: { before: 0.684, after: 0.892, lift: '+30.4%' },
-        mrr: { before: 0.500, after: 1.000, lift: '+100%' },
-        precisionTop5: { before: '60.0%', after: '100.0%', lift: '+40.0%' },
-        noiseReductionRate: '60.0%',
-        summary: '重排显著校正了关键词假阳性，将最核心的产品定价切片从第 6 位提权至第 1 位，有效过滤了 12 个边缘无关片段。'
-      };
+      showToast(api.lastError?.message || '未连接后端服务，无法生成重排对比', 'error');
+      return;
     }
+
+    // 依据服务端返回的真实 before/after 候选推导指标（相关性以重排得分归一化近似）
+    const toCand = (c) => ({ id: c.chunkRevisionId || c.id || '', title: c.title || '—', page: c.locator?.page ?? '—', score: Number(c.rerankScore ?? c.fusionScore ?? c.score ?? 0) || 0 });
+    const beforeList = (comp.before || []).map(toCand);
+    const afterList = (comp.after || []).map(toCand);
+    const beforeRankById = new Map(beforeList.map((c, i) => [c.id, i + 1]));
+    const scoreById = new Map(afterList.map(c => [c.id, c.score]));
+    const maxScore = Math.max(1e-9, ...afterList.map(c => c.score), ...beforeList.map(c => c.score));
+    const dcgOf = order => order.slice(0, 10).reduce((s, c, i) => s + (Math.pow(2, (scoreById.get(c.id) || 0) / maxScore) - 1) / Math.log2(i + 2), 0);
+    const idealOrder = [...afterList].sort((x, y) => y.score - x.score);
+    const ndcgOf = order => { const ideal = dcgOf(idealOrder); return ideal > 0 ? dcgOf(order) / ideal : 0; };
+    const bestId = idealOrder[0]?.id;
+    const mrrOf = order => { const r = order.findIndex(c => c.id === bestId); return r >= 0 ? 1 / (r + 1) : 0; };
+    const topSet = new Set(idealOrder.slice(0, 5).map(c => c.id));
+    const p5Of = order => order.slice(0, 5).filter(c => topSet.has(c.id)).length / Math.min(5, idealOrder.length || 5);
+    const retained = afterList.filter(c => beforeRankById.has(c.id)).length;
+    const eliminated = beforeList.length - retained;
+    const noiseRate = beforeList.length ? ((eliminated / beforeList.length) * 100).toFixed(1) + '%' : '—';
+    const pct = v => (v * 100).toFixed(1) + '%';
+    const liftText = v => (v >= 0 ? '+' : '−') + pct(Math.abs(v));
+    const ndcgB = ndcgOf(beforeList), ndcgA = ndcgOf(afterList);
+    const mrrB = mrrOf(beforeList), mrrA = mrrOf(afterList);
+    const p5B = p5Of(beforeList), p5A = p5Of(afterList);
+    const summary = `重排保留 ${retained}/${beforeList.length} 个原候选，淘汰 ${eliminated} 个低相关片段；最高分片段得分 ${maxScore.toFixed(3)}。`;
+    const rowsHtml = afterList.slice(0, 5).map((c, i) => {
+      const bRank = beforeRankById.get(c.id);
+      const afterNo = i + 1;
+      let delta;
+      if (bRank === undefined) delta = '<span class="muted">- 新入选</span>';
+      else if (bRank > afterNo) delta = `<span style="color:#16a34a;font-weight:700;">↑ 提升 ${bRank - afterNo} 名</span>`;
+      else if (bRank < afterNo) delta = `<span style="color:#dc2626;font-weight:700;">↓ 下降 ${afterNo - bRank} 名</span>`;
+      else delta = '<span class="muted">- 保持</span>';
+      return `
+            <tr${i === 0 ? ' style="background:var(--accent-soft);"' : ''}>
+              <td><b${i === 0 ? ' style="color:var(--accent);"' : ''}>#${afterNo}</b></td>
+              <td>${bRank ? '#' + bRank : '—'}</td>
+              <td><b>${esc(c.title)}</b> (${esc(c.id)} · P.${esc(c.page)})</td>
+              <td class="mono"${i === 0 ? ' style="font-weight:700;color:#16a34a;"' : ''}>${c.score.toFixed(3)}</td>
+              <td>${delta}</td>
+            </tr>`;
+    }).join('') || '<tr><td colspan="5" class="muted" style="text-align:center;">暂无重排候选</td></tr>';
 
     const html = `
     <div class="modal-box" style="max-width:720px;">
@@ -1333,29 +1350,29 @@ function iconSearch(size = 14) {
         <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:10px;">
           <div style="background:var(--inset);border:1px solid var(--line);border-radius:6px;padding:10px 12px;">
             <div class="muted" style="font-size:11px;">NDCG@10 增益</div>
-            <div style="font-size:16px;font-weight:700;color:#16a34a;margin-top:2px;">${comp.ndcgAt10?.lift || '+30.4%'}</div>
-            <div class="muted" style="font-size:10px;margin-top:2px;">${comp.ndcgAt10?.before || 0.684} ➔ ${comp.ndcgAt10?.after || 0.892}</div>
+            <div style="font-size:16px;font-weight:700;color:#16a34a;margin-top:2px;">${liftText(ndcgA - ndcgB)}</div>
+            <div class="muted" style="font-size:10px;margin-top:2px;">${ndcgB.toFixed(3)} ➔ ${ndcgA.toFixed(3)}</div>
           </div>
           <div style="background:var(--inset);border:1px solid var(--line);border-radius:6px;padding:10px 12px;">
             <div class="muted" style="font-size:11px;">MRR 倒数排名</div>
-            <div style="font-size:16px;font-weight:700;color:#16a34a;margin-top:2px;">${comp.mrr?.lift || '+100%'}</div>
-            <div class="muted" style="font-size:10px;margin-top:2px;">${comp.mrr?.before || 0.5} ➔ ${comp.mrr?.after || 1.0}</div>
+            <div style="font-size:16px;font-weight:700;color:#16a34a;margin-top:2px;">${liftText(mrrA - mrrB)}</div>
+            <div class="muted" style="font-size:10px;margin-top:2px;">${mrrB.toFixed(2)} ➔ ${mrrA.toFixed(2)}</div>
           </div>
           <div style="background:var(--inset);border:1px solid var(--line);border-radius:6px;padding:10px 12px;">
             <div class="muted" style="font-size:11px;">Top 5 准确率</div>
-            <div style="font-size:16px;font-weight:700;color:#16a34a;margin-top:2px;">${comp.precisionTop5?.lift || '+40.0%'}</div>
-            <div class="muted" style="font-size:10px;margin-top:2px;">${comp.precisionTop5?.before || '60%'} ➔ ${comp.precisionTop5?.after || '100%'}</div>
+            <div style="font-size:16px;font-weight:700;color:#16a34a;margin-top:2px;">${liftText(p5A - p5B)}</div>
+            <div class="muted" style="font-size:10px;margin-top:2px;">${pct(p5B)} ➔ ${pct(p5A)}</div>
           </div>
           <div style="background:var(--inset);border:1px solid var(--line);border-radius:6px;padding:10px 12px;">
             <div class="muted" style="font-size:11px;">噪音过滤比率</div>
-            <div style="font-size:16px;font-weight:700;color:var(--ink-strong);margin-top:2px;">${comp.noiseReductionRate || '60.0%'}</div>
-            <div class="muted" style="font-size:10px;margin-top:2px;">12/20 片段淘汰</div>
+            <div style="font-size:16px;font-weight:700;color:var(--ink-strong);margin-top:2px;">${noiseRate}</div>
+            <div class="muted" style="font-size:10px;margin-top:2px;">${eliminated}/${beforeList.length} 片段淘汰</div>
           </div>
         </div>
 
         <!-- Summary callout -->
         <div style="background:var(--accent-soft);border:1px solid #bbf7d0;border-radius:6px;padding:10px 14px;font-size:12px;color:var(--ink-strong);line-height:1.5;">
-          <b>评估结论：</b>${esc(comp.summary || '')}
+          <b>评估结论：</b>${esc(summary)}
         </div>
 
         <table class="dataset-table" style="font-size:12px;">
@@ -1369,41 +1386,7 @@ function iconSearch(size = 14) {
             </tr>
           </thead>
           <tbody>
-            <tr style="background:var(--accent-soft);">
-              <td><b style="color:var(--accent);">#1</b></td>
-              <td>#1</td>
-              <td><b>产品定价说明文档</b> (chunk_00321 · P.12)</td>
-              <td class="mono" style="font-weight:700;color:#16a34a;">0.912</td>
-              <td><span style="color:#16a34a;font-weight:700;">↑ 提升 5 名</span></td>
-            </tr>
-            <tr style="background:var(--accent-soft);">
-              <td><b style="color:var(--accent);">#2</b></td>
-              <td>#5</td>
-              <td><b>API 接口文档</b> (chunk_00564 · P.42)</td>
-              <td class="mono" style="font-weight:700;color:#16a34a;">0.889</td>
-              <td><span style="color:#16a34a;font-weight:700;">↑ 提升 2 名</span></td>
-            </tr>
-            <tr style="background:var(--accent-soft);">
-              <td><b style="color:var(--accent);">#3</b></td>
-              <td>#2</td>
-              <td><b>产品功能总览</b> (chunk_00118 · P.5)</td>
-              <td class="mono" style="font-weight:700;color:#16a34a;">0.864</td>
-              <td><span class="muted">- 保持前列</span></td>
-            </tr>
-            <tr style="background:var(--accent-soft);">
-              <td><b style="color:var(--accent);">#4</b></td>
-              <td>#3</td>
-              <td><b>部署与安装指南</b> (chunk_00245 · P.28)</td>
-              <td class="mono" style="font-weight:700;color:#16a34a;">0.839</td>
-              <td><span style="color:#16a34a;font-weight:700;">↑ 提升 1 名</span></td>
-            </tr>
-            <tr>
-              <td><b>#5</b></td>
-              <td>#4</td>
-              <td><b>安全与合规白皮书</b> (chunk_00477 · P.16)</td>
-              <td class="mono">0.824</td>
-              <td><span style="color:#dc2626;font-weight:700;">↓ 下降 3 名</span></td>
-            </tr>
+            ${rowsHtml}
           </tbody>
         </table>
       </div>
@@ -1416,29 +1399,21 @@ function iconSearch(size = 14) {
 
   /* 01 首页 (Home) - 100% 对应 01-首页.png 撑满一页布局 */
   async function pageHome() {
-    let demo = !(api && api.connected);
-    let dashboard = null;
-    if (!demo) {
-      dashboard = await api.getDashboard();
-      if (!dashboard) {
-        // 已连接但仪表盘读取失败：如实展示，不回退演示数据
-        return { desc: '知识库与 AI 应用运行总览', html: `<div class="card" style="padding:24px;"><b>仪表盘读取失败</b><div class="muted" style="margin-top:6px;">${esc((api.lastError && api.lastError.message) || '服务无响应')}。请确认本地 Ordo 服务运行正常后刷新。</div></div>` };
-      }
+    const dashboard = await api.getDashboard();
+    if (!dashboard) {
+      // 仪表盘读取失败：如实展示，不回退演示数据
+      return { desc: '知识库与 AI 应用运行总览', html: `<div class="card" style="padding:24px;"><b>仪表盘读取失败</b><div class="muted" style="margin-top:6px;">${esc((api.lastError && api.lastError.message) || '服务无响应')}。请确认本地 Ordo 服务运行正常后刷新。</div></div>` };
     }
 
-    const demoTrend = [40, 54, 68, 45, 78, 102, 86];
-    let trend = demoTrend;
-    let dates = ['05-14', '05-15', '05-16', '05-17', '05-18', '05-19', '05-20'];
-    if (!demo) {
-      const trendMap = {};
-      (dashboard.requestTrend || []).forEach(row => { trendMap[String(row.day).slice(5)] = row.count; });
-      dates = []; trend = [];
-      for (let i = 6; i >= 0; i--) {
-        const d = new Date(Date.now() - i * 86400000);
-        const key = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-        dates.push(key);
-        trend.push(trendMap[key] || 0);
-      }
+    const trendMap = {};
+    (dashboard.requestTrend || []).forEach(row => { trendMap[String(row.day).slice(5)] = row.count; });
+    let trend = [];
+    const dates = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(Date.now() - i * 86400000);
+      const key = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      dates.push(key);
+      trend.push(trendMap[key] || 0);
     }
     const maxVal = Math.max(40, ...trend);
     const pts = trend.map((v, i) => `${(i / (trend.length - 1)) * 380 + 40},${160 - (v / maxVal) * 125}`).join(' ');
@@ -1447,40 +1422,7 @@ function iconSearch(size = 14) {
     let attentionHtml;
     let kbStatusHtml;
     let statsAsOf = '';
-    if (demo) {
-      statCardsHtml = `
-        ${statCard('db', '数据库连接', '4')}
-        ${statCard('cubes', '知识块', '18,642')}
-        ${statCard('bot', '智能助手', '6')}
-        ${statCard('chart', '今日请求', '86')}
-        ${statCard('flow', '模型连接', '<span class="ok-text" style="color:var(--accent);">3 正常</span> <span style="font-size:14px;color:var(--ink-dim);font-weight:normal;">/ 1 未配置</span>')}
-        ${statCard('doc', 'Wiki / 笔记', '327')}
-        ${statCard('graph', '知识图谱', '2,418', '', '实体')}
-        ${statCard('stack', '索引状态', '18,210', '', '可用')}`;
-      attentionHtml = `
-            <div class="home-sub-card" onclick="window.location.hash='#/settings/models'">
-              <div class="home-warn-triangle">⚠</div>
-              <div class="grow"><b>模型连接未配置</b><div class="muted" style="font-size:12px;margin-top:2px;">OpenAI-备用</div><div style="font-size:11.5px;color:var(--ink-faint);margin-top:2px;">10 分钟前</div></div>
-              <span class="list-arrow">›</span>
-            </div>
-            <div class="home-sub-card" onclick="window.location.hash='#/knowledge/index'">
-              <div class="home-warn-triangle orange">⚠</div>
-              <div class="grow"><b>知识库索引延迟</b><div class="muted" style="font-size:12px;margin-top:2px;">产品文档库</div><div style="font-size:11.5px;color:var(--ink-faint);margin-top:2px;">1 小时前</div></div>
-              <span class="list-arrow">›</span>
-            </div>
-            <div class="home-sub-card" onclick="window.location.hash='#/knowledge/parsing'">
-              <div class="home-warn-triangle orange">⚠</div>
-              <div class="grow"><b>知识块待清洗</b><div class="muted" style="font-size:12px;margin-top:2px;">市场资料库</div><div style="font-size:11.5px;color:var(--ink-faint);margin-top:2px;">2 小时前</div></div>
-              <span class="list-arrow">›</span>
-            </div>`;
-      kbStatusHtml = `
-            <div class="home-sub-card" onclick="window.location.hash='#/knowledge/datasets'">
-              <div class="grow"><div style="display:flex;align-items:center;gap:6px;"><span class="dot" style="background:#0f8b4c;"></span><b>产品文档库</b></div><div class="muted" style="font-size:12px;margin-top:4px;">更新于 5 分钟前（演示数据）</div></div>
-              <div style="text-align:right;font-size:12px;margin-right:4px;"><div class="muted">知识块 ${(api && api.connected && state.dashboard?.chunks) || "8,652"}</div><div class="ok-text" style="color:var(--accent);">索引 8,610 可用</div></div>
-              <span class="list-arrow">›</span>
-            </div>`;
-      statsAsOf = '<span class="badge" style="background:var(--warn-soft);border:1px solid var(--warn);color:#92400e;">演示模式 · 数据非真实</span>';
-    } else {
+    {
       const c = dashboard.counts || {};
       const components = dashboard.components || {};
       const metaOk = components.metadata && components.metadata.status === 'available';
@@ -1837,45 +1779,43 @@ function iconSearch(size = 14) {
   };
 
   async function pageDatasetsTarget() {
-    let datasets = [];
-    const kbId = state.selectedKbId || (api?.context?.defaultKbId) || (api?.context?.knowledgeBases?.[0]?.id);
-    if (api && api.connected && kbId) {
-      try { datasets = await api.getDatasets(kbId) || []; } catch (e) {}
+    const datasets = await api.getAllDatasets({}, { throwOnError: true }) || [];
+    const activeDs = datasets.find(d => d.id === state.selectedDatasetId) || datasets[0] || { id: null, name: '暂无数据集' };
+    if (state.selectedDatasetId !== activeDs.id) {
+      state.selectedFolder = 'root';
+      state.datasetCurrentPage = 1;
     }
-    if (!datasets.length) {
-      if (!api || !api.connected) {
-        datasets = [
-          { id: 'ds-demo-1', name: '产品使用文档 (演示)', counts: { documents: 1284, chunks: 8652 }, active_release_id: 'rel_1' },
-          { id: 'ds-demo-2', name: '技术资料 (演示)', counts: { documents: 982, chunks: 6421 }, active_release_id: 'rel_2' },
-          { id: 'ds-demo-3', name: '市场资料 (演示)', counts: { documents: 517, chunks: 4213 }, active_release_id: 'rel_3' }
-        ];
+    state.selectedDatasetId = activeDs.id;
+    if (activeDs.knowledge_base_id) state.selectedKbId = activeDs.knowledge_base_id;
+    const limit = 10;
+    let page = Math.max(1, state.datasetCurrentPage || 1);
+    let tree = [], files = { items: [], total: 0 };
+    if (activeDs.id) {
+      const params = { folderId: state.selectedFolder === 'all' ? 'root' : state.selectedFolder, query: state.datasetSearchQuery, limit, offset: (page - 1) * limit };
+      [tree, files] = await Promise.all([
+        api.getDatasetTree(activeDs.id, {}, { throwOnError: true }),
+        api.getDatasetFiles(activeDs.id, params, { throwOnError: true })
+      ]);
+      if (page > 1 && !files.items.length) {
+        page = Math.max(1, Math.ceil(files.total / limit));
+        files = await api.getDatasetFiles(activeDs.id, { ...params, offset: (page - 1) * limit }, { throwOnError: true });
       }
     }
-    const activeDs = datasets.find(d => d.id === state.selectedDatasetId) || datasets[0] || { id: 'ds-empty', name: '未命名数据集' };
-    state.selectedDatasetId = activeDs.id;
-
-    let docs = [];
-    const limit = 10;
-    const page = state.datasetCurrentPage || 1;
-    const offset = (page - 1) * limit;
-    let totalDocs = (activeDs.counts?.documents !== undefined && activeDs.counts?.documents !== null) ? activeDs.counts.documents : (api && api.connected ? docs.length : 1284);
-
-    if (api && api.connected && activeDs?.id && !activeDs.id.startsWith('ds-demo-')) {
-      try {
-        docs = await api.getDocuments(activeDs.id, { limit, offset }) || [];
-      } catch (e) {}
-    }
-    if (!docs.length && (!api || !api.connected || activeDs.id.startsWith('ds-demo-'))) {
-      docs = state.datasetDocs || [
-        { id: 'doc-1', title: 'Ordo 报表与分析手册.pdf', type: 'PDF', folderPath: '03 功能说明 / 3.4 报表与分析', source: '手动上传', size: '2.34 MB', updatedAt: '2025-05-20 10:08', icon: 'PDF' },
-        { id: 'doc-2', title: '系统配置与安装指南.docx', type: 'DOCX', folderPath: '02 安装部署', source: '企业资料', size: '1.82 MB', updatedAt: '2025-05-20 10:02', icon: 'DOCX' },
-        { id: 'doc-3', title: '快速入门操作指南.pdf', type: 'PDF', folderPath: '01 快速入门', source: '手动上传', size: '956 KB', updatedAt: '2025-05-19 16:30', icon: 'PDF' },
-        { id: 'doc-4', title: '用户权限管理矩阵.xlsx', type: 'XLSX', folderPath: '03 功能说明 / 3.1 用户管理', source: '手动上传', size: '542 KB', updatedAt: '2025-05-19 14:15', icon: 'XLSX' },
-        { id: 'doc-5', title: '企业数据集成规范.pdf', type: 'PDF', folderPath: '03 功能说明 / 3.2 数据管理', source: 'WebDAV 同步', size: '3.15 MB', updatedAt: '2025-05-18 11:20', icon: 'PDF' }
-      ];
-    }
+    const docs = files.items || [];
+    const totalDocs = files.total || 0;
+    const pageCount = Math.max(1, Math.ceil(totalDocs / limit));
+    state.datasetCurrentPage = page;
+    state.datasetPageCount = pageCount;
+    state.datasetDocs = docs;
+    state.datasetTree = tree;
     const selectedDoc = docs.find(d => d.id === state.selectedDocId) || docs[0];
     state.selectedDocId = selectedDoc?.id;
+    const renderTree = (nodes, depth = 1) => nodes.map(node => `
+      <div class="dataset-tree-row ${state.selectedFolder === node.id ? 'active' : ''}" style="padding-left:${depth * 14}px;cursor:pointer;" onclick="window.handleSelectDatasetFolder('${esc(node.id)}')">
+        <span>${node.children?.length ? '∨' : '›'}</span> ${iconFolder(13)} <span>${esc(node.name)}</span>
+        <span class="count">${node.fileCount ?? 0}</span>
+      </div>${renderTree(node.children || [], depth + 1)}
+    `).join('');
 
     const html = `
     <div class="dataset-layout-root">
@@ -1889,10 +1829,10 @@ function iconSearch(size = 14) {
           ${datasets.map(ds => {
             const isActive = ds.id === activeDs.id;
             return `
-              <div class="dataset-list-item ${isActive ? 'active' : ''}" onclick="window.handleSwitchDataset('${esc(ds.id)}', '${esc(ds.name)}')">
+              <div class="dataset-list-item ${isActive ? 'active' : ''}" onclick="window.handleSwitchDataset(${jsArg(ds.id)}, ${jsArg(ds.name)})">
                 <div style="min-width:0;">
                   <b style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(ds.name)}</b>
-                  <div class="muted" style="font-size:12px;margin-top:2px;">${ds.counts?.documents ?? 0} 文件</div>
+                  <div class="muted" style="font-size:12px;margin-top:2px;">${ds.documentCount ?? ds.counts?.documents ?? 0} 文件</div>
                 </div>
                 <span class="dot" style="background:${isActive ? 'var(--accent)' : 'var(--line)'};"></span>
               </div>
@@ -1911,30 +1851,11 @@ function iconSearch(size = 14) {
               <span style="cursor:pointer;color:var(--ink-dim);" onclick="window.handleRefreshDirectory()">↻</span>
             </div>
             <div style="display:flex;flex-direction:column;gap:2px;">
-              <div class="dataset-tree-row">
+              <div class="dataset-tree-row ${['all', 'root'].includes(state.selectedFolder) ? 'active' : ''}" style="cursor:pointer;" onclick="window.handleSelectDatasetFolder('root')">
                 <span>∨</span> ${iconFolder(13)} <span>${esc(activeDs.name)}</span>
-                <span class="count">${activeDs.counts?.documents || 1284}</span>
+                <span class="count">${activeDs.documentCount ?? activeDs.counts?.documents ?? 0}</span>
               </div>
-              <div class="dataset-tree-row" style="padding-left:14px;">
-                <span>›</span> ${iconFolder(13)} <span>01 快速入门</span>
-                <span class="count">128</span>
-              </div>
-              <div class="dataset-tree-row" style="padding-left:14px;">
-                <span>›</span> ${iconFolder(13)} <span>02 安装部署</span>
-                <span class="count">162</span>
-              </div>
-              <div class="dataset-tree-row" style="padding-left:14px;">
-                <span>∨</span> ${iconFolder(13)} <span>03 功能说明</span>
-                <span class="count">512</span>
-              </div>
-              <div class="dataset-tree-row" style="padding-left:28px;">
-                <span>${iconDoc(13)}</span> <span>3.1 用户管理</span>
-                <span class="count">68</span>
-              </div>
-              <div class="dataset-tree-row active" style="padding-left:28px;">
-                <span>${iconDoc(13)}</span> <b>3.4 报表与分析</b>
-                <span class="count">72</span>
-              </div>
+              ${renderTree(tree)}
             </div>
           </div>
 
@@ -1972,19 +1893,19 @@ function iconSearch(size = 14) {
                 ` : docs.map(doc => {
                   const docTitle = doc.title || doc.name;
                   const docId = doc.id;
-                  const docType = doc.type || (doc.media_type ? doc.media_type.split('/').pop().toUpperCase() : 'PDF');
-                  const docSize = doc.size || (doc.sizeBytes ? (doc.sizeBytes / 1024 / 1024).toFixed(2) + ' MB' : (doc.byte_size ? (doc.byte_size / 1024 / 1024).toFixed(2) + ' MB' : (api && api.connected ? '-' : '1.50 MB')));
-                  const docTime = (doc.updated_at || doc.created_at || doc.updatedAt || '').replace('T', ' ').slice(0, 16) || (api && api.connected ? '刚刚' : '2025-05-20 10:08');
+                  const docType = (doc.fileType || doc.type || 'DOC').toUpperCase();
+                  const docSize = doc.sizeFormatted || '—';
+                  const docTime = (doc.updatedAt || doc.updated_at || doc.created_at || '').replace('T', ' ').slice(0, 16) || '—';
                   const isSelected = docId === selectedDoc?.id;
                   return `
                     <tr class="${isSelected ? 'selected' : ''}" style="cursor:pointer;" onclick="window.handleSelectDoc('${esc(docId)}');">
                       <td><input type="checkbox" ${isSelected ? 'checked' : ''} onclick="event.stopPropagation();"></td>
-                      <td><span style="margin-right:6px;">${doc.icon || '${iconDoc(13)}'}</span> ${isSelected ? `<b>${esc(docTitle)}</b>` : esc(docTitle)}</td>
+                      <td><span style="margin-right:6px;">${iconDoc(13)}</span> ${isSelected ? `<b>${esc(docTitle)}</b>` : esc(docTitle)}</td>
                       <td>${esc(docType)}</td>
                       <td>${esc(docSize)}</td>
                       <td class="muted" style="font-size:12px;">${esc(docTime)}</td>
                       <td>
-                        <button class="btn sm" style="padding:2px 8px;font-size:11.5px;color:var(--danger);border:1px solid #fca5a5;background:var(--card-bg);" onclick="event.stopPropagation();window.handleDeleteDocument('${esc(docId)}', '${esc(docTitle)}')">删除</button>
+                        <button class="btn sm" style="padding:2px 8px;font-size:11.5px;color:var(--danger);border:1px solid #fca5a5;background:var(--card-bg);" onclick="event.stopPropagation();window.handleDeleteDocument(${jsArg(docId)}, ${jsArg(docTitle)})">删除</button>
                       </td>
                     </tr>
                   `;
@@ -1995,10 +1916,8 @@ function iconSearch(size = 14) {
               <span>共 ${totalDocs} 条文档</span>
               <div class="pagination-controls">
                 <button class="page-arrow ${page <= 1 ? 'disabled' : ''}" type="button" onclick="if(${page}>1)window.handleDatasetPageChange(${page - 1})">&lt;</button>
-                <button class="page-num ${page === 1 ? 'active' : ''}" type="button" onclick="window.handleDatasetPageChange(1)">1</button>
-                <button class="page-num ${page === 2 ? 'active' : ''}" type="button" onclick="window.handleDatasetPageChange(2)">2</button>
-                <button class="page-num ${page === 3 ? 'active' : ''}" type="button" onclick="window.handleDatasetPageChange(3)">3</button>
-                <button class="page-arrow" type="button" onclick="window.handleDatasetPageChange(${page + 1})">&gt;</button>
+                ${Array.from({ length: Math.min(pageCount, 5) }, (_, i) => Math.max(1, Math.min(page - 2, pageCount - 4)) + i).map(n => `<button class="page-num ${page === n ? 'active' : ''}" type="button" onclick="window.handleDatasetPageChange(${n})">${n}</button>`).join('')}
+                <button class="page-arrow ${page >= pageCount ? 'disabled' : ''}" type="button" onclick="if(${page}<${pageCount})window.handleDatasetPageChange(${page + 1})">&gt;</button>
               </div>
             </div>
           </div>
@@ -2007,14 +1926,14 @@ function iconSearch(size = 14) {
           <div class="dataset-inspector-col">
             ${selectedDoc ? `
               <div style="display:flex;align-items:center;gap:8px;font-weight:700;font-size:14px;color:var(--ink-strong);margin-bottom:16px;">
-                <span style="font-size:22px;">${selectedDoc.icon || '${iconDoc(13)}'}</span>
+                <span style="font-size:22px;">${iconDoc(13)}</span>
                 <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(selectedDoc.title || selectedDoc.name)}">${esc(selectedDoc.title || selectedDoc.name)}</span>
               </div>
               <div style="display:flex;flex-direction:column;gap:14px;">
                 <div>
                   <div class="muted" style="font-size:12px;">所属目录</div>
                   <div style="display:flex;align-items:center;gap:4px;font-size:13px;margin-top:3px;font-weight:500;">
-                    ${iconFolder(13)} ${esc(selectedDoc.folderPath || '03 功能说明 / 3.4 报表与分析')}
+                    ${iconFolder(13)} ${esc(selectedDoc.folderPath || '根目录')}
                   </div>
                 </div>
                 <div>
@@ -2023,11 +1942,11 @@ function iconSearch(size = 14) {
                 </div>
                 <div>
                   <div class="muted" style="font-size:12px;">文件大小</div>
-                  <div style="font-size:13px;margin-top:3px;">${esc(selectedDoc.size || (selectedDoc.sizeBytes ? (selectedDoc.sizeBytes / 1024 / 1024).toFixed(2) + ' MB' : '2.34 MB'))}</div>
+                  <div style="font-size:13px;margin-top:3px;">${esc(selectedDoc.sizeFormatted || '—')}</div>
                 </div>
                 <div>
                   <div class="muted" style="font-size:12px;">最近更新时间</div>
-                  <div style="font-size:13px;margin-top:3px;">${esc(selectedDoc.updatedAt || '2025-05-20 10:08')}</div>
+                  <div style="font-size:13px;margin-top:3px;">${esc((selectedDoc.updatedAt || '').replace('T', ' ').slice(0, 16) || '—')}</div>
                 </div>
               </div>
             ` : `
@@ -2038,6 +1957,31 @@ function iconSearch(size = 14) {
       </div>
     </div>`;
     return { desc: '统一组织数据集、层级目录树与文档资产', actions: '', html };
+  }
+
+  window.handleAssignRegisteredSource = async function(sourceId, datasetId) {
+    if (!datasetId) { showToast('请选择目标数据集', 'warn'); return render(); }
+    const result = await serverAction('assignSourceDataset', [sourceId, { datasetId }], '数据来源已分配，解析任务已登记');
+    if (result) await render();
+  };
+
+  window.handleDeleteRegisteredSource = async function(sourceId) {
+    if (!confirm('确定移除此数据来源及其文档登记吗？')) return;
+    const result = await serverAction('deleteSource', [sourceId], '数据来源已移除');
+    if (result) await render();
+  };
+
+  function databaseForm() {
+    const type = document.getElementById('dbTypeSelect')?.value;
+    const database = document.getElementById('dbNameInput')?.value.trim();
+    return {
+      type, name: database, database,
+      host: document.getElementById('dbHostInput')?.value.trim(),
+      path: document.getElementById('dbHostInput')?.value.trim(),
+      port: Number(document.getElementById('dbPortInput')?.value || 5432),
+      username: document.getElementById('dbUserInput')?.value.trim(),
+      password: document.getElementById('dbPassInput')?.value || ''
+    };
   }
 
   /* Interactive Database Connection Modal */
@@ -2053,14 +1997,14 @@ function iconSearch(size = 14) {
           <label class="form-label" style="display:block;font-size:12.5px;font-weight:600;margin-bottom:4px;">数据库类型</label>
           <select class="input" id="dbTypeSelect" style="width:100%;">
             <option value="postgresql">PostgreSQL (推荐，支持 pgvector 扩展)</option>
-            <option value="mysql">MySQL 8.0+</option>
-            <option value="clickhouse">ClickHouse OLAP</option>
+            <option value="mysql" disabled>MySQL（暂无驱动）</option>
+            <option value="clickhouse" disabled>ClickHouse（暂无驱动）</option>
             <option value="sqlite">SQLite 3 本地数据库</option>
           </select>
         </div>
         <div class="grid grid-2" style="gap:10px;margin-bottom:12px;">
           <div>
-            <label class="form-label" style="display:block;font-size:12.5px;font-weight:600;margin-bottom:4px;">主机地址 / Host</label>
+            <label class="form-label" style="display:block;font-size:12.5px;font-weight:600;margin-bottom:4px;">主机地址 / SQLite 文件路径</label>
             <input class="input" id="dbHostInput" value="127.0.0.1" placeholder="例如: 127.0.0.1 或 db.corp.internal">
           </div>
           <div>
@@ -2080,7 +2024,7 @@ function iconSearch(size = 14) {
         </div>
         <div style="margin-bottom:14px;">
           <label class="form-label" style="display:block;font-size:12.5px;font-weight:600;margin-bottom:4px;">密码 / Password</label>
-          <input class="input" type="password" id="dbPassInput" value="••••••••" placeholder="输入密码">
+          <input class="input" type="password" id="dbPassInput" value="" placeholder="输入密码">
         </div>
         <div id="dbTestResult" style="margin-bottom:12px;display:none;padding:8px 12px;border-radius:6px;font-size:12.5px;"></div>
       </div>
@@ -2095,37 +2039,42 @@ function iconSearch(size = 14) {
     showOverlay(html);
   };
 
-  window.handleTestDbConnection = function() {
+  window.handleTestDbConnection = async function() {
     const box = document.getElementById('dbTestResult');
     if (!box) return;
     box.style.display = 'block';
-    box.style.background = 'var(--ok-soft)';
-    box.style.border = '1px solid var(--ok)';
-    box.style.color = 'var(--ok)';
-    box.innerHTML = '${iconZap(13)} 正在探测主机与端口... 认证成功！延迟 14 ms，已识别 28 张业务数据表与 4 个视图。';
-    showToast('✓ 数据库连接成功！', 'ok');
+    box.textContent = '正在测试只读连接…';
+    const result = await serverAction('testConnectorConfig', [databaseForm()]);
+    box.textContent = result ? `连接成功 · ${result.latencyMs} ms · ${result.version}` : (api.lastError?.message || '连接测试失败');
+    box.style.color = result ? 'var(--ok)' : 'var(--danger)';
   };
-
-  window.handleSaveDbConnection = function() {
-    const name = document.getElementById('dbNameInput')?.value || '业务数据库';
-    showToast(`已成功接入数据库「${name}」并登记元数据！`, 'ok');
-    closeOverlay();
+  window.handleSaveDbConnection = async function() {
+    const result = await serverAction('createConnector', [databaseForm()], '数据库连接已登记，可进行只读查询和快照导入');
+    if (result) { closeOverlay(); await render(); }
   };
-
   /* 04 知识库 > 数据登记 - 100% 对应 04-知识库-数据登记.png */
   async function pageRegistry() {
-    let regKbs = [];
-    let regDocs = [];
-    if (api && api.connected) {
-      try {
-        regKbs = await api.getKnowledgeBases() || [];
-        const dsId = state.selectedDatasetId || (api?.context?.defaultDatasetId);
-        if (dsId && !String(dsId).startsWith('ds-demo-')) {
-          const docRes = await api.getDocuments(dsId, { limit: 10 });
-          regDocs = Array.isArray(docRes) ? docRes : (docRes?.items || []);
-        }
-      } catch (e) {}
-    }
+    const [sourcePage, sourceTree, recent, attention, datasets, connectors] = await Promise.all([
+      api.getRegisteredSources({ limit: 500 }, { throwOnError: true }),
+      api.getSourceTree({}, { throwOnError: true }),
+      api.getRecentSources({ limit: state.parsingRecordsExpanded ? 30 : 5 }, { throwOnError: true }),
+      api.getSourceAttentionItems({ limit: 100 }, { throwOnError: true }),
+      api.getAllDatasets({}, { throwOnError: true }),
+      api.getConnectors({}, { throwOnError: true })
+    ]);
+    const typeLabels = { upload: '文件', archive: '压缩包', directory: '目录', local_discovery: '本机', database: '数据库', connector: '网盘', synthetic: '生成资料' };
+    const filterTypes = { file: ['upload', 'archive'], directory: ['directory'], netdisk: ['connector'], database: ['database'], local: ['local_discovery'] };
+    const selectedTypes = filterTypes[state.registryTab];
+    const allRows = (sourcePage?.items || []).filter(row => !selectedTypes || selectedTypes.includes(row.type));
+    const limit = state.registryPageSize || 10;
+    const total = allRows.length;
+    const pageCount = Math.max(1, Math.ceil(total / limit));
+    const page = Math.max(1, Math.min(state.registryCurrentPage || 1, pageCount));
+    state.registryCurrentPage = page;
+    state.registryPageCount = pageCount;
+    state.registryDatasets = datasets;
+    const regDocs = allRows.slice((page - 1) * limit, page * limit);
+    const sourceStatus = status => ({ ready: '已完成', queued: '排队中', processing: '处理中', failed: '处理失败', review_required: '待复核', registered: '已登记', unassigned: '待分配' }[status] || status || '—');
 
     const html = `
     <!-- Top Action Cards Row -->
@@ -2146,9 +2095,9 @@ function iconSearch(size = 14) {
         <span style="color:#94a3b8;font-size:16px;">${iconCloud(14)}</span>
         <span style="color:#94a3b8;">连接网盘 (未启用)</span>
       </div>
-      <div class="registry-action-card" style="opacity:0.6;cursor:not-allowed;" title="规划红线：当前版本未启用外部数据库连接" onclick="showToast('未启用 · 规划红线（§14）：当前版本专注于本地原位安全存储','warn')">
+      <div class="registry-action-card" onclick="window.openAddDatabaseModal()">
         <span style="color:#94a3b8;font-size:16px;">${iconDatabase(14)}</span>
-        <span style="color:#94a3b8;">连接数据库 (未启用)</span>
+        <span>连接数据库</span>
       </div>
       <div class="registry-action-card" style="opacity:0.6;cursor:not-allowed;" title="规划红线：当前版本未启用全盘探测" onclick="showToast('未启用 · 规划红线（§14）：请使用明确的「导入目录」功能原位索引','warn')">
         <span style="color:#94a3b8;font-size:16px;">${iconMonitor(14)}</span>
@@ -2173,18 +2122,14 @@ function iconSearch(size = 14) {
         <div class="card-head">数据来源</div>
         <div class="card-body" style="padding:10px 12px;">
           <div style="display:flex;flex-direction:column;gap:4px;">
-            ${(regKbs.length ? regKbs : [{ id: 'local', name: '本地知识库' }]).map(kb => `
-              <div class="tree-node active" onclick="state.selectedRegistryKbId='${esc(kb.id)}';render();">
-                <span>∨</span> <span>${iconCloud(14)}</span> <b>${esc(kb.name)}</b>
-                <span class="badge" style="margin-left:auto;border-radius:10px;padding:1px 8px;">${regDocs.length || 0}</span>
-              </div>
-              <div class="tree-node" style="padding-left:22px;">
-                <span>›</span> <span>${iconFolder(13)}</span> <span>已登记文档</span>
-                <span class="badge" style="margin-left:auto;border-radius:10px;padding:1px 8px;">${regDocs.length || 0}</span>
+            ${sourceTree.map(group => `
+              <div class="tree-node" onclick="state.registryTab='${({upload:'file',archive:'file',directory:'directory',database:'database',connector:'netdisk',local_discovery:'local'})[group.id] || 'all'}';state.registryCurrentPage=1;render();">
+                <span>›</span> <span>${iconFolder(13)}</span> <b>${esc(typeLabels[group.id] || group.name)}</b>
+                <span class="badge" style="margin-left:auto;border-radius:10px;padding:1px 8px;">${group.count}</span>
               </div>
             `).join('')}
-            <div class="tree-node" style="margin-top:8px;opacity:0.6;" title="未启用">
-              <span>›</span> <span>${iconGlobe(14)}</span> <span class="muted">外部连接器 (未启用)</span>
+            <div class="tree-node" style="margin-top:8px;cursor:pointer;" onclick="window.openDatabaseConnections()">
+              <span>›</span> <span>${iconDatabase(14)}</span> <span>数据库连接 (${connectors.length})</span>
             </div>
           </div>
         </div>
@@ -2209,21 +2154,21 @@ function iconSearch(size = 14) {
               ${regDocs.length === 0 ? `
                 <tr>
                   <td colspan="7" style="text-align:center;padding:32px 16px;color:var(--ink-dim);">
-                    ${api && api.connected ? '暂无登记的文档，可通过上方「上传文件」或「导入目录」完成登记。' : '演示模式：暂无文档'}
+                    ${api && api.connected ? '暂无登记的文档，可通过上方「上传文件」或「导入目录」完成登记。' : '未连接后端服务，暂无文档'}
                   </td>
                 </tr>
               ` : regDocs.map(doc => `
                 <tr>
                   <td style="padding-left:16px;">
                     <span class="file-type-icon ${doc.media_type?.includes('pdf') ? 'pdf' : (doc.media_type?.includes('word') ? 'word' : 'md')}">${iconDoc(13)}</span>
-                    <b>${esc(doc.title)}</b>
+                    <b>${esc(doc.name)}</b>
                   </td>
-                  <td>本地原位安全存储</td>
+                  <td>${esc(typeLabels[doc.type] || doc.type)}</td>
                   <td><span style="color:var(--accent);">● 已登记</span></td>
-                  <td><span class="badge ${doc.status === 'succeeded' ? 'ok' : 'warn'}">${doc.status === 'succeeded' ? '已完成' : (doc.status || '待处理')}</span></td>
-                  <td>${esc(state.selectedDatasetId || '默认资料集')}</td>
+                  <td><span class="badge ${doc.status === 'ready' ? 'ok' : 'warn'}">${esc(sourceStatus(doc.status))}</span></td>
+                  <td><select class="input" style="max-width:150px;height:28px;font-size:12px;" onchange="window.handleAssignRegisteredSource('${esc(doc.id)}', this.value)"><option value="">待分配</option>${datasets.map(ds => `<option value="${esc(ds.id)}" ${doc.datasetId === ds.id ? 'selected' : ''}>${esc(ds.name)}</option>`).join('')}</select></td>
                   <td>${esc((doc.updated_at || doc.created_at || '').replace('T', ' ').slice(0, 16))}</td>
-                  <td style="color:var(--ink-dim);cursor:pointer;" onclick="window.handleDeleteSingleDoc('${esc(doc.id)}')">${iconTrash(13)}</td>
+                  <td style="color:var(--ink-dim);cursor:pointer;" onclick="window.handleDeleteRegisteredSource('${esc(doc.id)}')">${iconTrash(13)}</td>
                 </tr>
               `).join('')}
             </tbody>
@@ -2232,16 +2177,13 @@ function iconSearch(size = 14) {
           <!-- Pagination Bar Matching Mockup 04 -->
           <div class="table-pagination-bar" style="padding:14px 18px;">
             <div style="display:flex;align-items:center;gap:12px;">
-              <span>共 ${regDocs.length} 项</span>
-              <div class="page-size-selector" style="margin-left:0;" onclick="window.handleRegistryPageSizeChange()">10 条/页 ⌄</div>
+              <span>共 ${total} 项</span>
+              <div class="page-size-selector" style="margin-left:0;" onclick="window.handleRegistryPageSizeChange()">${limit} 条/页 ⌄</div>
             </div>
             <div class="pagination-controls">
-              <button class="page-arrow disabled" type="button">&lt;</button>
-              <button class="page-num active" type="button">1</button>
-              ${regDocs.length > 10 ? `<button class="page-num" type="button" onclick="window.handleRegistryPageChange(2)">2</button>` : ''}
-              ${regDocs.length > 20 ? `<button class="page-num" type="button" onclick="window.handleRegistryPageChange(3)">3</button>` : ''}
-              ${regDocs.length > 30 ? `<span class="page-ellipsis">...</span><button class="page-num" type="button" onclick="window.handleRegistryPageChange(${Math.ceil(regDocs.length / 10)})">${Math.ceil(regDocs.length / 10)}</button>` : ''}
-              <button class="page-arrow ${regDocs.length <= 10 ? 'disabled' : ''}" type="button" onclick="window.handleRegistryPageChange('next')">&gt;</button>
+              <button class="page-arrow ${page <= 1 ? 'disabled' : ''}" type="button" onclick="window.handleRegistryPageChange(${page - 1})">&lt;</button>
+              ${Array.from({ length: Math.min(pageCount, 5) }, (_, i) => Math.max(1, Math.min(page - 2, pageCount - 4)) + i).map(n => `<button class="page-num ${page === n ? 'active' : ''}" type="button" onclick="window.handleRegistryPageChange(${n})">${n}</button>`).join('')}
+              <button class="page-arrow ${page >= pageCount ? 'disabled' : ''}" type="button" onclick="window.handleRegistryPageChange(${page + 1})">&gt;</button>
             </div>
           </div>
         </div>
@@ -2254,12 +2196,12 @@ function iconSearch(size = 14) {
           <div class="card-head">最近导入</div>
           <div class="card-body" style="padding:0;">
             ${(api && api.connected) ? (
-              regDocs.length > 0 ? regDocs.slice(0, 5).map(doc => `
+              recent.length > 0 ? recent.map(doc => `
                 <div class="list-item-row" style="padding:12px 16px;">
                   <span class="file-type-icon ${doc.media_type?.includes('pdf') ? 'pdf' : (doc.media_type?.includes('word') ? 'word' : 'excel')}">${doc.media_type?.includes('pdf') ? 'PDF' : (doc.media_type?.includes('word') ? 'W' : 'DOC')}</span>
                   <div class="grow" style="min-width:0;">
-                    <b style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(doc.title)}</b>
-                    <div class="muted" style="font-size:12px;margin-top:2px;">本地原位存储 / ${esc(state.selectedDatasetId || '默认资料集')}</div>
+                    <b style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(doc.name)}</b>
+                    <div class="muted" style="font-size:12px;margin-top:2px;">${esc(typeLabels[doc.type] || doc.type)} / ${esc(doc.datasetName || '待分配')}</div>
                     <div class="muted" style="font-size:11px;">${esc((doc.updated_at || doc.created_at || '').replace('T', ' ').slice(0, 16) || '刚刚')}</div>
                   </div>
                   <span style="color:var(--accent);font-size:16px;">✓</span>
@@ -2326,7 +2268,7 @@ function iconSearch(size = 14) {
 
         <!-- Card 2: 需要处理 -->
         ${(() => {
-          const pendingOrFailed = (api && api.connected) ? regDocs.filter(d => d.status === 'failed' || d.status === 'pending' || d.status === 'processing') : null;
+          const pendingOrFailed = attention;
           if (api && api.connected) {
             return `
               <div class="card section-gap">
@@ -2341,7 +2283,7 @@ function iconSearch(size = 14) {
                       <div style="width:28px;height:28px;background:${doc.status === 'failed' ? 'var(--danger-soft)' : 'var(--warn-soft)'};color:${doc.status === 'failed' ? '#dc2626' : '#d97706'};border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:16px;flex:0 0 28px;">⚠</div>
                       <div class="grow" style="min-width:0;">
                         <b style="color:${doc.status === 'failed' ? 'var(--danger)' : '#d97706'};font-size:14px;">${doc.status === 'failed' ? '处理失败' : '待处理'}</b>
-                        <div class="muted" style="font-size:12px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(doc.title)}</div>
+                        <div class="muted" style="font-size:12px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(doc.name)}</div>
                         <div class="muted" style="font-size:11px;">${esc((doc.updated_at || doc.created_at || '').replace('T', ' ').slice(0, 16) || '刚刚')}</div>
                       </div>
                       <span class="list-arrow" style="cursor:pointer;" onclick="window.go('knowledge/parsing')">›</span>
@@ -2389,30 +2331,49 @@ function iconSearch(size = 14) {
 
   /* 05 知识库 > 数据解析 - 100% 对应 05-知识库-数据解析.png */
   async function pageParsing() {
-    let tasks = [];
-    let curArtifactMarkdown = null;
-    if (api && api.connected) {
+    const params = { knowledgeBaseId: state.parsingKbId || state.selectedKbId || api.context?.defaultKbId };
+    const [taskPage, stats, settings, resources, profiles] = await Promise.all([
+      api.getParsingTasks({ ...params, limit: 500 }, { throwOnError: true }),
+      api.getParsingPipelineStats(params, { throwOnError: true }),
+      api.getParsingSettings({}, { throwOnError: true }),
+      api.getSystemResources({}, { throwOnError: true }),
+      api.getParsingProfiles({}, { throwOnError: true })
+    ]);
+    const tasks = taskPage?.items || [];
+    state.parsingTasks = tasks;
+    state.autoParsingEnabled = settings.autoParsingEnabled;
+    state.parsingConcurrency = settings.concurrency;
+    state.parsingPaused = tasks.some(t => t.status === 'paused' || t.pause_requested);
+    state.parsingProfiles = profiles;
+    const profile = profiles.find(p => p.id === state.parsingProfileId) || profiles.find(p => p.isDefault) || profiles[0];
+    state.parsingProfileId = profile?.id;
+    const selectedKb = api.context?.knowledgeBases?.find(kb => kb.id === params.knowledgeBaseId);
+    const selTaskDoc = tasks.find(t => t.id === state.parsingSelectedDocId) || tasks[0] || {};
+    if (state.parsingSelectedDocId !== selTaskDoc.id) state.parsingCurrentPage = 1;
+    state.parsingSelectedDocId = selTaskDoc.id;
+    let previewPages = { pages: [], totalPages: 0 }, preview = null, inspect = {}, diff = {}, previewError = '';
+    if (selTaskDoc.documentId) {
       try {
-        tasks = await api.getTasks({ type: 'document.parse', limit: 20 }) || [];
-        if (tasks.length) {
-          state.parsingTotalCount = String(tasks.length);
-          state.parsingDoneCount = String(tasks.filter(t => t.status === 'succeeded' || t.status === 'partial').length);
-          state.parsingArtifactCount = String(tasks.filter(t => t.result?.artifactId).length);
-        }
-        const selTask = tasks.find(t => t.id === state.parsingSelectedDocId) || tasks[0];
-        if (selTask && selTask.result && selTask.result.artifactId) {
-          curArtifactMarkdown = await api.getArtifactMarkdown(selTask.result.artifactId);
-        }
-      } catch (e) {}
+        previewPages = await api.getDocumentPreviewPages(selTaskDoc.documentId, {}, { throwOnError: true });
+        state.parsingCurrentPage = Math.max(1, Math.min(state.parsingCurrentPage, previewPages.totalPages));
+        [preview, inspect, diff] = await Promise.all([
+          api.getDocumentPage(selTaskDoc.documentId, state.parsingCurrentPage, {}, { throwOnError: true }),
+          api.getDocumentPageInspect(selTaskDoc.documentId, state.parsingCurrentPage, {}, { throwOnError: true }),
+          api.getDocumentPageDiff(selTaskDoc.documentId, state.parsingCurrentPage, {}, { throwOnError: true })
+        ]);
+      } catch (error) { previewError = error.message || '文档预览不可用'; }
     }
-
-    const selTaskDoc = (state.parsingTasks && state.parsingTasks.find(t => t.id === state.parsingSelectedDocId)) || (state.parsingTasks && state.parsingTasks[0]) || { totalPages: 128 };
-    const totalDocPages = selTaskDoc.totalPages || 128;
-
-    const runningTasks = tasks.filter(t => t.status === 'running' || t.status === 'processing');
-    const queuedTasks = tasks.filter(t => t.status === 'queued' || t.status === 'pending');
+    const totalDocPages = previewPages.totalPages;
+    state.parsingTotalPages = totalDocPages;
+    state.curPageInspect = inspect;
+    state.curPageDiff = diff;
+    const stageCount = key => `${stats.stages?.[key]?.completed ?? 0} / ${stats.stages?.[key]?.total ?? 0}`;
+    const warnings = inspect.warnings || [];
+    const runningTasks = tasks.filter(t => t.status === 'running');
+    const queuedTasks = tasks.filter(t => ['queued', 'paused'].includes(t.status));
     const failedTasks = tasks.filter(t => t.status === 'failed' || t.status === 'cancelled');
     const succeededTasks = tasks.filter(t => t.status === 'succeeded' || t.status === 'partial');
+    const throughput = resources.throughput?.length ? resources.throughput[resources.throughput.length - 1].count : 0;
 
     const html = `
     <!-- Top Configuration & Actions Bar -->
@@ -2420,28 +2381,26 @@ function iconSearch(size = 14) {
       <div style="display:flex;align-items:center;gap:18px;">
         <div style="display:flex;align-items:center;gap:8px;position:relative;">
           <span class="muted" style="font-size:13.5px;">知识库</span>
-          <div class="page-size-selector" style="margin-left:0;font-size:13.5px;padding:5px 12px;cursor:pointer;" onclick="window.toggleParsingKBSelector()">产品文档库 ⌄</div>
+          <div class="page-size-selector" style="margin-left:0;font-size:13.5px;padding:5px 12px;cursor:pointer;" onclick="window.toggleParsingKBSelector()">${esc(selectedKb?.name || '全部知识库')} ⌄</div>
           ${state.parsingKBDropdownOpen ? `
             <div style="position:absolute;top:32px;left:48px;background:var(--card-bg);border:1px solid var(--line);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.1);z-index:100;min-width:140px;padding:4px 0;">
-              <div style="padding:8px 12px;font-size:13px;cursor:pointer;" onclick="window.toggleParsingKBSelector();showToast('已选择: 产品文档库')">产品文档库</div>
-              <div style="padding:8px 12px;font-size:13px;cursor:pointer;" onclick="window.toggleParsingKBSelector();showToast('已选择: 技术规范库')">技术规范库</div>
+              ${(api.context?.knowledgeBases || []).map(kb => `<div style="padding:8px 12px;font-size:13px;cursor:pointer;" onclick="window.handleParsingKbSelect('${esc(kb.id)}')">${esc(kb.name)}</div>`).join('')}
             </div>
           ` : ''}
         </div>
         <div style="display:flex;align-items:center;gap:8px;position:relative;">
           <span class="muted" style="font-size:13.5px;">运行</span>
-          <div class="page-size-selector" style="margin-left:0;font-size:13.5px;padding:5px 12px;cursor:pointer;" onclick="window.toggleParsingRunConfigSelector()">默认解析运行 ⌄</div>
+          <div class="page-size-selector" style="margin-left:0;font-size:13.5px;padding:5px 12px;cursor:pointer;" onclick="window.toggleParsingRunConfigSelector()">${esc(profile?.name || '未选择运行配置')} ⌄</div>
           ${state.parsingRunConfigDropdownOpen ? `
             <div style="position:absolute;top:32px;left:40px;background:var(--card-bg);border:1px solid var(--line);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.1);z-index:100;min-width:140px;padding:4px 0;">
-              <div style="padding:8px 12px;font-size:13px;cursor:pointer;" onclick="window.toggleParsingRunConfigSelector();showToast('已选择: 默认解析运行')">默认解析运行</div>
-              <div style="padding:8px 12px;font-size:13px;cursor:pointer;" onclick="window.toggleParsingRunConfigSelector();showToast('已选择: 深度OCR运行')">深度OCR运行</div>
+              ${profiles.map(item => `<div style="padding:8px 12px;font-size:13px;cursor:pointer;opacity:${item.available ? 1 : 0.5}" title="${esc(item.reason || '')}" onclick="window.handleParsingProfileSelect('${esc(item.id)}')">${esc(item.name)}</div>`).join('')}
             </div>
           ` : ''}
         </div>
       </div>
       <div style="display:flex;gap:10px;">
         <button class="btn primary" style="background:var(--accent);color:#ffffff;height:36px;padding:0 18px;border-radius:6px;font-size:13.5px;" onclick="window.handleStartParsingTask()">▶ 开始解析</button>
-        <button class="btn" style="background:var(--card-bg);border:1px solid var(--line);height:36px;padding:0 16px;border-radius:6px;font-size:13.5px;" onclick="window.handlePauseParsingTask()">⏸ 暂停</button>
+        <button class="btn" style="background:var(--card-bg);border:1px solid var(--line);height:36px;padding:0 16px;border-radius:6px;font-size:13.5px;" onclick="window.handlePauseParsingTask()">${state.parsingPaused ? '▶ 恢复' : '⏸ 暂停'}</button>
         <button class="btn" style="background:var(--card-bg);border:1px solid var(--line);height:36px;padding:0 16px;border-radius:6px;font-size:13.5px;" onclick="window.handleRetryFailedTasks()">↻ 重试失败</button>
         <div style="position:relative;">
           <button class="btn" style="background:var(--card-bg);border:1px solid var(--line);height:36px;padding:0 12px;border-radius:6px;font-size:14px;cursor:pointer;" onclick="window.toggleParsingMoreMenu(event)" title="更多操作">⋮</button>
@@ -2494,7 +2453,7 @@ function iconSearch(size = 14) {
         </div>
         <div class="grow">
           <b style="font-size:14px;color:var(--ink-strong);">检测与路由</b>
-          <div class="muted" style="font-size:12px;margin-top:2px;">${state.parsingTotalCount || (api && api.connected ? '0 / 0' : '10,852 / 10,852')}</div>
+          <div class="muted" style="font-size:12px;margin-top:2px;">${stageCount('detection')}</div>
         </div>
         <span style="width:22px;height:22px;border-radius:50%;background:#059669;color:#ffffff;display:flex;align-items:center;justify-content:center;flex:0 0 22px;box-shadow:0 2px 4px rgba(5,150,105,0.25);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
       </div>
@@ -2511,7 +2470,7 @@ function iconSearch(size = 14) {
         </div>
         <div class="grow">
           <b style="font-size:14px;color:var(--ink-strong);">解析</b>
-          <div class="muted" style="font-size:12px;margin-top:2px;">${state.parsingDoneCount || (api && api.connected ? '0 / 0' : '10,214 / 10,852')}</div>
+          <div class="muted" style="font-size:12px;margin-top:2px;">${stageCount('parsing')}</div>
         </div>
         <span style="width:22px;height:22px;border-radius:50%;background:#059669;color:#ffffff;display:flex;align-items:center;justify-content:center;flex:0 0 22px;box-shadow:0 2px 4px rgba(5,150,105,0.25);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
       </div>
@@ -2528,7 +2487,7 @@ function iconSearch(size = 14) {
         </div>
         <div class="grow">
           <b style="font-size:14px;color:var(--ink-strong);">清理</b>
-          <div class="muted" style="font-size:12px;margin-top:2px;">${state.parsingDoneCount || (api && api.connected ? '0 / 0' : '10,214 / 10,852')}</div>
+          <div class="muted" style="font-size:12px;margin-top:2px;">${stageCount('cleaning')}</div>
         </div>
         <span style="width:22px;height:22px;border-radius:50%;background:#059669;color:#ffffff;display:flex;align-items:center;justify-content:center;flex:0 0 22px;box-shadow:0 2px 4px rgba(5,150,105,0.25);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
       </div>
@@ -2545,7 +2504,7 @@ function iconSearch(size = 14) {
         </div>
         <div class="grow">
           <b style="font-size:14px;color:var(--ink-strong);">Markdown / JSON</b>
-          <div class="muted" style="font-size:12px;margin-top:2px;">${state.parsingArtifactCount || (api && api.connected ? '0 / 0' : '10,172 / 10,852')}</div>
+          <div class="muted" style="font-size:12px;margin-top:2px;">${stageCount('markdownJson')}</div>
         </div>
         <span style="width:22px;height:22px;border-radius:50%;background:#f59e0b;color:#ffffff;display:flex;align-items:center;justify-content:center;flex:0 0 22px;box-shadow:0 2px 4px rgba(245,158,11,0.25);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="8" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>
       </div>
@@ -2568,7 +2527,7 @@ function iconSearch(size = 14) {
                 <div style="padding:10px 14px;color:var(--ink-dim);font-size:12px;">暂无排队中的任务</div>
               ` : [...runningTasks, ...queuedTasks].map(t => {
                 const isSel = state.parsingSelectedDocId === t.id;
-                const title = t.input?.filename || t.result?.documentId || t.object_id || t.id;
+                const title = t.name || t.input?.filename || t.object_id || t.id;
                 return `
                   <div class="list-item-row" style="${isSel ? 'background:var(--accent-soft);border-left:3px solid var(--accent);' : ''}padding:10px 14px;display:flex;align-items:center;gap:10px;cursor:pointer;" onclick="state.parsingSelectedDocId='${esc(t.id)}';render();">
                     <span style="display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;background:var(--card-bg);color:var(--accent);flex:0 0 28px;">${iconDoc(13)}</span>
@@ -2585,7 +2544,7 @@ function iconSearch(size = 14) {
               <div style="padding:10px 14px;background:var(--inset);font-weight:600;font-size:12.5px;color:var(--ok);margin-top:8px;">∨ 已完成 (${succeededTasks.length})</div>
               ${succeededTasks.slice(0, 5).map(t => {
                 const isSel = state.parsingSelectedDocId === t.id;
-                const title = t.input?.filename || t.result?.documentId || t.object_id || t.id;
+                const title = t.name || t.input?.filename || t.object_id || t.id;
                 const blockCount = t.result?.blockCount ? `${t.result.blockCount} 个块` : '100%';
                 return `
                   <div class="list-item-row" style="${isSel ? 'background:var(--accent-soft);border-left:3px solid var(--accent);' : ''}padding:10px 14px;display:flex;align-items:center;gap:10px;cursor:pointer;" onclick="state.parsingSelectedDocId='${esc(t.id)}';render();">
@@ -2603,7 +2562,7 @@ function iconSearch(size = 14) {
               ${failedTasks.length ? `
                 <div style="padding:10px 14px;background:var(--inset);font-weight:600;font-size:12.5px;color:var(--danger);margin-top:8px;">∨ 解析失败 (${failedTasks.length})</div>
                 ${failedTasks.map(t => {
-                  const title = t.input?.filename || t.object_id || t.id;
+                  const title = t.name || t.input?.filename || t.object_id || t.id;
                   return `
                     <div class="list-item-row" style="padding:10px 14px;display:flex;align-items:center;gap:10px;">
                       <span style="display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;background:#fef2f2;color:var(--danger);flex:0 0 28px;">${iconDoc(13)}</span>
@@ -2617,74 +2576,25 @@ function iconSearch(size = 14) {
                 }).join('')}
               ` : ''}
             ` : `
-              <!-- 处理中 (38) -->
-              <div style="padding:10px 14px;background:var(--inset);font-weight:600;font-size:12.5px;color:var(--ink-dim);">∨ 处理中 (38)</div>
-              <div class="list-item-row" style="background:var(--accent-soft);border-left:3px solid var(--accent);padding:10px 14px;display:flex;align-items:center;gap:10px;">
-                <span style="display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;background:var(--card-bg);color:var(--accent);flex:0 0 28px;box-shadow:0 1px 3px rgba(0,0,0,0.06);"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></span>
-                <div class="grow">
-                  <b style="color:var(--accent);font-size:13px;">用户手册_产品A.pdf</b>
-                  <div class="muted" style="font-size:12px;margin-top:2px;">第 45 页/共 128 页</div>
-                </div>
-              </div>
-              <div class="list-item-row" style="padding:10px 14px;display:flex;align-items:center;gap:10px;">
-                <span style="display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;background:var(--inset);color:var(--ink-dim);flex:0 0 28px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></span>
-                <div class="grow">
-                  <b style="font-size:13px;">常见问题_产品A.pdf</b>
-                  <div class="muted" style="font-size:12px;margin-top:2px;">第 12 页/共 32 页</div>
-                </div>
-                <svg class="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6"/><path d="M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
-              </div>
-              <div class="list-item-row" style="padding:10px 14px;display:flex;align-items:center;gap:10px;">
-                <span style="display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;background:var(--inset);color:var(--ink-dim);flex:0 0 28px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></span>
-                <div class="grow">
-                  <b style="font-size:13px;">规格书_产品A.pdf</b>
-                  <div class="muted" style="font-size:12px;margin-top:2px;">第 3 页/共 56 页</div>
-                </div>
-                <svg class="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6"/><path d="M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
-              </div>
-              <div style="padding:8px 14px;">
-                <a href="#" style="font-size:12px;color:var(--accent);" onclick="window.toggleParsingProcessing(); return false;">
-                  ${state.parsingProcessingExpanded ? '收起 &lt;' : '查看全部 (35)'}
-                </a>
-              </div>
-
-              <!-- 排队中 (160) -->
-              <div style="padding:10px 14px;background:var(--inset);font-weight:600;font-size:12.5px;color:var(--ink-dim);margin-top:8px;">&gt; 排队中 (160)</div>
-
-              <!-- 解析失败 (6) -->
-              <div style="padding:10px 14px;background:var(--inset);font-weight:600;font-size:12.5px;color:var(--danger);margin-top:8px;">∨ 解析失败 (6)</div>
-              <div class="list-item-row" style="padding:10px 14px;display:flex;align-items:center;gap:10px;">
-                <span style="display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;background:#fef2f2;color:var(--danger);flex:0 0 28px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="11" x2="12" y2="14"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>
-                <div class="grow">
-                  <b style="font-size:13px;">白皮书_行业研究.pdf</b>
-                  <div style="color:var(--danger);font-size:11.5px;margin-top:2px;">解析失败</div>
-                </div>
-              </div>
-              <div class="list-item-row" style="padding:10px 14px;display:flex;align-items:center;gap:10px;">
-                <span style="display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;background:#fef2f2;color:var(--danger);flex:0 0 28px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="11" x2="12" y2="14"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>
-                <div class="grow">
-                  <b style="font-size:13px;">价格表_2024Q1.pdf</b>
-                  <div style="color:var(--danger);font-size:11.5px;margin-top:2px;">解析失败</div>
-                </div>
-              </div>
+              <div style="padding:24px 14px;color:var(--ink-dim);font-size:13px;">暂无解析任务，请先登记资料。</div>
             `}
           </div>
           <div style="padding:10px 14px;margin-top:auto;">
             <a href="#" style="font-size:12px;color:var(--accent);" onclick="window.toggleParsingFailed(); return false;">
-              ${state.parsingFailedExpanded ? '收起 &lt;' : '查看全部 (' + (failedTasks.length || 6) + ')'}
+              ${state.parsingFailedExpanded ? '收起 &lt;' : '查看全部 (' + failedTasks.length + ')'}
             </a>
           </div>
         </div>
       </div>
 
-      <!-- Column 2: 文档预览 (用户手册_产品A.pdf) -->
+      <!-- Column 2: 文档预览 -->
       <div class="parsing-col-preview">
         <div class="card-head" style="padding:12px 18px;display:flex;align-items:center;justify-content:space-between;">
-          <span style="font-size:14px;font-weight:700;">文档预览 <span class="muted" style="font-weight:normal;font-size:13px;">(用户手册_产品A.pdf)</span></span>
+          <span style="font-size:14px;font-weight:700;">文档预览 <span class="muted" style="font-weight:normal;font-size:13px;">(${esc(selTaskDoc.name || '未选择文档')})</span></span>
           <div style="display:flex;align-items:center;gap:12px;font-size:13px;">
             <div style="display:flex;align-items:center;gap:6px;">
               <button class="btn sm" onclick="handleParsingPageStep(-1)">&lt;</button>
-              <span>${state.parsingCurrentPage} / ${(state.parsingTasks.find(t=>t.id===state.parsingSelectedDocId)||state.parsingTasks[0]).totalPages || 128}</span>
+              <span>${totalDocPages ? state.parsingCurrentPage : 0} / ${totalDocPages}</span>
               <button class="btn sm" onclick="handleParsingPageStep(1)">&gt;</button>
             </div>
             <div style="display:flex;align-items:center;gap:4px;border:1px solid var(--line);border-radius:4px;padding:2px 8px;">
@@ -2702,91 +2612,26 @@ function iconSearch(size = 14) {
             <div style="display:flex;flex-direction:column;width:138px;flex:0 0 138px;border-right:1px solid var(--line-soft);padding-right:8px;">
               <!-- Slide Thumbnails -->
               <div class="parsing-thumbnails" style="width:100%;flex:1 1 auto;display:flex;flex-direction:column;gap:12px;max-height:510px;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none;">
-                ${Array.from({ length: Math.min(totalDocPages, 48) }, (_, i) => i + 1).map(p => `
+                ${Array.from({ length: Math.min(totalDocPages, state.parsingPageLimit || 48) }, (_, i) => i + 1).map(p => `
                   <div class="parsing-slide-row" onclick="window.handleParsingJumpPage(${p})" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
                     <span class="parsing-slide-num" style="font-size:11.5px;color:${state.parsingCurrentPage === p ? 'var(--accent)' : 'var(--ink-dim)'};width:20px;text-align:right;flex-shrink:0;font-weight:${state.parsingCurrentPage === p ? '700' : '500'};">${p}</span>
                     <div class="parsing-slide-thumb ${state.parsingCurrentPage === p ? 'active' : ''}" 
                          style="width:98px;height:55px;flex:0 0 55px;aspect-ratio:16/9;border-radius:4px;border:1.5px solid ${state.parsingCurrentPage === p ? 'var(--accent)' : 'var(--line)'};background:var(--card-bg);overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.08);box-sizing:border-box;display:flex;flex-direction:column;padding:3px;" 
                          title="第 ${p} 页">
-                      ${p === state.parsingCurrentPage ? `
-                        <div style="font-size:5.5px;font-weight:700;color:var(--ink-strong);margin-bottom:2px;overflow:hidden;white-space:nowrap;">3.2 产品功能</div>
-                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px;flex:1;">
-                          <div style="background:var(--ok-soft);border:0.5px solid var(--ok);border-radius:1px;"></div>
-                          <div style="background:var(--blue-soft);border:0.5px solid var(--blue);border-radius:1px;"></div>
-                          <div style="background:var(--warn-soft);border:0.5px solid var(--warn);border-radius:1px;"></div>
-                          <div style="background:rgba(147, 51, 234, 0.15);border:0.5px solid rgba(147, 51, 234, 0.3);border-radius:1px;"></div>
-                        </div>
-                      ` : `
-                        <div style="width:40px;height:2px;background:#94a3b8;border-radius:1px;margin-bottom:3px;"></div>
-                        <div style="display:flex;flex-direction:column;gap:2px;opacity:0.4;">
-                          <span style="height:2px;background:#cbd5e1;border-radius:1px;width:90%;"></span>
-                          <span style="height:2px;background:#cbd5e1;border-radius:1px;width:75%;"></span>
-                          <span style="height:2px;background:#cbd5e1;border-radius:1px;width:85%;"></span>
-                          <span style="height:2px;background:#cbd5e1;border-radius:1px;width:60%;"></span>
-                        </div>
-                      `}
+                      <div style="font-size:7px;line-height:1.4;color:var(--ink-dim);overflow:hidden;">${esc(selTaskDoc.name || '')}<br>第 ${p} 页</div>
                     </div>
                   </div>
                 `).join('')}
-                <div style="text-align:center;padding:6px 0;color:var(--ink-dim);cursor:pointer;font-size:18px;" onclick="showToast('已加载全部文档页面');">+</div>
+                <div style="text-align:center;padding:6px 0;color:var(--ink-dim);cursor:pointer;font-size:18px;" onclick="state.parsingPageLimit=(state.parsingPageLimit||48)+48;render();">+</div>
               </div>
             </div>
 
             <!-- Viewport Centering the WPS 16:9 Presentation Stage -->
             <div class="parsing-viewport" style="flex:1 1 auto;width:100%;height:100%;background:var(--inset);border:1px solid var(--line);border-radius:6px;padding:16px;display:flex;justify-content:center;align-items:center;overflow:auto;box-sizing:border-box;">
               <div class="parsing-page-canvas" style="width:100%;max-width:760px;aspect-ratio:16/9;max-height:430px;background:var(--card-bg);color:var(--ink);border:1px solid var(--line);border-radius:6px;box-shadow:0 6px 24px rgba(0,0,0,0.12);padding:26px 34px;box-sizing:border-box;display:flex;flex-direction:column;justify-content:space-between;transform:scale(${state.parsingZoom / 100});transform-origin:center center;transition:transform 0.15s ease;">
-                <div>
-                  <div style="font-size:17px;font-weight:700;color:var(--ink-strong);margin-bottom:6px;">3.2 产品功能</div>
-                  <div style="font-size:12.5px;color:var(--ink-dim);line-height:1.5;">产品提供以下核心功能模块，支持用户完成从数据接入到分析决策的全流程管理。</div>
-                </div>
-
-                <!-- 4 Feature Boxes (2x2 Grid) in comfortable 16:9 layout -->
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:12px 0;">
-                  <!-- 数据接入 (Green) -->
-                  <div style="border-radius:6px;padding:12px 16px;border:1px solid var(--ok);background:var(--ok-soft);">
-                    <b style="color:var(--ok);font-size:13.5px;display:block;margin-bottom:6px;">数据接入</b>
-                    <div style="font-size:11.5px;color:var(--ink);line-height:1.8;">
-                      <div>• 支持多源数据接入</div>
-                      <div>• 实时与离线同步</div>
-                      <div>• 数据质量校验</div>
-                    </div>
-                  </div>
-
-                  <!-- 数据管理 (Blue) -->
-                  <div style="border-radius:6px;padding:12px 16px;border:1px solid var(--blue);background:var(--blue-soft);">
-                    <b style="color:var(--blue);font-size:13.5px;display:block;margin-bottom:6px;">数据管理</b>
-                    <div style="font-size:11.5px;color:var(--ink);line-height:1.8;">
-                      <div>• 数据集管理</div>
-                      <div>• 数据权限控制</div>
-                      <div>• 元数据管理</div>
-                    </div>
-                  </div>
-
-                  <!-- 数据分析 (Orange) -->
-                  <div style="border-radius:6px;padding:12px 16px;border:1px solid var(--warn);background:var(--warn-soft);">
-                    <b style="color:var(--warn-ink);font-size:13.5px;display:block;margin-bottom:6px;">数据分析</b>
-                    <div style="font-size:11.5px;color:var(--ink);line-height:1.8;">
-                      <div>• 可视化分析</div>
-                      <div>• 自定义报表</div>
-                      <div>• 多维度钻取</div>
-                    </div>
-                  </div>
-
-                  <!-- 系统管理 (Purple) -->
-                  <div style="border-radius:6px;padding:12px 16px;border:1px solid rgba(147, 51, 234, 0.3);background:rgba(147, 51, 234, 0.12);">
-                    <b style="color:var(--purple);font-size:13.5px;display:block;margin-bottom:6px;">系统管理</b>
-                    <div style="font-size:11.5px;color:var(--ink);line-height:1.8;">
-                      <div>• 用户与角色管理</div>
-                      <div>• 审计日志</div>
-                      <div>• 系统配置</div>
-                    </div>
-                  </div>
-                </div>
-
-                <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--ink-dim);border-top:1px solid var(--line-soft);padding-top:6px;">
-                  <span>用户手册_产品A.pdf</span>
-                  <span>第 ${state.parsingCurrentPage} 页 / 共 128 页</span>
-                </div>
+                ${preview?.imageUrl
+                  ? `<img src="${esc(preview.imageUrl)}" alt="${esc(selTaskDoc.name || '')} 第 ${state.parsingCurrentPage} 页" style="max-width:100%;max-height:100%;object-fit:contain;">`
+                  : `<div style="white-space:pre-wrap;overflow:auto;font-size:13px;line-height:1.7;">${esc(previewError || preview?.text || '选择任务后查看文档内容')}</div>`}
               </div>
             </div>
         </div>
@@ -2804,33 +2649,33 @@ function iconSearch(size = 14) {
       <!-- Column 3: 页面信息与内容对比 (统一外层大框大卡片) -->
       <div class="card parsing-col-info" style="display:flex;flex-direction:column;padding:0;overflow:hidden;">
         <!-- 3.1 页面信息 (第 45 页) -->
-        <div class="card-head" style="padding:14px 18px;font-size:14px;font-weight:700;">页面信息 <span class="muted" style="font-weight:normal;font-size:12.5px;">(第 45 页)</span></div>
+        <div class="card-head" style="padding:14px 18px;font-size:14px;font-weight:700;">页面信息 <span class="muted" style="font-weight:normal;font-size:12.5px;">(第 ${totalDocPages ? state.parsingCurrentPage : 0} 页)</span></div>
         <div class="card-body" style="padding:14px 18px;font-size:13px;display:flex;flex-direction:column;gap:10px;flex:0 0 auto;">
           <div style="display:flex;justify-content:space-between;align-items:center;">
             <span class="muted">路由依据</span>
-            <span style="font-size:12.5px;">PDF 含文本层，文本密度 78% &gt;</span>
+            <span style="font-size:12.5px;">${esc(inspect.routeReason || '—')}</span>
           </div>
           <div style="display:flex;justify-content:space-between;align-items:center;">
             <span class="muted">实际解析器</span>
-            <span class="badge ok" style="padding:2px 8px;">pypdf</span>
+            <span class="badge ok" style="padding:2px 8px;">${esc(inspect.parser || inspect.engine || '—')}</span>
           </div>
           <div style="display:flex;justify-content:space-between;align-items:center;">
             <span class="muted">文字层质量</span>
             <div style="display:flex;align-items:center;gap:8px;">
-              <b style="font-size:12.5px;">96%</b>
-              <div class="progress-bar-wrap" style="width:80px;margin-top:0;"><div class="progress-bar-fill" style="width:96%;"></div></div>
+              <b style="font-size:12.5px;">${esc(inspect.qualityStatus || '待检测')}</b>
+              <div class="progress-bar-wrap" style="width:80px;margin-top:0;"><div class="progress-bar-fill" style="width:${inspect.qualityStatus === 'passed' ? 100 : 0}%;"></div></div>
             </div>
           </div>
           <div style="display:flex;justify-content:space-between;align-items:center;">
             <span class="muted">耗时</span>
-            <span class="mono">42 ms</span>
+            <span class="mono">${inspect.inspectionMs == null ? '—' : inspect.inspectionMs + ' ms'}</span>
           </div>
           <div style="margin-top:6px;background:var(--warn-soft);border:1px solid var(--warn);border-radius:6px;padding:8px 12px;font-size:12px;color:var(--warn-ink);">
             <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;">
-              <span>告警 ⚠️ 1 条轻微告警</span>
+              <span>告警 ⚠️ ${warnings.length} 条</span>
               <span>⌄</span>
             </div>
-            <div style="margin-top:4px;color:var(--warn-ink);">• 部分表格线条缺失，已自动修复</div>
+            <div style="margin-top:4px;color:var(--warn-ink);">${warnings.length ? warnings.map(w => esc(w.message || w.code || String(w))).join('<br>') : '无告警'}</div>
           </div>
         </div>
 
@@ -2847,15 +2692,13 @@ function iconSearch(size = 14) {
             <div style="flex:1;">
               <small class="muted" style="display:block;margin-bottom:4px;">解析前 (原始内容)</small>
               <div class="diff-box" style="height:115px;background:var(--inset);">
-                <b>3.2 产品功能</b><br>
-                产品提供以下核心功能模块，支持用户完成从数据接入到分析决策的全流程管理。<br>...
+                ${esc(diff.before || '暂无原始内容').replace(/\n/g, '<br>')}
               </div>
             </div>
             <div style="flex:1;">
               <small class="muted" style="display:block;margin-bottom:4px;">解析后 (清理后)</small>
               <div class="diff-box" style="height:115px;background:var(--card-bg);">
-                <b>3.2 产品功能</b><br>
-                产品提供以下核心功能模块，<span class="diff-highlight">支持用户完成从数据接入到分析决策的全流程管理。</span><br>...
+                ${renderParsingDiff(diff)}
               </div>
             </div>
           </div>
@@ -2871,28 +2714,28 @@ function iconSearch(size = 14) {
           <div>
             <div class="muted" style="font-size:12px;">CPU 池</div>
             <div style="display:flex;align-items:center;gap:8px;margin-top:2px;">
-              <b>22%</b>
-              <div class="progress-bar-wrap" style="width:60px;margin-top:0;"><div class="progress-bar-fill" style="width:22%;"></div></div>
-              <span class="muted" style="font-size:12px;">22/100 核</span>
+              <b>${resources.cpu?.percent ?? '—'}%</b>
+              <div class="progress-bar-wrap" style="width:60px;margin-top:0;"><div class="progress-bar-fill" style="width:${resources.cpu?.percent || 0}%;"></div></div>
+              <span class="muted" style="font-size:12px;">${resources.cpu?.cores ?? '—'} 核</span>
             </div>
           </div>
           <div>
             <div class="muted" style="font-size:12px;">GPU 池</div>
             <div style="display:flex;align-items:center;gap:8px;margin-top:2px;">
-              <b>35%</b>
-              <div class="progress-bar-wrap" style="width:60px;margin-top:0;"><div class="progress-bar-fill" style="width:35%;"></div></div>
-              <span class="muted" style="font-size:12px;">1/4 卡</span>
+              <b>${resources.gpu?.available ? (resources.gpu.percent ?? '—') + '%' : '未配置'}</b>
+              <div class="progress-bar-wrap" style="width:60px;margin-top:0;"><div class="progress-bar-fill" style="width:${resources.gpu?.percent || 0}%;"></div></div>
+              <span class="muted" style="font-size:12px;">${resources.gpu?.devices?.length || 0} 卡</span>
             </div>
           </div>
           <div>
             <div class="muted" style="font-size:12px;">队列长度</div>
-            <b style="font-size:18px;color:var(--ink-strong);">198</b>
+            <b style="font-size:18px;color:var(--ink-strong);">${resources.queueLength ?? 0}</b>
           </div>
         </div>
         <div style="display:flex;align-items:center;gap:18px;">
           <div>
             <div class="muted" style="font-size:12px;">吞吐量</div>
-            <div style="font-size:16px;font-weight:700;">128 <span style="font-size:12px;font-weight:400;" class="muted">页/分钟</span></div>
+            <div style="font-size:16px;font-weight:700;">${throughput} <span style="font-size:12px;font-weight:400;" class="muted">文档/分钟</span></div>
           </div>
           <!-- Green Sparkline SVG -->
           <svg width="150" height="36" viewBox="0 0 150 36" fill="none">
@@ -2938,32 +2781,23 @@ function iconSearch(size = 14) {
       } catch (e) {}
     }
 
-    if (!chunks || !chunks.length) {
-      chunks = [
-        { id: 'chunk_0000001', excluded: 0, content_text: '人工智能（Artificial Intelligence，简称 AI）是研究、开发用于模拟、延伸和扩展人类智能的理论、方法、技术及应用系统的一门新的技术科学。', token_count: 512, document_title: '人工智能导论.pdf', locator_page: 12 },
-        { id: 'chunk_0000002', excluded: 0, content_text: '机器学习（Machine Learning）是人工智能的核心研究领域之一，专门研究计算机怎样模拟或实现人类的学习行为。', token_count: 498, document_title: '人工智能导论.pdf', locator_page: 13 },
-        { id: 'chunk_0000003', excluded: 0, content_text: '深度学习（Deep Learning）是机器学习的一个重要分支，以人工神经网络为基础结构。', token_count: 623, document_title: '人工智能导论.pdf', locator_page: 14, warning: true },
-        { id: 'chunk_0000004', excluded: 0, content_text: '自然语言处理（NLP）研究人与计算机之间用自然语言进行有效通信的各种理论和方法。', token_count: 556, document_title: '人工智能导论.pdf', locator_page: 15 }
-      ];
-    }
-
     const curChunkId = state.selectedChunkId || chunks[0]?.id;
     const curChunk = (chunks.find(c => c.id === curChunkId) || chunks[0]) || {
-      id: 'chunk_0000001',
+      id: '',
       excluded: 0,
       content_text: '暂无切片内容',
-      document_title: '人工智能导论.pdf',
-      locator_page: 12,
-      token_count: 512
+      document_title: '—',
+      locator_page: null,
+      token_count: 0
     };
-    state.selectedChunkId = curChunk?.id || 'chunk_0000001';
+    state.selectedChunkId = curChunk?.id || '';
 
     state.currentChunks = chunks;
     state.activeReleaseId = activeRelease ? activeRelease.id : null;
-    const totalChunks = chunks.length > 4 ? chunks.length : 8652;
-    const vectorizedChunks = chunks.length > 4 ? chunks.filter(c => !c.excluded).length : 8610;
-    const pendingChunks = chunks.length > 4 ? chunks.filter(c => c.excluded || c.warning).length : 42;
-    const releaseVersion = activeRelease ? 'v' + activeRelease.version : 'v7';
+    const totalChunks = chunks.length;
+    const vectorizedChunks = chunks.filter(c => !c.excluded).length;
+    const pendingChunks = chunks.filter(c => c.excluded || c.warning).length;
+    const releaseVersion = activeRelease ? 'v' + activeRelease.version : '—';
 
     const html = `
     <!-- Top 4-Step Wizard Stepper Bar (Theme Adaptive) -->
@@ -3210,65 +3044,41 @@ function iconSearch(size = 14) {
   }
 
   
-  const DEFAULT_QA_DEMO_TRACE = {
-    id: 'QA-2025-0520-0086',
-    query: '如何为企业网站安装产品问答助手？',
-    status: 'succeeded',
-    metrics: { totalMs: 1840 },
-    created_at: '2025-05-20 10:25:00',
-    knowledge_base_name: '产品文档库',
-    app_name: '内部智能问答'
-  };
-
   async function getActiveQATrace() {
-    let traces = [];
-    if (api && api.connected) {
-      try {
-        const res = await api.getTraces({ limit: 20 });
-        if (Array.isArray(res)) {
-          traces = res;
-        } else if (res && Array.isArray(res.items)) {
-          traces = res.items;
-        }
-      } catch (e) {
-        traces = [];
-      }
+    if (!api.connected) return { traces: [], activeTrace: null };
+    const traces = await api.getTraces({ limit: 100 });
+    if (!traces.length) {
+      state.activeTraceId = null;
+      state.activeTraceDetail = null;
+      return { traces, activeTrace: null };
     }
-    if (!Array.isArray(traces) || !traces.length) {
-      if (state.lastTrace?.id) {
-        traces = [{
-          id: state.lastTrace.id,
-          query: state.lastTrace.query || '如何为企业网站安装产品问答助手？',
-          status: state.lastTrace.status || 'succeeded',
-          metrics: state.lastTrace.metrics || { totalMs: 1840 },
-          created_at: state.lastTrace.created_at || new Date().toISOString(),
-          knowledge_base_name: state.lastTrace.knowledge_base_name || '产品文档库',
-          app_name: state.lastTrace.app_name || '内部智能问答'
-        }];
-      } else {
-        traces = [{ ...DEFAULT_QA_DEMO_TRACE }];
-      }
-    }
-    if (!state.activeTraceId || !traces.some(t => t.id === state.activeTraceId)) {
-      state.activeTraceId = traces[0]?.id || DEFAULT_QA_DEMO_TRACE.id;
-    }
-    let traceDetail = null;
-    if (api && api.connected && state.activeTraceId && !state.activeTraceId.startsWith('QA-DEMO') && !state.activeTraceId.startsWith('QA-2025')) {
-      try { traceDetail = await api.getTrace(state.activeTraceId); } catch (e) {}
-    }
-    const fallback = traces[0] || DEFAULT_QA_DEMO_TRACE;
-    const activeTrace = traceDetail || traces.find(t => t.id === state.activeTraceId) || fallback;
+    const id = state.activeTraceId || traces[0].id;
+    const activeTrace = await api.getTrace(id, {}, { throwOnError: true });
+    state.activeTraceId = activeTrace.id;
+    state.activeTraceDetail = activeTrace;
     return { traces, activeTrace };
   }
 
+  function emptyQATrace(stageIndex) {
+    return {
+      title: flowNames[stageIndex], desc: '', actions: '',
+      html: renderQATraceBanner(null, [], stageIndex) + renderQATraceHeader(stageIndex, Array(8).fill('—')) +
+        `<div class="card" style="padding:32px 24px;min-height:240px;">
+          <div class="card-head" style="padding:0 0 14px;">暂无问答记录</div>
+          <div class="muted" style="line-height:1.8;">在智能问答中提交问题后，可以在这里查看该次请求的解析、检索、证据和回答记录。</div>
+          <button class="btn primary" style="margin-top:20px;" onclick="window.go('apps/chat')">进入智能问答</button>
+        </div>`
+    };
+  }
+
   function renderQATraceBanner(activeTrace, traces = [], currentStageIdx = null, customTotalDuration = null) {
-    const traceId = activeTrace?.id || state.activeTraceId || 'QA-2025-0520-0086';
-    let totalSec = '1.84';
+    const traceId = activeTrace?.id || '—';
+    let totalSec = '0.00';
     if (customTotalDuration) {
       totalSec = String(customTotalDuration).replace(/\s*s$/i, '').trim();
     } else if (currentStageIdx !== null && currentStageIdx !== undefined) {
       // 严格按用户需求：未走完流程只累加至当前阶段步骤的累计耗时
-      const defaultStageDurations = [120, 98, 35, 346, 210, 512, 140, 379];
+      const defaultStageDurations = Array(8).fill(0);
       const traceStages = activeTrace?.stages || [];
       let elapsedMs = 0;
       for (let i = 0; i <= currentStageIdx; i++) {
@@ -3281,10 +3091,10 @@ function iconSearch(size = 14) {
     } else if (activeTrace?.duration) {
       totalSec = (activeTrace.duration / 1000).toFixed(2);
     }
-    const kbName = activeTrace?.knowledge_base_name || activeTrace?.dataset_name || '产品文档库';
+    const kbName = activeTrace?.knowledge_base_name || api.context?.knowledgeBases?.find(kb => kb.id === activeTrace?.permission_snapshot?.knowledgeBaseId)?.name || activeTrace?.permission_snapshot?.datasetId || '—';
     const appName = activeTrace?.app_name || '内部智能问答';
     const isFailed = activeTrace?.status === 'failed';
-    const statusText = isFailed ? '失败' : '已完成';
+    const statusText = !activeTrace ? '无记录' : isFailed ? '失败' : activeTrace.status === 'degraded' ? '降级完成' : '已完成';
     const statusColor = isFailed ? 'var(--danger)' : 'var(--accent)';
 
     const traceOptions = (traces && traces.length > 1) ? traces.map(t => {
@@ -3337,6 +3147,7 @@ function iconSearch(size = 14) {
   /* 07 问答流程 > 问题解析 - 100% 对应 07-问答流程-问题解析.png */
   async function pageQA07_Parse() {
     const { traces, activeTrace } = await getActiveQATrace();
+    if (!activeTrace?.id) return emptyQATrace(0);
     let pipelineData = null;
     if (activeTrace?.id && api && api.connected) {
       try {
@@ -3550,6 +3361,7 @@ function iconSearch(size = 14) {
   /* 08 问答流程 > 问题向量化 - 100% 对应 08-问答流程-问题向量化.png */
   async function pageQA08_Embed() {
     const { traces, activeTrace } = await getActiveQATrace();
+    if (!activeTrace?.id) return emptyQATrace(1);
     let pipelineData = null;
     if (activeTrace?.id && api && api.connected) {
       try {
@@ -3813,6 +3625,7 @@ function iconSearch(size = 14) {
   /* 09 问答流程 > 检索路由 - 100% 对应 09-问答流程-检索路由.png */
   async function pageQA09_Route() {
     const { traces, activeTrace } = await getActiveQATrace();
+    if (!activeTrace?.id) return emptyQATrace(2);
 
     let routeData = null;
     let pipelineData = null;
@@ -4132,6 +3945,7 @@ function iconSearch(size = 14) {
   /* 10 问答流程 > 多路召回 - 100% 对应 10-问答流程-多路召回.png */
   async function pageQA10_Recall() {
     const { traces, activeTrace } = await getActiveQATrace();
+    if (!activeTrace?.id) return emptyQATrace(3);
 
     let recallData = null;
     let pipelineData = null;
@@ -4472,6 +4286,7 @@ function iconSearch(size = 14) {
   /* 11 问答流程 > 结果融合 - 100% 对应 11-问答流程-结果融合.png */
   async function pageQA11_Fuse() {
     const { traces, activeTrace } = await getActiveQATrace();
+    if (!activeTrace?.id) return emptyQATrace(4);
 
     let fusion = null;
     let pipelineData = null;
@@ -4490,122 +4305,27 @@ function iconSearch(size = 14) {
     const traceBanner = renderQATraceBanner(activeTrace, traces, 4, fusion?.totalDuration || pipelineData?.totalDuration);
     const traceHeader = renderQATraceHeader(4, pipelineData?.stages?.map(s => s.durationMs != null ? `${s.durationMs}ms` : null));
 
-    if (!fusion) {
-      fusion = {
-        sourceChannels: {
-          vector: {
-            channelName: '向量召回',
-            totalCount: 15,
-            items: [
-              { rank: 1, candidateId: 'cand_01', title: '产品文档权限说明', score: 0.892 },
-              { rank: 2, candidateId: 'cand_02', title: '用户权限管理指南', score: 0.861 },
-              { rank: 3, candidateId: 'cand_03', title: '角色与权限设计规范', score: 0.812 },
-              { rank: 4, candidateId: 'cand_04', title: '文档访问控制策略', score: 0.731 },
-              { rank: 5, candidateId: 'cand_05', title: '产品权限常见问题', score: 0.688 }
-            ]
-          },
-          fulltext: {
-            channelName: '全文召回',
-            totalCount: 17,
-            items: [
-              { rank: 1, candidateId: 'cand_02', title: '用户权限管理指南', score: 0.923 },
-              { rank: 2, candidateId: 'cand_01', title: '产品文档权限说明', score: 0.882 },
-              { rank: 3, candidateId: 'cand_04', title: '文档访问控制策略', score: 0.751 },
-              { rank: 4, candidateId: 'cand_06', title: '权限变更操作手册', score: 0.694 },
-              { rank: 5, candidateId: 'cand_07', title: '角色权限配置示例', score: 0.612 }
-            ]
-          },
-          graph: {
-            channelName: '图谱召回',
-            totalCount: 9,
-            items: [
-              { rank: 1, candidateId: 'cand_03', title: '角色与权限设计规范', score: 0.915 },
-              { rank: 2, candidateId: 'cand_01', title: '产品文档权限说明', score: 0.804 },
-              { rank: 3, candidateId: 'cand_08', title: '权限模型概述', score: 0.732 },
-              { rank: 4, candidateId: 'cand_09', title: '权限继承与冲突处理', score: 0.611 },
-              { rank: 5, candidateId: 'cand_10', title: '权限审计日志说明', score: 0.587 }
-            ]
-          }
-        },
-        pipelineSteps: [
-          { key: 'deduplication', label: '去重', status: 'completed' },
-          { key: 'aclReview', label: '权限复核', status: 'completed' },
-          { key: 'normalization', label: '分数归一化', status: 'completed' },
-          { key: 'rrfFusion', label: 'RRF 融合', status: 'completed' }
-        ],
-        summaryMetrics: {
-          rawCandidateCount: 41,
-          dedupCandidateCount: 32,
-          aclRemovedCount: 0,
-          fusedCandidateCount: 20
-        },
-        fusedCandidates: [
-          { rank: 1, candidateId: 'cand_01', title: '产品文档权限说明', fusedScore: 0.842, sources: ['vector', 'fulltext', 'graph'] },
-          { rank: 2, candidateId: 'cand_02', title: '用户权限管理指南', fusedScore: 0.793, sources: ['vector', 'fulltext'] },
-          { rank: 3, candidateId: 'cand_03', title: '角色与权限设计规范', fusedScore: 0.712, sources: ['vector', 'graph'] },
-          { rank: 4, candidateId: 'cand_04', title: '文档访问控制策略', fusedScore: 0.641, sources: ['vector', 'fulltext'] },
-          { rank: 5, candidateId: 'cand_08', title: '权限模型概述', fusedScore: 0.587, sources: ['graph'] },
-          { rank: 6, candidateId: 'cand_06', title: '权限变更操作手册', fusedScore: 0.523, sources: ['fulltext'] }
-        ],
-        scoreDetails: [
-          {
-            fusedRank: 1,
-            candidateId: 'cand_01',
-            title: '产品文档权限说明',
-            originRanks: '向量 #1 (0.892) · 全文 #2 (0.882) · 图谱 #2 (0.804)',
-            normalizedScores: { vector: 0.891, fulltext: 0.879, graph: 0.801 },
-            fusedScoreRRF: 0.842,
-            dedupGroup: 'G1',
-            dedupReason: '多路召回重复',
-            permissionStatus: 'passed'
-          },
-          {
-            fusedRank: 2,
-            candidateId: 'cand_02',
-            title: '用户权限管理指南',
-            originRanks: '向量 #2 (0.861) · 全文 #1 (0.923)',
-            normalizedScores: { vector: 0.860, fulltext: 0.921, graph: null },
-            fusedScoreRRF: 0.793,
-            dedupGroup: 'G2',
-            dedupReason: '多路召回重复',
-            permissionStatus: 'passed'
-          },
-          {
-            fusedRank: 3,
-            candidateId: 'cand_03',
-            title: '角色与权限设计规范',
-            originRanks: '向量 #3 (0.812) · 图谱 #1 (0.915)',
-            normalizedScores: { vector: 0.811, fulltext: null, graph: 0.912 },
-            fusedScoreRRF: 0.712,
-            dedupGroup: 'G3',
-            dedupReason: '多路召回重复',
-            permissionStatus: 'passed'
-          },
-          {
-            fusedRank: 4,
-            candidateId: 'cand_04',
-            title: '文档访问控制策略',
-            originRanks: '向量 #4 (0.731) · 全文 #3 (0.751)',
-            normalizedScores: { vector: 0.730, fulltext: 0.750, graph: null },
-            fusedScoreRRF: 0.641,
-            dedupGroup: 'G4',
-            dedupReason: '多路召回重复',
-            permissionStatus: 'passed'
-          },
-          {
-            fusedRank: 5,
-            candidateId: 'cand_08',
-            title: '权限模型概述',
-            originRanks: '图谱 #3 (0.732)',
-            normalizedScores: { vector: null, fulltext: null, graph: 0.729 },
-            fusedScoreRRF: 0.587,
-            dedupGroup: 'G5',
-            dedupReason: '唯一来源 (图谱)',
-            permissionStatus: 'passed'
-          }
-        ]
-      };
-    }
+    if (!fusion) throw new Error(api.lastError?.message || '融合记录读取失败');
+    const fusionRows = fusion.candidates || [];
+    const sourceChannel = key => ({
+      totalCount: fusion.output?.[key]?.length || 0,
+      items: (fusion.output?.[key] || []).map(c => ({ ...c, candidateId: c.chunkRevisionId }))
+    });
+    fusion = {
+      ...fusion,
+      sourceChannels: { vector: sourceChannel('vector'), fulltext: sourceChannel('fullText'), graph: sourceChannel('graph') },
+      summaryMetrics: {
+        rawCandidateCount: fusion.rawCandidateCount || 0, dedupCandidateCount: fusion.deduplicatedCount || 0,
+        aclRemovedCount: 0, fusedCandidateCount: fusionRows.length
+      },
+      fusedCandidates: fusionRows.map((c, i) => ({ ...c, rank: i + 1, candidateId: c.id, fusedScore: c.fusionScore, sources: c.channels.map(ch => ch === 'fullText' ? 'fulltext' : ch) })),
+      scoreDetails: fusionRows.map((c, i) => ({
+        candidateId: c.id, title: c.title, fusedRank: i + 1,
+        originRanks: [c.vectorRank ? '向量 #' + c.vectorRank : '', c.fullTextRank ? '全文 #' + c.fullTextRank : ''].filter(Boolean).join(' · '),
+        normalizedScores: { vector: c.vectorScore, fulltext: c.fullTextScore, graph: null },
+        fusedScoreRRF: c.fusionScore, dedupGroup: c.id, dedupReason: c.channels.length > 1 ? '多路召回重复' : '单一来源', permissionStatus: 'passed'
+      }))
+    };
 
     const renderRankPill = (rank) => {
       let style = 'background:#f1f5f9;color:#64748b;border:1px solid #e2e8f0;';
@@ -5081,7 +4801,8 @@ function iconSearch(size = 14) {
       exportData = await api.exportFusion(activeTrace.id).catch(() => null);
     }
     if (!exportData) {
-      exportData = { message: '本地演示模式导出', exportedAt: new Date().toISOString() };
+      showToast(api.lastError?.message || '未连接后端服务，无法导出融合明细', 'error');
+      return;
     }
     const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -5096,6 +4817,7 @@ function iconSearch(size = 14) {
   /* 12 问答流程 > 重排 - 100% 对应 12-问答流程-重排.png */
   async function pageQA12_Rerank() {
     const { traces, activeTrace } = await getActiveQATrace();
+    if (!activeTrace?.id) return emptyQATrace(5);
 
     let rerank = null;
     let pipeline = null;
@@ -5114,102 +4836,27 @@ function iconSearch(size = 14) {
     const traceBanner = renderQATraceBanner(activeTrace, traces, 5, rerank?.totalDuration || pipeline?.totalDuration);
     const traceHeader = renderQATraceHeader(5);
 
-    if (!rerank) {
-      rerank = {
-        modelCard: {
-          modelName: 'bge-reranker-v2-m3',
-          candidateCount: 20,
-          retainedCount: 8,
-          durationMs: 512,
-          status: 'healthy',
-          scoreThreshold: state.rerankThreshold || 0.75
-        },
-        beforeCandidates: [
-          { rank: 1, chunkId: 'chunk_00321', title: '产品定价说明文档', page: 12, summary: 'Ordo 企业版的定价采用按用户数和功能模块...', rankDelta: 5, deltaType: 'up' },
-          { rank: 2, chunkId: 'chunk_00118', title: '产品功能总览', page: 5, summary: 'Ordo 提供了知识库、问答流程、AI 应用...', rankDelta: 0, deltaType: 'same' },
-          { rank: 3, chunkId: 'chunk_00245', title: '部署与安装指南', page: 28, summary: '系统支持公有云、私有化部署和混合部署...', rankDelta: 1, deltaType: 'up' },
-          { rank: 4, chunkId: 'chunk_00477', title: '安全与合规白皮书', page: 16, summary: 'Ordo 通过了 ISO27001、等保三级等认证...', rankDelta: -3, deltaType: 'down' },
-          { rank: 5, chunkId: 'chunk_00564', title: 'API 接口文档', page: 42, summary: '提供完整的 RESTful API，用于平台集成...', rankDelta: 2, deltaType: 'up' },
-          { rank: 6, chunkId: 'chunk_00631', title: '服务等级协议 (SLA)', page: 8, summary: '保障 99.9% 在线率，提供 7x24 小时技术支持...', rankDelta: null, deltaType: 'eliminated' },
-          { rank: 7, chunkId: 'chunk_00712', title: '客户案例集', page: 36, summary: '金融与零售客户落地案例及 ROI 收益分析...', rankDelta: null, deltaType: 'eliminated' }
-        ],
-        afterCandidates: [
-          { rank: 1, chunkId: 'chunk_00321', title: '产品定价说明文档', page: 12, score: 0.912, summary: 'Ordo 企业版的定价采用按用户数和功能模块...' },
-          { rank: 2, chunkId: 'chunk_00564', title: 'API 接口文档', page: 42, score: 0.889, summary: '提供完整的 RESTful API，用于平台集成...' },
-          { rank: 3, chunkId: 'chunk_00118', title: '产品功能总览', page: 5, score: 0.864, summary: 'Ordo 提供了知识库、问答流程、AI 应用...' },
-          { rank: 4, chunkId: 'chunk_00245', title: '部署与安装指南', page: 28, score: 0.839, summary: '系统支持公有云、私有化部署和混合部署...' },
-          { rank: 5, chunkId: 'chunk_00477', title: '安全与合规白皮书', page: 16, score: 0.824, summary: 'Ordo 通过了 ISO27001、等保三级等认证...' },
-          { rank: 6, chunkId: 'chunk_00288', title: '权限管理指南', page: 31, score: 0.812, summary: '支持细粒度的权限控制、包括角色、数据范围...' },
-          { rank: 7, chunkId: 'chunk_00602', title: '数据备份与恢复', page: 36, score: 0.801, summary: '提供自动备份、手动备份和异地容灾方案...' },
-          { rank: 8, chunkId: 'chunk_00409', title: '日志与审计', page: 34, score: 0.792, summary: '记录系统操作日志，支持审计追踪和告警...' }
-        ],
-        scoreCurve: {
-          threshold: state.rerankThreshold || 0.75,
-          dataPoints: [
-            { rank: 1, beforeScore: 0.792, afterScore: 0.912 },
-            { rank: 2, beforeScore: 0.765, afterScore: 0.889 },
-            { rank: 3, beforeScore: 0.750, afterScore: 0.864 },
-            { rank: 4, beforeScore: 0.738, afterScore: 0.839 },
-            { rank: 5, beforeScore: 0.721, afterScore: 0.824 },
-            { rank: 6, beforeScore: 0.702, afterScore: 0.812 },
-            { rank: 7, beforeScore: 0.689, afterScore: 0.801 },
-            { rank: 8, beforeScore: 0.672, afterScore: 0.792 },
-            { rank: 9, beforeScore: 0.655, afterScore: 0.710 },
-            { rank: 10, beforeScore: 0.640, afterScore: 0.690 },
-            { rank: 11, beforeScore: 0.620, afterScore: 0.675 },
-            { rank: 12, beforeScore: 0.605, afterScore: 0.650 },
-            { rank: 13, beforeScore: 0.589, afterScore: 0.630 },
-            { rank: 14, beforeScore: 0.570, afterScore: 0.615 },
-            { rank: 15, beforeScore: 0.552, afterScore: 0.598 },
-            { rank: 16, beforeScore: 0.530, afterScore: 0.580 },
-            { rank: 17, beforeScore: 0.510, afterScore: 0.565 },
-            { rank: 18, beforeScore: 0.490, afterScore: 0.540 },
-            { rank: 19, beforeScore: 0.470, afterScore: 0.515 },
-            { rank: 20, beforeScore: 0.280, afterScore: 0.350 }
-          ]
-        },
-        activeChunkDetail: {
-          chunkId: 'chunk_00321',
-          title: '产品定价说明文档',
-          breadcrumb: '产品文档库 > 定价与计费 > 产品定价说明文档',
-          page: 'P.12',
-          content: 'Ordo 企业版的定价采用按用户数和功能模块组合的订阅制模式。基础版包含知识库、问答流程和基础 AI 应用能力，支持最多 50 名用户；专业版在基础版之上增加高级检索、多路召回、结果融合、重排等能力，支持最多 200 名用户；旗舰版支持无限用户数，并提供私有化部署、专属服务与 SLA 保障。计费周期支持按年或按月，年付可享受 10% 折扣。',
-          beforeScore: 0.792,
-          afterScore: 0.912,
-          modelInference: "该段内容明确说明了 Ordo 企业版的定价模式、版本差异与计费规则，与用户问题的意图高度匹配；包含 '按用户数' '功能模块组合' '订阅制' '年付折扣' 等高相关信号，语义覆盖全面。",
-          tokenUsage: { input: 1246, output: 318, total: 1564 },
-          permissionCheck: { passed: true, message: '当前用户有权限访问该文档' }
-        }
-      };
-    }
-
-    let curChunk = rerank.activeChunkDetail;
-    if (state.selectedRerankChunkId && state.selectedRerankChunkId !== rerank.activeChunkDetail?.chunkId) {
-      if (api && api.connected && activeTrace?.id) {
-        try {
-          const detail = await api.getRerankChunk(activeTrace.id, state.selectedRerankChunkId);
-          if (detail) curChunk = detail;
-        } catch (e) {}
-      }
-      if (!curChunk || curChunk.chunkId !== state.selectedRerankChunkId) {
-        const found = (rerank.afterCandidates || []).find(c => c.chunkId === state.selectedRerankChunkId) || (rerank.beforeCandidates || []).find(c => c.chunkId === state.selectedRerankChunkId);
-        if (found) {
-          curChunk = {
-            chunkId: found.chunkId,
-            title: found.title,
-            breadcrumb: '产品文档库 > 候选切片 > ' + found.title,
-            page: 'P.' + (found.page || 12),
-            content: found.summary || '该切片参与 Cross-Encoder 重排全注意力交叉打分计算，精确匹配用户问题语义背景。',
-            beforeScore: (found.score ? Number((found.score - 0.1).toFixed(3)) : 0.720),
-            afterScore: found.score || 0.850,
-            modelInference: 'Cross-Encoder 交叉注意力判定切片与提问意图紧密相关。',
-            tokenUsage: { input: 1100, output: 250, total: 1350 },
-            permissionCheck: { passed: true, message: '当前用户有权限访问该文档' }
-          };
-        }
-      }
-    }
-    if (!curChunk) curChunk = rerank.activeChunkDetail;
+    if (!rerank) throw new Error(api.lastError?.message || '重排记录读取失败');
+    const fusionStage = await api.getTraceFusionStage(activeTrace.id, {}, { throwOnError: true });
+    const selectedIds = new Set((rerank.output?.selected || []).map(c => c.chunkRevisionId));
+    const before = (fusionStage.candidates || []).map((c, i) => ({ ...c, chunkId: c.id, rank: i + 1, page: c.locator?.page || '—', summary: c.contentText }));
+    const after = (rerank.output?.selected || []).map((c, i) => ({ ...c, chunkId: c.chunkRevisionId, rank: i + 1, page: c.locator?.page || '—', summary: c.content }));
+    const selected = after.find(c => c.chunkId === state.selectedRerankChunkId) || before.find(c => c.chunkId === state.selectedRerankChunkId) || after[0] || before[0];
+    const original = before.find(c => c.chunkId === selected?.chunkId);
+    const curChunk = {
+      chunkId: selected?.chunkId || '', title: selected?.title || '暂无候选', breadcrumb: selected?.title || '—',
+      page: selected?.page || '—', content: selected?.content || selected?.contentText || '',
+      beforeScore: original?.fusionScore ?? original?.score ?? '—', afterScore: selected?.rerankScore ?? '—',
+      modelInference: '本次使用词项相关性重排，服务未生成推理说明。',
+      tokenUsage: {}, permissionCheck: { message: selected ? '属于当前发布版本的可访问证据' : '暂无证据' }
+    };
+    rerank = {
+      ...rerank,
+      modelCard: { modelName: rerank.provider, candidateCount: before.length, retainedCount: after.length, durationMs: rerank.durationMs, maxRetainedTopK: activeTrace.config_snapshot?.stageOverrides?.rerank?.topK || 6, status: rerank.status },
+      beforeCandidates: before.map(c => { const rank = after.findIndex(a => a.chunkId === c.chunkId) + 1; return { ...c, rankDelta: rank ? c.rank - rank : 0, deltaType: !selectedIds.has(c.chunkId) ? 'eliminated' : rank < c.rank ? 'up' : rank > c.rank ? 'down' : 'same' }; }),
+      afterCandidates: after,
+      scoreCurve: { threshold: rerank.threshold ?? 0, dataPoints: before.map(c => ({ ...c, beforeScore: c.fusionScore ?? c.score ?? 0, afterScore: c.rerankScore ?? 0 })) }
+    };
 
     const beforeHtml = (rerank.beforeCandidates || []).map(c => {
       const isSel = c.chunkId === curChunk?.chunkId;
@@ -5465,6 +5112,7 @@ function iconSearch(size = 14) {
   /* 13 问答流程 > 构建提示词 - 100% 对应 13-问答流程-构建提示词.png */
   async function pageQA13_Prompt() {
     const { traces, activeTrace } = await getActiveQATrace();
+    if (!activeTrace?.id) return emptyQATrace(6);
     let pipelineData = null;
     if (activeTrace?.id && api && api.connected) {
       try {
@@ -5725,6 +5373,7 @@ function iconSearch(size = 14) {
   /* 14 问答流程 > 回答生成 - 100% 对应 14-问答流程-回答生成.png */
   async function pageQA14_Answer() {
     const { traces, activeTrace } = await getActiveQATrace();
+    if (!activeTrace?.id) return emptyQATrace(7);
     let pipelineData = null;
     if (activeTrace?.id && api && api.connected) {
       try {
@@ -5918,140 +5567,66 @@ function iconSearch(size = 14) {
   /* Global Chat Interaction Handlers */
   window.handleSendChat = async function(e) {
     if (e) e.preventDefault();
+    if (!requireConnection() || state.chatLoading) return;
     const input = document.getElementById('chatInput');
-    if (!input) return;
-    const query = input.value.trim();
-    if (!query) return;
-
-    const now = new Date();
-    const timeStr = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
-
-    // 1. Add user message
-    state.chatMessages.push({
-      role: 'user',
-      text: query,
-      time: timeStr
-    });
-    input.value = '';
+    const question = input?.value.trim();
+    if (!question) return;
     state.chatLoading = true;
-    render();
-
-    // 2. 已连接走真实问答链路；未连接保持离线演示模式
+    const pendingUser = { role: 'user', text: question, time: '刚刚', pending: true };
+    const pendingAnswer = { role: 'assistant', text: '', time: '刚刚', pending: true, citations: [] };
+    state.chatMessages.push(pendingUser, pendingAnswer);
+    input.value = '';
+    await render();
     try {
-      let botAnswer = null;
-      if (api && api.connected) {
-        // 只认真实会话 ID（conv_ 前缀），演示会话不发送
-        let convId = state.chatConversations.find(c => c.active && String(c.id || '').startsWith('conv_'))?.id;
-        if (!convId) {
-          const kbId = api.context && api.context.defaultKbId;
-          if (!kbId) {
-            throw new Error('尚无可用知识库：请先在「数据配置」创建知识库并完成索引发布');
-          }
-          const newConv = await api.createConversation(query.slice(0, 30), kbId);
-          if (newConv && newConv.id) {
-            convId = newConv.id;
-            state.chatConversations.forEach(c => { c.active = false; });
-            state.chatConversations.unshift({ id: convId, title: query.slice(0, 30), time: timeStr, active: true });
-          }
-        }
-        if (convId) {
-          const res = await api.sendMessage(convId, query);
-          if (res && res.assistantMessage) {
-            const message = res.assistantMessage;
-            botAnswer = {
-              role: 'assistant',
-              text: message.content || '（服务返回了空回答）',
-              time: timeStr,
-              evidenceStatus: message.evidence_status || null,
-              traceId: res.trace ? res.trace.id : null,
-              citations: (message.citations || []).map(c => ({
-                id: c.ordinal,
-                title: c.title || '知识库文档',
-                page: api.parseCitationLocator(c),
-                quote: c.excerpt || ''
-              })),
-              wikis: []
-            };
-            if (res.trace) {
-              state.lastTrace = { id: res.trace.id, status: res.trace.status, evidenceStatus: message.evidence_status };
-            }
-            if (message.evidence_status === 'insufficient') {
-              botAnswer.text = message.content || '当前知识库中没有找到可回答该问题的证据。请补充资料或换个问法。';
-            }
-          }
-        }
-        if (!botAnswer) {
-          // 已连接但服务失败：如实展示错误，不伪造回答
-          throw new Error((api.lastError && api.lastError.message) || '服务未返回回答');
-        }
-      } else {
-        // 离线演示模式：明确标注演示回答
-        await new Promise(r => setTimeout(r, 600));
-        botAnswer = {
-          role: 'assistant',
-          demo: true,
-          text: `【演示模式】关于「${query}」，根据 ${state.selectedChatKb} 的检索结果，分析如下：\n\n1. **核心概念与规则**：该项能力已在当前知识库中完整登记，支持在企业工作空间内直接调用与调度。[1]\n2. **执行流程**：系统通过动态路由与多路召回（向量召回 + 全文检索 + 图谱检索），经重排后构建上下文提示词并由大模型生成回答。[1][2]\n3. **发布与接入**：如需对外提供问答，可在「智能助手」中一键配置挂载脚本到企业网站。[3]`,
-          time: timeStr,
-          citations: [
-            { id: 1, title: '用户手册_产品A.pdf', page: 'P.12-14', quote: `关于 ${query} 的核心机制与架构定义说明...` },
-            { id: 2, title: 'Web集成开发指南.pdf', page: 'P.25-27', quote: '支持跨页面会话跟踪、数据加密与权限隔离...' },
-            { id: 3, title: '系统部署规范.pdf', page: 'P.8', quote: '支持本地离线部署与高可用集群架构方案...' }
-          ],
-          wikis: [
-            '产品问答助手简介',
-            '问答助手配置项说明',
-            '知识库检索与路由机制'
-          ]
-        };
+      let conversationId = state.activeConversationId;
+      if (!conversationId) {
+        const kbId = state.chatKbId || state.selectedKbId || api.context?.defaultKbId;
+        if (!kbId) throw new Error('请先创建知识库，导入资料并发布版本');
+        const conversation = await api.createConversation({ title: question.slice(0, 40), knowledgeBaseId: kbId }, { throwOnError: true });
+        conversationId = conversation.id;
+        state.activeConversationId = conversationId;
+        state.chatReleaseVersion = conversation.release_version || null;
+        state.chatConversations.forEach(c => { c.active = false; });
+        state.chatConversations.unshift({ id: conversationId, title: question.slice(0, 40), active: true, time: '刚刚' });
       }
-
-      state.chatMessages.push(botAnswer);
-    } catch (err) {
-      state.chatMessages.push({
-        role: 'assistant',
-        text: `回答失败：${err && err.message ? err.message : '生成回答时发生错误，请检查网络连接或模型配置。'}`
-        ,
-        time: timeStr
-      });
+      let lastRender = 0;
+      const result = await api.sendMessageStream(conversationId, question, (event, data) => {
+        if (event === 'token') {
+          pendingAnswer.text += data.delta || '';
+          if (state.page === 'apps/chat' && Date.now() - lastRender > 100) {
+            lastRender = Date.now();
+            render();
+          }
+        }
+      }, { throwOnError: true });
+      Object.assign(pendingAnswer, mapChatMessage(result.assistantMessage), { pending: false });
+      if (result.userMessage) Object.assign(pendingUser, mapChatMessage(result.userMessage), { pending: false });
+      if (result.trace) { state.lastTrace = result.trace; state.activeTraceId = result.trace.id; }
+    } catch (error) {
+      state.chatMessages = state.chatMessages.filter(m => m !== pendingUser && m !== pendingAnswer);
+      state.chatInput = question;
+      showToast(error.message || '回答生成失败', 'error');
     } finally {
       state.chatLoading = false;
-      render();
-      setTimeout(() => {
-        const pane = document.querySelector('.chat-messages-pane');
-        if (pane) pane.scrollTop = pane.scrollHeight;
-      }, 50);
+      await render();
     }
   };
-
   
-  window.handleSwitchConversation = async function(convId) {
-    state.activeConversationId = convId;
-    if (api && api.connected && !String(convId).startsWith('c-demo-') && convId !== 'c1' && convId !== 'c2') {
-      try {
-        const conv = await api.getConversation(convId);
-        if (conv && conv.messages) {
-          state.chatMessages = conv.messages.map(m => ({
-            role: m.role,
-            text: m.content,
-            time: (m.created_at || '').slice(11, 16) || '刚刚',
-            citations: (m.citations || []).map(c => ({
-              id: c.ordinal,
-              title: c.title || '知识库文档',
-              page: api.parseCitationLocator(c),
-              quote: c.excerpt || ''
-            }))
-          }));
-          showToast('已切换至历史会话', 'ok');
-          render();
-          return;
-        }
-      } catch (e) {}
-    }
-    state.chatConversations.forEach(c => c.active = (c.id === convId));
-    showToast('已切换会话');
-    render();
+  window.handleSwitchConversation = async function(conversationId) {
+    if (state.chatLoading) return showToast('请等待当前回答完成', 'warn');
+    const conversation = await serverAction('getConversation', [conversationId]);
+    if (!conversation) return;
+    state.activeConversationId = conversation.id;
+    state.chatKbId = conversation.knowledge_base_id;
+    state.selectedChatKb = conversation.knowledge_base_name || '';
+    state.chatReleaseVersion = conversation.release_version;
+    state.chatConversations.forEach(c => { c.active = c.id === conversationId; });
+    state.chatMessages = (conversation.messages || []).map(mapChatMessage);
+    const lastTraceId = [...state.chatMessages].reverse().find(m => m.traceId)?.traceId;
+    state.lastTrace = lastTraceId ? { id: lastTraceId } : null;
+    state.activeTraceId = lastTraceId || null;
+    await render();
   };
-
   window.handleOpenCitationDetail = async function(citationId) {
     let targetId = citationId;
     // If passed an ordinal (e.g. 1, 2, 3), lookup the real citation ID from latest bot message
@@ -6089,7 +5664,7 @@ function iconSearch(size = 14) {
         }
       } catch (e) {}
     }
-    showToast(`查看引用来源 [${citationId}]`, 'ok');
+    showToast(api.lastError?.message || '引用来源不可用', 'error');
   };
 
   window.handleChatFeedback = async function(messageId, rating) {
@@ -6099,8 +5674,10 @@ function iconSearch(size = 14) {
         showToast(rating > 0 ? '✓ 感谢反馈！已记录至评估集' : '✓ 感谢反馈！系统将持续优化回答质量', 'ok');
         return;
       }
+      showToast(api.lastError?.message || '反馈记录失败', 'error');
+      return;
     }
-    showToast(rating > 0 ? '✓ 感谢反馈！已记录至评估集' : '✓ 感谢反馈！系统将持续优化回答质量', 'ok');
+    showToast('未连接后端服务，反馈未能记录', 'error');
   };
 
   window.handleOrganizeWiki = async function(messageId) {
@@ -6111,8 +5688,10 @@ function iconSearch(size = 14) {
         showToast(`✓ 已成功沉淀为 Wiki 草稿页面「${res.title || '问答笔记'}」！`, 'ok');
         return;
       }
+      showToast(api.lastError?.message || '沉淀 Wiki 失败', 'error');
+      return;
     }
-    showToast('✓ 已将当前回答整理为 Wiki 知识笔记草稿（演示模式）', 'ok');
+    showToast('未连接后端服务，无法沉淀 Wiki 笔记', 'error');
   };
 
   window.handleHighlightCitation = function(citeId) {
@@ -6130,44 +5709,14 @@ function iconSearch(size = 14) {
   // [removed: old handleSwitchConversation stub - replaced by async version above]
 
   
-  window.handleSwitchChatKb = async function(kbName) {
-    state.selectedChatKb = kbName;
-    showToast(`正在切换至知识库「${kbName}」并创建新会话...`);
-    if (api && api.connected) {
-      try {
-        const kbs = await api.getKnowledgeBases() || [];
-        const matched = kbs.find(k => k.name === kbName) || kbs[0];
-        if (matched) {
-          const conv = await api.createConversation({
-            knowledgeBaseId: matched.id,
-            title: `问答 (${kbName})`
-          });
-          if (conv) {
-            state.activeConversationId = conv.id;
-            state.chatConversations.unshift({
-              id: conv.id,
-              title: conv.title || `问答 (${kbName})`,
-              time: '刚刚',
-              active: true,
-              kb: kbName
-            });
-            state.chatConversations.forEach(c => c.active = (c.id === conv.id));
-            state.chatMessages = [{
-              role: 'assistant',
-              text: `你好！当前会话已固定绑定至「${kbName}」，不可变版本检索就绪。请问有什么可以帮助你？`,
-              time: '刚刚'
-            }];
-            showToast(`✓ 已创建并绑定「${kbName}」新会话 (红线 §5)`, 'ok');
-            render();
-            return;
-          }
-        }
-      } catch (e) {}
-    }
-    showToast(`已切换知识库: ${kbName}`, 'ok');
-    render();
+  window.handleSwitchChatKb = function(id) {
+    if (state.chatLoading) return showToast('请等待当前回答完成', 'warn');
+    const kb = api.context?.knowledgeBases?.find(k => k.id === id || k.name === id);
+    if (!kb) return showToast('知识库不存在', 'error');
+    state.chatKbId = kb.id;
+    state.selectedChatKb = kb.name;
+    return window.handleNewChat();
   };
-
   window.handleCopyChatText = function(text) {
     if (navigator.clipboard) {
       navigator.clipboard.writeText(text).then(() => showToast('已复制到剪贴板', 'ok')).catch(() => showToast('已复制内容'));
@@ -6177,25 +5726,28 @@ function iconSearch(size = 14) {
   };
 
   /* 15 AI应用 > 智能问答 - 100% 对应 15-AI应用-智能问答.png (动态交互版) */
+  window.handleNewChat = function() {
+    if (state.chatLoading) return showToast('请等待当前回答完成', 'warn');
+    state.activeConversationId = null;
+    state.chatConversations.forEach(c => { c.active = false; });
+    state.chatMessages = [];
+    state.chatReleaseVersion = null;
+    state.lastTrace = null;
+    return render();
+  };
+
   async function pageChat() {
     // Current citations from latest assistant message
     const lastBotMsg = [...state.chatMessages].reverse().find(m => m.role === 'assistant' && m.citations);
-    const activeCitations = lastBotMsg?.citations || [
-      { id: 1, title: '用户手册_产品A.pdf', page: 'P.12-13', quote: '在「产品问答助手」中创建助手后，进入「发布」页面，可获取安装代码...' },
-      { id: 2, title: 'Web 集成开发指南.pdf', page: 'P.25-26', quote: '将安装代码粘贴到网站所有页面的 body 标签前，即可在前端加载 widget.js 脚本组件...' },
-      { id: 3, title: '部署与发布规范.pdf', page: 'P.5', quote: '完成脚本植入后，访问网站首页确认右下角智能客服入口图标正常弹出...' }
-    ];
-    const activeWikis = lastBotMsg?.wikis || ['产品问答助手简介', '问答助手配置项说明', '企业网站嵌入代码规范'];
-
+    const activeCitations = lastBotMsg?.citations || [];
+    const activeWikis = lastBotMsg?.wikis || [];
     const html = `
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
       <div style="display:flex;align-items:center;gap:10px;">
         <select class="input" style="height:32px;font-size:12.5px;font-weight:600;padding:0 8px;" onchange="window.handleSwitchChatKb(this.value);">
-          <option ${state.selectedChatKb === '产品文档库' ? 'selected' : ''}>▣ 产品文档库</option>
-          <option ${state.selectedChatKb === '技术资料库' ? 'selected' : ''}>▣ 技术资料库</option>
-          <option ${state.selectedChatKb === '全知识库' ? 'selected' : ''}>▣ 全知识库 (多库融合)</option>
+          ${(api.context?.knowledgeBases || []).map(kb => `<option value="${esc(kb.id)}" ${(state.chatKbId || state.selectedKbId) === kb.id ? 'selected' : ''}>▣ ${esc(kb.name)}</option>`).join('')}
         </select>
-        <span class="badge ok">v7 (当前最新) ●</span>
+        <span class="badge ok">${state.chatReleaseVersion ? 'v' + state.chatReleaseVersion : '新会话使用已发布版本'} ●</span>
       </div>
       <div style="display:flex;gap:8px;">
         <button class="btn sm" onclick="window.location.hash='#/knowledge/datasets'">${iconBook(14)} 查看知识库</button>
@@ -6209,7 +5761,7 @@ function iconSearch(size = 14) {
       <div class="chat-conversation-pane">
         <div class="card-head" style="display:flex;justify-content:space-between;align-items:center;">
           <span>历史会话</span>
-          <button class="btn sm" style="padding:2px 6px;font-size:11px;" onclick="state.chatMessages=[{role:'assistant',text:'你好！我是 Ordo 智能知识库问答引擎，请问有什么可以帮助你？',time:'刚刚'}];showToast('已开启新会话');render();">+ 新会话</button>
+          <button class="btn sm" style="padding:2px 6px;font-size:11px;" onclick="window.handleNewChat()">+ 新会话</button>
         </div>
         <div style="padding:8px;overflow-y:auto;flex:1;">
           <small class="muted" style="padding:4px 8px;display:block;">今天</small>
@@ -6239,7 +5791,10 @@ function iconSearch(size = 14) {
             } else {
               // Format citations into clickable buttons
               const formattedText = esc(msg.text)
-                .replace(/\[(\d+)\]/g, (m, n) => '<span class="cite-tag" style="cursor:pointer;background:var(--accent-soft);color:var(--accent);padding:1px 6px;border-radius:4px;font-weight:600;margin:0 2px;" onclick="window.handleOpenCitationDetail(' + n + ');window.handleHighlightCitation(' + n + ');">[' + n + ']</span>')
+                .replace(/\[(\d+)\]/g, (match, ordinal) => {
+                  const citation = msg.citations?.find(c => Number(c.ordinal || c.id) === Number(ordinal));
+                  return citation?.citationId ? '<span class="cite-tag" style="cursor:pointer;background:var(--accent-soft);color:var(--accent);padding:1px 6px;border-radius:4px;font-weight:600;margin:0 2px;" onclick="window.handleOpenCitationDetail(' + jsArg(citation.citationId) + ');">[' + ordinal + ']</span>' : match;
+                })
                 .replace(/\n/g, '<br>');
 
               return `
@@ -6248,10 +5803,10 @@ function iconSearch(size = 14) {
                   <div class="chat-bubble" style="background:var(--inset);border:1px solid var(--line);padding:12px 16px;border-radius:12px 12px 12px 2px;max-width:85%;font-size:13px;line-height:1.6;color:var(--ink-strong);">
                     <div>${formattedText}</div>
                     <div style="font-size:11.5px;color:var(--ink-dim);margin-top:10px;border-top:1px solid var(--line-soft);padding-top:8px;">
-                      ${msg.time} · 基于 ${state.selectedChatKb} v7
+                      ${esc(msg.time)} · ${esc(state.selectedChatKb)} ${state.chatReleaseVersion ? 'v' + state.chatReleaseVersion : ''}
                     </div>
                     <div style="display:flex;gap:8px;margin-top:8px;">
-                      <button class="btn sm" style="font-size:11.5px;padding:2px 8px;background:var(--card-bg);border:1px solid var(--line);" onclick="handleCopyChatText('${esc(msg.text)}')">${iconCopy(13)} 复制</button>
+                      <button class="btn sm" style="font-size:11.5px;padding:2px 8px;background:var(--card-bg);border:1px solid var(--line);" onclick="handleCopyChatText(${jsArg(msg.text)})">${iconCopy(13)} 复制</button>
                       <button class="btn sm" style="font-size:11.5px;padding:2px 8px;background:var(--card-bg);border:1px solid var(--line);" onclick="window.handleRegenerateAnswer()">↻ 重新生成</button>
                       <button class="btn sm" style="font-size:11.5px;padding:2px 8px;background:var(--card-bg);border:1px solid var(--line);" onclick="window.handleChatFeedback('${esc(msg.id || '')}', 1)">${iconThumbUp(13)} 有帮助</button>
                       <button class="btn sm" style="font-size:11.5px;padding:2px 8px;background:var(--card-bg);border:1px solid var(--line);" onclick="window.handleChatFeedback('${esc(msg.id || '')}', -1)">${iconThumbDown(13)} 没帮助</button>
@@ -6352,7 +5907,7 @@ function iconSearch(size = 14) {
           showToast(api.lastError?.message || '创建接入凭据失败', 'error');
         }
       } else {
-        showToast('演示模式：已模拟创建接入端点', 'ok');
+        showToast('未连接后端服务，无法创建接入端点', 'error');
       }
       render();
     })();
@@ -6370,7 +5925,7 @@ function iconSearch(size = 14) {
         showToast(api.lastError?.message || '轮换密钥失败', 'error');
       }
     } else {
-      showToast('演示模式：已模拟轮换密钥', 'ok');
+      showToast('未连接后端服务，无法轮换密钥', 'error');
     }
   };
 
@@ -6548,7 +6103,7 @@ function iconSearch(size = 14) {
         showToast(`保存失败：${(api.lastError && api.lastError.message) || '服务无响应'}`, 'error');
       }
     } else {
-      showToast('助手配置已保存（演示模式）', 'ok');
+      showToast('未连接后端服务，助手配置未保存', 'error');
     }
     render();
   };
@@ -6564,14 +6119,8 @@ function iconSearch(size = 14) {
   };
 
   window.handleParsingPageStep = function(delta) {
-    const task = state.parsingTasks.find(t => t.id === state.parsingSelectedDocId) || state.parsingTasks[0];
-    const newPage = state.parsingCurrentPage + delta;
-    if (newPage >= 1 && newPage <= (task.totalPages || 128)) {
-      state.parsingCurrentPage = newPage;
-      render();
-    }
+    return window.handleParsingJumpPage(state.parsingCurrentPage + delta);
   };
-
   window.handleParsingZoomChange = function(delta) {
     state.parsingZoom = Math.max(50, Math.min(150, state.parsingZoom + delta));
     render();
@@ -6582,22 +6131,14 @@ function iconSearch(size = 14) {
     render();
   };
 
-  window.handleStartParsingTask = function() {
-    state.parsingStatus = 'running';
-    showToast('解析任务已启动', 'ok');
-    render();
+  window.handleStartParsingTask = async function() {
+    const result = await serverAction('startParsing', [parsingScope()], r => `已提交 ${r.changedCount} 个解析任务`);
+    if (result) await render();
   };
-
-  window.handlePauseParsingTask = function() {
-    state.parsingPaused = !state.parsingPaused;
-    if (state.parsingPaused) {
-      showToast('任务已暂停调度');
-    } else {
-      showToast('任务已恢复调度', 'ok');
-    }
-    render();
+  window.handlePauseParsingTask = async function() {
+    const result = await serverAction(state.parsingPaused ? 'resumeParsing' : 'pauseParsing', [parsingScope()], r => `已更新 ${r.changedCount} 个任务的调度状态`);
+    if (result) await render();
   };
-
   window.toggleParsingMoreMenu = function(e) {
     if (e) e.stopPropagation();
     state.parsingMoreMenuOpen = !state.parsingMoreMenuOpen;
@@ -6616,10 +6157,43 @@ function iconSearch(size = 14) {
     render();
   };
 
-  window.toggleAutoParsing = function(enabled) {
-    state.autoParsingEnabled = !!enabled;
-    showToast(enabled ? '${iconZap(13)} 自动化解析已开启：队列有新任务将自动执行解析' : '⏸ 自动化解析已关闭：任务排队需手动点击「开始解析」', 'ok');
-    render();
+  window.toggleAutoParsing = async function(enabled) {
+    const result = await serverAction('updateParsingSettings', [{ autoParsingEnabled: Boolean(enabled) }], '自动解析设置已保存');
+    if (result) state.autoParsingEnabled = result.autoParsingEnabled;
+    await render();
+  };
+  function parsingScope() {
+    return { knowledgeBaseId: state.parsingKbId || state.selectedKbId || api.context?.defaultKbId, profileId: state.parsingProfileId };
+  }
+
+  function renderParsingDiff(diff) {
+    const text = diff.after || '';
+    if (!state.parsingHighlightDiff || !diff.diff?.length) return esc(text || '暂无解析内容').replace(/\n/g, '<br>');
+    return diff.diff.map(part => {
+      const content = esc(text.slice(part.afterStart, part.afterEnd)).replace(/\n/g, '<br>');
+      return part.type === 'equal' ? content : `<span class="diff-highlight">${content}</span>`;
+    }).join('');
+  }
+
+  window.handleParsingKbSelect = function(id) {
+    state.parsingKbId = id;
+    state.parsingSelectedDocId = null;
+    state.parsingKBDropdownOpen = false;
+    return render();
+  };
+
+  window.handleParsingProfileSelect = function(id) {
+    const profile = state.parsingProfiles?.find(p => p.id === id);
+    if (!profile?.available) return showToast(profile?.reason || '运行配置不可用', 'warn');
+    state.parsingProfileId = id;
+    state.parsingRunConfigDropdownOpen = false;
+    return render();
+  };
+
+  window.handleSaveParsingConcurrency = async function() {
+    const concurrency = Number(document.querySelector('input[name="concurrency"]:checked')?.value || state.parsingConcurrency);
+    const result = await serverAction('updateParsingSettings', [{ concurrency }], '并发设置已保存');
+    if (result) { state.parsingConcurrency = result.concurrency; closeOverlay(); await render(); }
   };
 
   window.openConcurrencySettingModal = function() {
@@ -6637,30 +6211,30 @@ function iconSearch(size = 14) {
           </p>
           <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px;">
             <label style="display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid ${current === 2 ? 'var(--accent)' : 'var(--line)'};background:${current === 2 ? 'var(--accent-soft)' : 'var(--card-bg)'};border-radius:8px;cursor:pointer;">
-              <input type="radio" name="concurrency" value="2" ${current === 2 ? 'checked' : ''} onchange="state.parsingConcurrency=2;window.openConcurrencySettingModal();">
+              <input type="radio" name="concurrency" value="2" ${current === 2 ? 'checked' : ''} onchange="window.ordoState.parsingConcurrencyDraft=2;">
               <div style="flex:1;">
                 <b style="font-size:13.5px;color:var(--ink-strong);">2 线程 (节能轻载)</b>
-                <div class="muted" style="font-size:11.5px;margin-top:2px;">适合轻薄笔记本或同时运行其他大型软件，CPU 占用约 15%</div>
+                <div class="muted" style="font-size:11.5px;margin-top:2px;">适合笔记本或同时运行其他软件，降低并发资源占用</div>
               </div>
             </label>
             <label style="display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid ${current === 4 ? 'var(--accent)' : 'var(--line)'};background:${current === 4 ? 'var(--accent-soft)' : 'var(--card-bg)'};border-radius:8px;cursor:pointer;">
-              <input type="radio" name="concurrency" value="4" ${current === 4 ? 'checked' : ''} onchange="state.parsingConcurrency=4;window.openConcurrencySettingModal();">
+              <input type="radio" name="concurrency" value="4" ${current === 4 ? 'checked' : ''} onchange="window.ordoState.parsingConcurrencyDraft=4;">
               <div style="flex:1;">
                 <b style="font-size:13.5px;color:var(--ink-strong);">4 线程 (系统推荐 · 黄金均衡)</b>
-                <div class="muted" style="font-size:11.5px;margin-top:2px;">兼顾吞吐量与系统流畅度，吞吐约 128 页/分钟</div>
+                <div class="muted" style="font-size:11.5px;margin-top:2px;">适合日常批量解析，实际吞吐量取决于资料格式</div>
               </div>
             </label>
             <label style="display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid ${current === 8 ? 'var(--accent)' : 'var(--line)'};background:${current === 8 ? 'var(--accent-soft)' : 'var(--card-bg)'};border-radius:8px;cursor:pointer;">
-              <input type="radio" name="concurrency" value="8" ${current === 8 ? 'checked' : ''} onchange="state.parsingConcurrency=8;window.openConcurrencySettingModal();">
+              <input type="radio" name="concurrency" value="8" ${current === 8 ? 'checked' : ''} onchange="window.ordoState.parsingConcurrencyDraft=8;">
               <div style="flex:1;">
                 <b style="font-size:13.5px;color:var(--ink-strong);">8 线程 (极速狂飙)</b>
-                <div class="muted" style="font-size:11.5px;margin-top:2px;">多核工作站与服务器专用，批量大并发，吞吐约 260 页/分钟</div>
+                <div class="muted" style="font-size:11.5px;margin-top:2px;">适合多核工作站与服务器，提高批量任务并发数</div>
               </div>
             </label>
           </div>
           <div style="display:flex;justify-content:flex-end;gap:10px;">
             <button class="btn" onclick="window.hideOverlay()">取消</button>
-            <button class="btn primary" onclick="window.hideOverlay();showToast('✓ 已保存并发线程设置为 ' + state.parsingConcurrency + ' 线程','ok');render();">保存设置</button>
+            <button class="btn primary" onclick="window.handleSaveParsingConcurrency();">保存设置</button>
           </div>
         </div>
       </div>
@@ -6668,61 +6242,25 @@ function iconSearch(size = 14) {
     showOverlay(html);
   };
 
-  window.handleExportParsingLogs = function() {
+  window.handleExportParsingLogs = async function() {
+    const result = await serverAction('exportParsingLogs', [parsingScope()]);
+    if (!result) return;
+    triggerDownloadFile('parsing_audit_log.json', JSON.stringify(result, null, 2), 'application/json');
     state.parsingMoreMenuOpen = false;
-    const exportData = {
-      exportedAt: new Date().toISOString(),
-      knowledgeBase: state.selectedChatKb || '产品文档库',
-      concurrency: state.parsingConcurrency || 4,
-      autoParsing: !!state.autoParsingEnabled,
-      tasksSummary: {
-        processing: 38,
-        pending: 160,
-        failed: 6
-      },
-      hardwareMetrics: {
-        cpuUsage: '22%',
-        gpuUsage: '35%',
-        queueLength: 198,
-        throughput: '128 pages/min'
-      },
-      tasks: state.parsingTasks
-    };
-    triggerDownloadFile('parsing_audit_log.json', JSON.stringify(exportData, null, 2), 'application/json');
-    showToast('✓ 解析运行日志已成功导出为 JSON 文件', 'ok');
-    render();
+    showToast('解析日志已导出', 'ok');
+    await render();
   };
-
-  window.handleClearTaskQueue = function() {
+  window.handleClearTaskQueue = async function() {
+    if (!confirm('确定取消当前知识库中尚未开始执行的排队任务吗？')) return;
+    const result = await serverAction('clearPendingParsingTasks', [parsingScope()], r => `已取消 ${r.changedCount} 个排队任务`);
     state.parsingMoreMenuOpen = false;
-    if (confirm('确定要清空待处理队列中的排队任务吗？（当前正在处理中的任务不受影响）')) {
-      state.parsingTasks = state.parsingTasks.filter(t => t.status !== 'pending');
-      showToast('✓ 已清空待处理队列中的排队任务', 'ok');
-      render();
-    }
+    if (result) await render();
   };
-
-  window.handleParsingJumpPage = async function(pageNum) {
+  window.handleParsingJumpPage = function(pageNum) {
+    if (pageNum < 1 || pageNum > (state.parsingTotalPages || 0)) return;
     state.parsingCurrentPage = pageNum;
-    const selectedDoc = (state.parsingTasks && state.parsingTasks.find(t => t.id === state.parsingSelectedDocId)) || (state.parsingTasks && state.parsingTasks[0]);
-    const docId = selectedDoc ? (selectedDoc.documentId || selectedDoc.id) : 'doc_manual_a';
-
-    // 联动后端 API 获取对应页面的质量分析与对比数据
-    if (api && api.connected) {
-      try {
-        if (typeof api.getDocumentPageInspect === 'function') {
-          const inspectRes = await api.getDocumentPageInspect(docId, pageNum);
-          if (inspectRes && inspectRes.data) state.curPageInspect = inspectRes.data;
-        }
-        if (typeof api.getDocumentPageDiff === 'function') {
-          const diffRes = await api.getDocumentPageDiff(docId, pageNum);
-          if (diffRes && diffRes.data) state.curPageDiff = diffRes.data;
-        }
-      } catch (err) {}
-    }
-    render();
+    return render();
   };
-
   window.toggleParsingKBSelector = function() {
     state.parsingKBDropdownOpen = !state.parsingKBDropdownOpen;
     if (state.parsingRunConfigDropdownOpen) state.parsingRunConfigDropdownOpen = false;
@@ -6789,13 +6327,11 @@ function iconSearch(size = 14) {
       render();
       return;
     }
-    await new Promise(r => setTimeout(r, 400));
     if (curModel) {
-      curModel.status = 'ok';
-      curModel.latency = '352 ms';
-      curModel.time = new Date().toLocaleString();
+      curModel.status = 'danger';
+      curModel.statusText = '未连接';
     }
-    showToast('✓ 连接测试成功 (352 ms)（演示模式）', 'ok');
+    showToast('未连接后端服务，无法验证模型连接', 'error');
     render();
   };
 
@@ -6860,7 +6396,7 @@ function iconSearch(size = 14) {
         showToast(api.lastError?.message || '保存设置失败', 'error');
       }
     } else {
-      showToast('演示模式：通用设置已更新', 'ok');
+      showToast('未连接后端服务，通用设置未保存', 'error');
       render();
     }
   };
@@ -6882,20 +6418,30 @@ function iconSearch(size = 14) {
   };
 
   window.handleRegistryPageChange = function(page) {
-    showToast(`已翻至第 ${page} 页`);
-    render();
+    state.registryCurrentPage = Math.max(1, Math.min(Number(page) || 1, state.registryPageCount || 1));
+    return render();
   };
-
   window.handleRegistryPageSizeChange = function() {
-    showToast('已切换每页显示数量');
-    render();
+    state.registryPageSize = state.registryPageSize === 30 ? 10 : 30;
+    state.registryCurrentPage = 1;
+    return render();
+  };
+  window.handleDatasetPageChange = function(page) {
+    state.datasetCurrentPage = Math.max(1, Math.min(Number(page) || 1, state.datasetPageCount || 1));
+    return render();
   };
 
-  window.handleDatasetPageChange = function(newPage) {
-    const p = Math.max(1, parseInt(newPage, 10) || 1);
-    state.datasetCurrentPage = p;
-    showToast(`已翻至数据集第 ${p} 页`);
-    render();
+  window.handleSelectDatasetFolder = function(id) {
+    state.selectedFolder = id;
+    state.datasetCurrentPage = 1;
+    state.selectedDocId = null;
+    return render();
+  };
+
+  window.handleCreateDatasetFolder = async function(name) {
+    if (!state.selectedDatasetId) return showToast('请先创建或选择数据集', 'warn');
+    const result = await serverAction('createDatasetFolder', [state.selectedDatasetId, { name, parentId: ['all', 'root'].includes(state.selectedFolder) ? null : state.selectedFolder }], '目录已创建');
+    if (result) { closeOverlay(); await render(); }
   };
 
   window.openCreateFolderPrompt = function() {
@@ -6916,9 +6462,7 @@ function iconSearch(size = 14) {
             <button class="btn primary" onclick="
               const val = (document.getElementById('newFolderNameInput').value || '').trim();
               if (!val) { showToast('请输入目录名称', 'warn'); return; }
-              showToast('✓ 已新建分类目录: ' + val, 'ok');
-              window.closeOverlay();
-              render();
+              window.handleCreateDatasetFolder(val);
             ">创建目录</button>
           </div>
         </div>
@@ -6945,7 +6489,10 @@ function iconSearch(size = 14) {
   };
 
   window.toggleDatasetFilter = function() {
-    showToast('已切换筛选条件面板');
+    const query = prompt('按文件名称筛选（留空显示全部）', state.datasetSearchQuery || '');
+    if (query === null) return;
+    state.datasetSearchQuery = query.trim();
+    state.datasetCurrentPage = 1;
     render();
   };
 
@@ -7004,10 +6551,7 @@ function iconSearch(size = 14) {
         showToast(api.lastError?.message || '操作失败', 'error');
       }
     } else {
-      cur.status = isPub ? 'paused' : 'published';
-      cur.statusText = isPub ? '已停用' : '已发布';
-      showToast(`演示模式：已${isPub ? '停用' : '发布'}助手`, 'ok');
-      render();
+      showToast('未连接后端服务，助手状态未变更', 'error');
     }
   };
 
@@ -7030,28 +6574,19 @@ function iconSearch(size = 14) {
         showToast(api.lastError?.message || '保存失败', 'error');
       }
     } else {
-      cur.name = name;
-      cur.desc = desc;
-      showToast('演示模式：助手配置已保存', 'ok');
-      render();
+      showToast('未连接后端服务，助手配置未保存', 'error');
     }
   };
 
   /* 16 AI应用 > 智能助手 - 100% 对应 16-AI应用-智能助手.png */
   async function pageAssistants() {
-    let asts = (state.assistants && state.assistants.length) ? state.assistants : [];
-    if (!asts.length && (!api || !api.connected)) {
-      asts = [
-        { id: 'ast-1', name: '产品问答助手 (演示)', status: 'published', statusText: '已发布', kb: '产品文档库', version: 'v1.2.3', desc: '面向网站访客的产品信息问答助手。', requestsToday: 86 },
-        { id: 'ast-2', name: '技术支持助手 (演示)', status: 'draft', statusText: '草稿', kb: '技术资料库', version: 'v0.9.1', desc: '内部研发与运维技术排查助手。', requestsToday: 32 }
-      ];
-    }
-    const curId = state.selectedAssistantId || asts[0]?.id;
-    const cur = asts.find(a => a.id === curId) || asts[0];
-    state.selectedAssistantId = cur.id;
-
+    const records = await api.getAssistants({}, { throwOnError: true });
+    api.applyContextToState({ assistants: records || [] });
+    const asts = state.assistants;
+    const cur = asts.find(a => a.id === state.selectedAssistantId) || asts[0] || { id: '', name: '暂无助手', status: 'draft', statusText: '未创建', desc: '', kb: '—', version: '—', questions: [] };
+    state.selectedAssistantId = cur.id || null;
     const totalPub = asts.filter(a => a.status === 'published').length;
-    const totalReq = asts.reduce((sum, a) => sum + (Number(a.requestsToday) || 0), 0) || 86;
+    const totalReq = asts.reduce((sum, a) => sum + (Number(a.requestsToday) || 0), 0);
 
     const currentTab = state.assistantTab || 'basic';
 
@@ -7461,9 +6996,7 @@ function iconSearch(size = 14) {
     if (api && api.connected) {
       try {
         backendModels = await api.getModels() || [];
-        if (backendModels.length) {
-          api.applyContextToState({ models: backendModels });
-        }
+        api.applyContextToState({ models: backendModels });
       } catch (e) {
         console.warn('Failed to fetch models:', e);
       }
@@ -7491,7 +7024,13 @@ function iconSearch(size = 14) {
     const totalCount = modelKeys.length;
     const okCount = modelKeys.filter(k => modelsData[k].status === 'ok' || modelsData[k].status === 'available').length;
     const errCount = modelKeys.filter(k => modelsData[k].status === 'danger' || modelsData[k].status === 'error').length;
-    const callsToday = '1,284';
+    let callsToday = '—';
+    if (api && api.connected) {
+      try {
+        const dash = await api.getDashboard();
+        callsToday = String((dash.requestTrend || []).slice(-1)[0]?.count ?? 0);
+      } catch (e) {}
+    }
 
     // Group models into categories
     const categories = [
@@ -8090,7 +7629,6 @@ function iconSearch(size = 14) {
 
   /* 21 新对话选择知识库 Modal - 100% 对应 21-状态-新对话选择知识库.png (动态交互) */
   function openNewChatModal() {
-    window._selectedNewKb = '产品文档库';
     const html = `
     <div class="modal-box">
       <div class="modal-header">
@@ -8140,24 +7678,8 @@ function iconSearch(size = 14) {
       }
     } else {
       window._selectedNewKbId = null;
-      cardsHtml = `
-          <div class="kb-picker-card selected" onclick="document.querySelectorAll('.kb-picker-card').forEach(e=>e.classList.remove('selected'));this.classList.add('selected');">
-            <span class="check-circle">✓</span>
-            <div style="font-size:24px;margin-bottom:6px;">${iconBook(14)}</div>
-            <b>产品文档库</b>
-            <div class="muted" style="font-size:12px;margin-top:4px;">${(api && api.connected && state.dashboard?.chunks) || "8,652"} chunks · <span class="ok-text">● 可用</span></div>
-          </div>
-          <div class="kb-picker-card" onclick="document.querySelectorAll('.kb-picker-card').forEach(e=>e.classList.remove('selected'));this.classList.add('selected');">
-            <div style="font-size:24px;margin-bottom:6px;">${iconMonitor(14)}</div>
-            <b>技术资料库</b>
-            <div class="muted" style="font-size:12px;margin-top:4px;">6,421 chunks · <span class="ok-text">● 可用</span></div>
-          </div>
-          <div class="kb-picker-card" onclick="document.querySelectorAll('.kb-picker-card').forEach(e=>e.classList.remove('selected'));this.classList.add('selected');">
-            <div style="font-size:24px;margin-bottom:6px;">${iconPulse(16)}</div>
-            <b>市场资料库</b>
-            <div class="muted" style="font-size:12px;margin-top:4px;">4,213 chunks · <span style="color:var(--warn);">● 索引更新中</span></div>
-          </div>`;
-      if (checks) checks.innerHTML = '<span style="color:var(--warn);">演示模式：知识库列表非真实数据</span>';
+      cardsHtml = `<div class="muted" style="padding:12px;">未连接后端服务，无法读取知识库列表。</div>`;
+      if (checks) checks.innerHTML = '<span style="color:var(--warn);">未连接后端服务</span>';
     }
     body.innerHTML = cardsHtml;
   };
@@ -8191,31 +7713,8 @@ function iconSearch(size = 14) {
       }, 150);
       return;
     }
-    state.selectedChatKb = window._selectedNewKb || '产品文档库';
-    if (q) {
-      const now = new Date();
-      const timeStr = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
-      state.chatMessages = [
-        { role: 'user', text: q, time: timeStr },
-        {
-          role: 'assistant',
-          demo: true,
-          text: `【演示模式】关于「${q}」，根据 ${state.selectedChatKb} 的检索结果，为你梳理关键信息如下：\n\n1. **定义与入口**：请在工作台中进入相应模块，系统已自动根据知识版本进行向量与全文召回。[1]\n2. **操作指引**：在控制台点击配置后保存即可实时生效。[2]`,
-          time: timeStr,
-          citations: [
-            { id: 1, title: '用户手册_产品A.pdf', page: 'P.12-14', quote: '产品使用与配置指引...' },
-            { id: 2, title: '部署规范.pdf', page: 'P.3', quote: '权限与发布操作步骤...' }
-          ],
-          wikis: ['产品问答助手简介', '问答助手配置项说明']
-        }
-      ];
-    } else {
-      state.chatMessages = [
-        { role: 'assistant', demo: true, text: `【演示模式】你好！当前已连接 ${state.selectedChatKb}，请问有什么可以帮助你？`, time: '刚刚' }
-      ];
-    }
+    showToast('未连接后端服务，无法创建会话', 'error');
     closeOverlay();
-    go('apps/chat');
   };
 
   /* 22 全局快捷搜索 Modal (Cmd+K) - 100% 对应 22-状态-全局快捷搜索.png (实时过滤) */
@@ -8289,7 +7788,9 @@ function iconSearch(size = 14) {
     }
   });
 
+  let renderSequence = 0;
   async function render() {
+    const sequence = ++renderSequence;
     state.page = readPage();
     renderShell();
     const pages = {
@@ -8318,7 +7819,18 @@ function iconSearch(size = 14) {
 
     const fn = pages[state.page] || pageHome;
     try {
-      const res = await fn();
+      const res = !api.connected ? {
+        desc: state.bootstrapping ? '正在建立本机会话' : '服务连接不可用',
+        html: `<div class="card" style="padding:24px;margin-top:16px;background:var(--card-bg);">
+          <div class="card-head" style="padding:0 0 14px;font-size:16px;">${state.bootstrapping ? '正在连接 Ordo' : '无法连接 Ordo 服务'}</div>
+          <div class="card-body" style="padding:0;line-height:1.8;color:var(--ink-dim);">
+            <p>${esc(state.connectionError || '正在加载知识库、会话与运行状态，请稍候。')}</p>
+            <p>服务启动后，工作台将读取已保存的资料和任务。</p>
+            <button class="btn primary" style="margin-top:16px;" onclick="window.ordoApi.bootstrap()">重新连接</button>
+          </div>
+        </div>`
+      } : await fn();
+      if (sequence !== renderSequence) return;
       document.getElementById('pageTitle').innerHTML = res.title || (flat[state.page] || flat.home).label;
       const descEl = document.getElementById('pageDesc');
       descEl.textContent = res.desc || '';
@@ -8326,6 +7838,7 @@ function iconSearch(size = 14) {
       document.getElementById('actions').innerHTML = res.actions || '';
       document.getElementById('body').innerHTML = res.html || '';
     } catch (err) {
+      if (sequence !== renderSequence) return;
       console.error('Page render error on ' + state.page + ':', err);
       document.getElementById('body').innerHTML = `
         <div class="card" style="padding:24px;margin-top:16px;border-color:var(--danger);background:var(--card-bg);">
@@ -8357,12 +7870,10 @@ function iconSearch(size = 14) {
         }));
       } catch (e) {}
     }
-    if (!taskItems.length) {
-      if (!api || !api.connected) {
-        taskItems = [
-          { title: '演示模式：本地向量引擎就绪', status: '✓ 就绪', time: '刚刚', tone: 'ok' }
-        ];
-      }
+    if (!taskItems.length && (!api || !api.connected)) {
+      taskItems = [
+        { title: '未连接后端服务，无法获取任务动态', status: '—', time: '', tone: 'warn' }
+      ];
     }
 
     const pop = document.createElement('div');
@@ -8461,8 +7972,7 @@ function iconSearch(size = 14) {
         showToast(api.lastError?.message || '创建知识库失败', 'error');
       }
     } else {
-      showToast(`知识库「${name}」创建成功（演示模式）`, 'ok');
-      setTimeout(() => window.go('knowledge/datasets'), 800);
+      showToast('未连接后端服务，知识库未创建', 'error');
     }
   };
 
@@ -8486,9 +7996,7 @@ function iconSearch(size = 14) {
         showToast(api.lastError?.message || '删除知识库失败', 'error');
       }
     } else {
-      if (!confirm(`确定删除知识库「${kbName}」（演示模式）吗？`)) return;
-      showToast(`知识库「${kbName}」已删除（演示模式）`, 'ok');
-      render();
+      showToast('未连接后端服务，知识库未删除', 'error');
     }
   };
 
@@ -8514,14 +8022,16 @@ function iconSearch(size = 14) {
         showToast(api.lastError?.message || '连接异常', 'error');
       }
     } else {
-      if (btn) btn.innerHTML = '✓ 演示连接正常 (0ms)';
-      showToast('演示模式：默认 SQLite 引擎已就绪', 'ok');
+      if (btn) btn.innerHTML = '✕ 未连接后端服务';
+      showToast('未连接后端服务，无法探测连接', 'error');
     }
   };
 
   
   window.handleSwitchDataset = function(dsId, name) {
     state.selectedDatasetId = dsId;
+    state.selectedFolder = 'root';
+    state.selectedDocId = null;
     state.datasetCurrentPage = 1;
     showToast(`已切换到数据集: ${name}`, 'ok');
     render();
@@ -8541,9 +8051,7 @@ function iconSearch(size = 14) {
         showToast(api.lastError?.message || '删除数据集失败', 'error');
       }
     } else {
-      state.datasets = (state.datasets || []).filter(d => d.id !== dsId);
-      showToast('✓ 数据集已删除（演示模式）', 'ok');
-      render();
+      showToast('未连接后端服务或数据集非服务端记录，未执行删除', 'error');
     }
   };
 
@@ -8555,8 +8063,10 @@ function iconSearch(size = 14) {
         showToast(`特性开关 ${flagKey} 已更新为 ${enabled ? '开启' : '关闭'}`, 'ok');
         return;
       }
+      showToast(api.lastError?.message || '特性开关更新失败', 'error');
+      return;
     }
-    showToast(`特性开关 ${flagKey} 已切换（演示模式）`, 'ok');
+    showToast('未连接后端服务，特性开关未更新', 'error');
   };
 
   window.handleDeleteDocument = async function(docId, docTitle) {
@@ -8570,9 +8080,7 @@ function iconSearch(size = 14) {
         showToast(api.lastError?.message || '删除文档失败', 'error');
       }
     } else {
-      state.datasetDocs = (state.datasetDocs || []).filter(d => d.id !== docId);
-      showToast(`文档「${docTitle}」已删除（演示模式）`, 'ok');
-      render();
+      showToast('未连接后端服务，文档未删除', 'error');
     }
   };
 
@@ -8586,7 +8094,7 @@ function iconSearch(size = 14) {
         showToast(api.lastError?.message || '激活失败', 'error');
       }
     } else {
-      showToast('演示模式：已激活该版本', 'ok');
+      showToast('未连接后端服务，版本未激活', 'error');
       render();
     }
   };
@@ -8603,7 +8111,7 @@ function iconSearch(size = 14) {
         showToast(api.lastError?.message || '无法回滚（可能仅有一个历史版本）', 'warn');
       }
     } else {
-      showToast('演示模式：已回滚至上一版本', 'ok');
+      showToast('未连接后端服务，版本未回滚', 'error');
       render();
     }
   };
@@ -8659,9 +8167,7 @@ function iconSearch(size = 14) {
         showToast(api.lastError?.message || '创建数据集失败', 'error');
       }
     } else {
-      showToast(`数据集「${name}」已创建（演示模式）`, 'ok');
-      closeOverlay();
-      render();
+      showToast(kbId === 'default' ? '请先创建知识库后再创建数据集' : '未连接后端服务，数据集未创建', 'error');
     }
   };
 
@@ -8807,29 +8313,39 @@ function iconSearch(size = 14) {
         showToast(api.lastError?.message || '删除失败', 'error');
       }
     } else {
-      showToast('演示模式：已删除文档', 'ok');
+      showToast('未连接后端服务，文档未删除', 'error');
       render();
     }
   };
 
-  window.handleBatchDeleteDocs = function() {
+  window.handleBatchDeleteDocs = async function() {
     if (!state.selectedDocIds || state.selectedDocIds.length === 0) return;
     const count = state.selectedDocIds.length;
-    if (confirm(`确定要从当前数据集中批量删除选中的 ${count} 个文件吗？`)) {
-      state.datasetDocs = (state.datasetDocs || []).filter(d => !state.selectedDocIds.includes(d.id));
-      state.selectedDocIds = [];
-      showToast(`已批量删除 ${count} 个文件！`, 'ok');
-      render();
+    if (!confirm(`确定要从当前数据集中批量删除选中的 ${count} 个文件吗？`)) return;
+    if (!(api && api.connected)) return showToast('未连接后端服务，文件未删除', 'error');
+    showToast(`正在删除选中的 ${count} 个文件...`);
+    let ok = 0;
+    for (const id of state.selectedDocIds) {
+      if (await api.deleteDocument(id)) ok += 1;
     }
+    state.selectedDocIds = [];
+    if (ok === count) showToast(`已批量删除 ${count} 个文件！`, 'ok');
+    else showToast(`已删除 ${ok}/${count} 个文件：${api.lastError?.message || '部分文件删除失败'}`, 'warn');
+    render();
   };
 
-  window.handleBatchRechunkDocs = function() {
+  window.handleBatchRechunkDocs = async function() {
     if (!state.selectedDocIds || state.selectedDocIds.length === 0) return;
     const count = state.selectedDocIds.length;
-    showToast(`正在对选中的 ${count} 个文件重新执行分词切块与向量生成...`, 'ok');
-    setTimeout(() => {
-      showToast(`${count} 个文件重新切块完成！`, 'ok');
-    }, 600);
+    if (!(api && api.connected)) return showToast('未连接后端服务，无法重新切块', 'error');
+    showToast(`正在对选中的 ${count} 个文件重新提交解析与切块任务...`, 'ok');
+    let ok = 0;
+    for (const id of state.selectedDocIds) {
+      if (await api.retryTask(id)) ok += 1;
+    }
+    if (ok === count) showToast(`${count} 个文件的重新切块任务已全部提交！`, 'ok');
+    else showToast(`已提交 ${ok}/${count} 个：${api.lastError?.message || '部分任务提交失败'}`, 'warn');
+    render();
   };
 
   window.handleDatasetSearch = function(query) {
@@ -8856,28 +8372,9 @@ function iconSearch(size = 14) {
   
   // Wire retryTask in pageParsing retry button
   window.handleRetryFailedTasks = async function() {
-    showToast('正在重试失败的解析任务...');
-    if (api && api.connected) {
-      try {
-        const tasks = await api.getTasks({ status: 'failed', type: 'document.parse', limit: 20 });
-        if (tasks && tasks.length) {
-          let retried = 0;
-          for (const t of tasks) {
-            const res = await api.retryTask(t.id);
-            if (res) retried++;
-          }
-          showToast(`✓ 已重新提交 ${retried} 个失败的解析任务！`, 'ok');
-          render();
-          return;
-        } else {
-          showToast('当前没有失败的解析任务', 'ok');
-          return;
-        }
-      } catch (e) {}
-    }
-    showToast('演示模式：已重试失败的解析任务', 'ok');
+    const result = await serverAction('retryFailedParsing', [parsingScope()], r => `已重新提交 ${r.changedCount} 个失败任务`);
+    if (result) await render();
   };
-
   window.handleRetrySingleTask = async function(taskId) {
     if (!taskId) return;
     showToast(`正在重试解析任务 ${taskId}...`);
@@ -8889,12 +8386,14 @@ function iconSearch(size = 14) {
           render();
           return;
         }
+        showToast(api.lastError?.message || `任务 ${taskId} 重新入队失败`, 'error');
+        return;
       } catch (e) {
         showToast('重试失败: ' + (e.message || '网络异常'), 'error');
         return;
       }
     }
-    showToast(`演示模式：任务 ${taskId} 已重新提交`, 'ok');
+    showToast('未连接后端服务，任务未重新提交', 'error');
     render();
   };
 
@@ -8956,7 +8455,7 @@ function iconSearch(size = 14) {
         showToast(api.lastError?.message || '移除模型失败', 'error');
       }
     } else {
-      showToast('演示模式：模型配置已移除', 'ok');
+      showToast('未连接后端服务，模型配置未移除', 'error');
       render();
     }
   };
@@ -8986,7 +8485,7 @@ function iconSearch(size = 14) {
         return;
       }
     }
-    showToast('演示模式：解析制品预览不可用', 'warn');
+    showToast(api.lastError?.message || '未连接后端服务，无法加载解析制品预览', 'error');
   };
 
   // Wire getConversations for chat history sidebar
@@ -9027,7 +8526,7 @@ function iconSearch(size = 14) {
           showToast(api.lastError?.message || '压缩包导入失败', 'error');
         }
       } else {
-        showToast(`演示模式：已模拟导入压缩包「${file.name}」`, 'ok');
+        showToast('未连接后端服务，压缩包未导入', 'error');
       }
     };
     input.click();
@@ -9075,7 +8574,7 @@ function iconSearch(size = 14) {
         showOverlay(modalHtml);
       })();
     } else {
-      showToast(`演示模式：已模拟导入目录 ${dirPath}`, 'ok');
+      showToast('未连接后端服务，无法扫描目录', 'error');
     }
   };
 
@@ -9100,8 +8599,8 @@ function iconSearch(size = 14) {
   window.handleSaveChunkEdit = async function() {
     const textarea = document.getElementById('chunkEditorTextarea');
     const contentMd = textarea ? textarea.value : '';
-    const chunkId = state.selectedChunkId || 'chunk_0000001';
-    if (api && api.connected && !String(chunkId).startsWith('chunk_000')) {
+    const chunkId = state.selectedChunkId || '';
+    if (api && api.connected && chunkId) {
       const res = await api.editChunk(chunkId, { contentMd });
       if (res) {
         showToast('✓ 知识块修改成功，已生成新修订版本！', 'ok');
@@ -9114,18 +8613,18 @@ function iconSearch(size = 14) {
         }
       }
     } else {
-      showToast('演示模式：知识块已保存', 'ok');
+      showToast(api && api.connected ? '请先选择服务端知识块' : '未连接后端服务，修改未保存', 'error');
     }
   };
 
   window.handleSplitChunk = async function() {
-    const chunkId = state.selectedChunkId || 'chunk_0000001';
+    const chunkId = state.selectedChunkId || '';
     const textarea = document.getElementById('chunkEditorTextarea');
     const content = textarea ? textarea.value : '';
     if (!content.includes('\n')) {
       return showToast('拆分知识块请在文本中分段（换行）以便自动切分', 'warn');
     }
-    if (api && api.connected && !String(chunkId).startsWith('chunk_000')) {
+    if (api && api.connected && chunkId) {
       const parts = content.split(/\n\s*\n/).filter(Boolean);
       const res = await api.splitChunk(chunkId, { parts });
       if (res) {
@@ -9135,7 +8634,7 @@ function iconSearch(size = 14) {
         showToast(api.lastError?.message || '拆分失败', 'error');
       }
     } else {
-      showToast('演示模式：知识块已成功拆分', 'ok');
+      showToast(api && api.connected ? '请先选择服务端知识块' : '未连接后端服务，拆分未执行', 'error');
     }
   };
 
@@ -9151,7 +8650,7 @@ function iconSearch(size = 14) {
       return;
     }
 
-    if (api && api.connected && !String(chunkId).startsWith('chunk_000')) {
+    if (api && api.connected && chunkId) {
       showToast('正在合并相邻知识块...');
       const res = await api.mergeChunks({ chunkRevisionIds: [curChunk.id, nextChunk.id] });
       if (res) {
@@ -9164,16 +8663,16 @@ function iconSearch(size = 14) {
         showToast(api.lastError?.message || '合并失败（需同文档相邻块）', 'warn');
       }
     } else {
-      showToast('演示模式：已与相邻块完成合并', 'ok');
+      showToast(api && api.connected ? '请先选择服务端知识块' : '未连接后端服务，合并未执行', 'error');
     }
   };
 
   window.handleToggleChunkDisabled = async function() {
-    const chunkId = state.selectedChunkId || 'chunk_0000001';
+    const chunkId = state.selectedChunkId || '';
     const textarea = document.getElementById('chunkEditorTextarea');
     const contentMd = textarea ? textarea.value : '';
     const isExcluded = (state.currentChunks || []).find(c => c.id === chunkId)?.excluded;
-    if (api && api.connected && !String(chunkId).startsWith('chunk_000')) {
+    if (api && api.connected && chunkId) {
       const res = isExcluded ? await api.restoreChunk(chunkId) : await api.editChunk(chunkId, { contentMd, excluded: 1 });
       if (res) {
         showToast(isExcluded ? '✓ 知识块已恢复启用！' : '✓ 知识块已标记禁用，发布时将自动剔除', 'ok');
@@ -9182,7 +8681,7 @@ function iconSearch(size = 14) {
         showToast(api.lastError?.message || (isExcluded ? '恢复失败' : '禁用失败'), 'error');
       }
     } else {
-      showToast('演示模式：知识块已' + (isExcluded ? '恢复' : '禁用'), 'ok');
+      showToast(api && api.connected ? '请先选择服务端知识块' : '未连接后端服务，操作未执行', 'error');
     }
   };
 
@@ -9207,7 +8706,7 @@ function iconSearch(size = 14) {
         showToast(api.lastError?.message || '提交发布任务失败', 'error');
       }
     } else {
-      showToast('演示模式：已模拟构建并激活版本 v8', 'ok');
+      showToast('未连接后端服务，版本未构建', 'error');
     }
   };
   window.handleIndexPublish = window.handleBuildRelease;
@@ -9228,7 +8727,7 @@ function iconSearch(size = 14) {
         showToast(api.lastError?.message || '检索验证未命中', 'warn');
       }
     } else {
-      showToast(`演示模式：检索验证「${query}」命中 4 条（仅验证检索）`, 'ok');
+      showToast(api && api.connected ? '尚无已发布的活动版本，无法验证检索' : '未连接后端服务，无法验证检索', 'warn');
     }
   };
   window.handleIndexQueryVerify = window.handleSearchRelease;
@@ -9251,7 +8750,7 @@ function iconSearch(size = 14) {
         showToast(api.lastError?.message || '备份任务提交失败', 'error');
       }
     } else {
-      showToast('演示模式：已完成系统数据快照备份', 'ok');
+      showToast('未连接后端服务，备份未创建', 'error');
     }
   };
 
@@ -9267,7 +8766,7 @@ function iconSearch(size = 14) {
         showToast(api.lastError?.message || '恢复备份失败', 'error');
       }
     } else {
-      showToast('演示模式：已模拟恢复数据备份', 'ok');
+      showToast('未连接后端服务，备份未恢复', 'error');
     }
   };
 
@@ -9281,7 +8780,7 @@ function iconSearch(size = 14) {
         showToast('存储一致性校验未发现损坏', 'ok');
       }
     } else {
-      showToast('演示模式：存储一致性校验全部通过 (0 错误)', 'ok');
+      showToast('未连接后端服务，无法执行一致性校验', 'error');
     }
   };
 
@@ -9295,12 +8794,14 @@ function iconSearch(size = 14) {
           render();
           return;
         }
+        showToast(api.lastError?.message || '存储注册表同步失败', 'error');
+        return;
       } catch (e) {
         showToast('同步失败: ' + (e.message || '网络异常'), 'error');
         return;
       }
     }
-    showToast('演示模式：存储注册表同步完成，元数据指纹校验通过', 'ok');
+    showToast('未连接后端服务，同步未执行', 'error');
   };
   function handleSyncStorageRegistry() {
     return window.handleSyncStorageRegistry();
@@ -9317,9 +8818,7 @@ function iconSearch(size = 14) {
         return;
       }
     }
-    const mockDiag = { timestamp: new Date().toISOString(), status: 'healthy', version: '1.0.0', platform: 'windows', node: (typeof process !== 'undefined' && process.version) ? process.version : 'v22.18.0' };
-    triggerDownloadFile('ordo_diagnostics_demo.json', JSON.stringify(mockDiag, null, 2));
-    showToast('✓ 诊断报告已导出（演示数据）', 'ok');
+    showToast(api.lastError?.message || '未连接后端服务，无法导出诊断报告', 'error');
   };
 
   // 5. Real Assistant Creation Handler (wired to api.createAssistant)
@@ -9344,24 +8843,7 @@ function iconSearch(size = 14) {
         showToast(api.lastError?.message || '创建助手失败', 'error');
       }
     } else {
-      const newAst = {
-        id: 'ast_' + Date.now(),
-        name,
-        status: 'published',
-        statusText: '已发布',
-        health: '健康',
-        url: 'www.corp.internal',
-        kb: '核心产品文档库',
-        version: 'v1.0.0',
-        desc,
-        requestsToday: 0
-      };
-      state.assistants = state.assistants || [];
-      state.assistants.unshift(newAst);
-      state.selectedAssistantId = newAst.id;
-      showToast(`✓ 智能助手「${name}」已创建（演示模式）`, 'ok');
-      closeOverlay();
-      render();
+      showToast('未连接后端服务，助手未创建', 'error');
     }
   };
 
@@ -9377,9 +8859,7 @@ function iconSearch(size = 14) {
         showToast(api.lastError?.message || '删除会话失败', 'error');
       }
     } else {
-      state.chatConversations = (state.chatConversations || []).filter(c => c.id !== convId);
-      showToast('✓ 会话已删除（演示模式）', 'ok');
-      render();
+      showToast('未连接后端服务或会话非服务端记录，未删除', 'error');
     }
   };
 
@@ -9472,28 +8952,12 @@ function iconSearch(size = 14) {
         render();
         return;
       }
+      showToast(api.lastError?.message || '检索通道重试未返回结果', 'error');
+      render();
+      return;
     }
-    await new Promise(r => setTimeout(r, 300));
-    showToast('✓ 检索通道已就绪，已重新验证连通性', 'ok');
+    showToast('未连接后端服务，无法重试检索通道', 'error');
     render();
-  };
-
-  window.handleReParseQuestion = function() {
-    const input = document.getElementById('parseQuestionInput');
-    const q = input ? input.value.trim() : '如何为企业网站安装产品问答助手？';
-    showToast('正在基于最新知识库重新解析意图、分词与实体抽取...', 'ok');
-    setTimeout(() => {
-      const intentEl = document.getElementById('extractedIntent');
-      if (intentEl) intentEl.textContent = '操作指引 / 安装与部署 / 客户端挂载';
-      showToast('问题意图解析与实体抽取完成！', 'ok');
-    }, 400);
-  };
-
-  window.handleReEmbedQuery = function(modelName) {
-    showToast(`正在使用 ${modelName} 重新生成 1536 维向量嵌入...`, 'ok');
-    setTimeout(() => {
-      showToast('向量嵌入已更新！', 'ok');
-    }, 400);
   };
 
   window.handleCopyTraceId = function(traceId) {
@@ -9504,20 +8968,31 @@ function iconSearch(size = 14) {
     }
   };
 
-  window.handleCopyFullAnswer = function() {
-    const text = "要为企业网站安装产品问答助手，请按以下步骤操作：\n1. 获取安装代码：在「产品问答助手」应用中复制生成的嵌入脚本代码。\n2. 添加到网站：将代码粘贴到网站所有页面的 </body> 标签前。\n3. 验证与发布：刷新网站页面确认助手正常显示。";
+  window.handleCopyFullAnswer = async function() {
+    const { activeTrace } = await getActiveQATrace();
+    const text = activeTrace?.answer || '';
+    if (!text) {
+      showToast('未连接后端服务或当前问答无回答内容', 'error');
+      return;
+    }
     if (navigator.clipboard) {
       navigator.clipboard.writeText(text).then(() => showToast('已复制完整回答到剪贴板', 'ok'));
     } else {
-      showToast('已复制回答内容');
+      showToast('当前环境不支持剪贴板复制', 'warn');
     }
   };
 
-  window.handleAnswerFeedback = function(type) {
-    if (type === 'thumb_up') {
-      showToast('感谢您的反馈！已标记为高置信度回答并录入质量基准库', 'ok');
+  window.handleAnswerFeedback = async function(type) {
+    const { activeTrace } = await getActiveQATrace();
+    if (!(api && api.connected && activeTrace?.id)) {
+      showToast('未连接后端服务，反馈未能记录', 'error');
+      return;
+    }
+    const res = await api.sendTraceFeedback(activeTrace.id, { rating: type === 'thumb_up' ? 1 : -1 });
+    if (res) {
+      showToast(type === 'thumb_up' ? '感谢您的反馈！已标记为高置信度回答并录入质量基准库' : '已记录未采纳反馈，优化工单已提交至调优队列', 'ok');
     } else {
-      showToast('已记录未采纳反馈，优化工单已提交至调优队列', 'ok');
+      showToast(api.lastError?.message || '反馈记录失败', 'error');
     }
   };
 
@@ -9547,10 +9022,8 @@ function iconSearch(size = 14) {
         }
       } catch (e) {}
     }
-    setTimeout(() => {
-      if (btn) btn.innerHTML = '✓ 已是最新版本';
-      showToast('演示模式：当前版本已是最新稳定发行版', 'ok');
-    }, 500);
+    if (btn) btn.innerHTML = '✕ 无法检查更新';
+    showToast(api.lastError?.message || '未连接后端服务，无法检查更新', 'error');
   };
 
 
@@ -9703,21 +9176,7 @@ function iconSearch(size = 14) {
       render();
       return;
     }
-    const key = 'model_' + Date.now();
-    state.modelsData[key] = {
-      name,
-      provider: providerLabel,
-      url,
-      modelName: name,
-      timeout: 60,
-      status: 'ok',
-      statusText: '正常（演示模式）',
-      latency: '240 ms',
-      time: '刚刚'
-    };
-    state.selectedModel = key;
-    closeOverlay();
-    showToast(`模型「${name}」连接验证成功并已加入连接池！（演示模式）`, 'ok');
+    showToast('未连接后端服务，模型未登记', 'error');
     render();
   };
 
@@ -9822,11 +9281,3 @@ function iconSearch(size = 14) {
   
 
 })();
-
-
-
-
-
-
-
-
