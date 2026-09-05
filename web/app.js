@@ -3968,85 +3968,14 @@ function iconSearch(size = 14) {
     const traceBanner = renderQATraceBanner(activeTrace, traces, 3, recallData?.totalDuration || pipelineData?.totalDuration);
     const traceHeader = renderQATraceHeader(3, pipelineData?.stages?.map(s => s.durationMs != null ? `${s.durationMs}ms` : null));
 
-    // Fallback static data for offline / disconnected
-    const defaultChannels = [
-      {
-        channelId: 'vector',
-        channelName: '向量召回',
-        status: 'completed',
-        totalCount: 18,
-        durationMs: 126,
-        headerBadge: '18 条 / 126 ms',
-        items: [
-          { rank: 1, chunkId: 'c4f9a1b2', documentTitle: 'Ordo 产品白皮书 v2.3', page: 15, rawScore: 0.9121, permissionPassed: true },
-          { rank: 2, chunkId: 'c8d3e5f6', documentTitle: 'Ordo 智能问答使用指南', page: 28, rawScore: 0.8643, permissionPassed: true },
-          { rank: 3, chunkId: 'a1b2c3d4', documentTitle: 'Ordo 功能更新日志 (2025-04)', page: 7, rawScore: 0.8237, permissionPassed: true },
-          { rank: 4, chunkId: 'e5f6a7b8', documentTitle: 'Ordo Knowledge API 参考', page: 33, rawScore: 0.7892, permissionPassed: true },
-          { rank: 5, chunkId: 'f1a2b3c4', documentTitle: 'Ordo 部署与运维手册', page: 61, rawScore: 0.7426, permissionPassed: true }
-        ]
-      },
-      {
-        channelId: 'fulltext',
-        channelName: '全文召回',
-        status: 'completed',
-        totalCount: 15,
-        durationMs: 42,
-        headerBadge: '15 条 / 42 ms',
-        items: [
-          { rank: 1, chunkId: 'ft_001', documentTitle: 'Ordo 产品白皮书 v2.3', page: 16, rawScore: 0.8734, permissionPassed: true },
-          { rank: 2, chunkId: 'ft_002', documentTitle: 'Ordo 定价与版本说明', page: 4, rawScore: 0.8117, permissionPassed: true },
-          { rank: 3, chunkId: 'ft_003', documentTitle: 'Ordo 实施方案概览', page: 12, rawScore: 0.7641, permissionPassed: true },
-          { rank: 4, chunkId: 'ft_004', documentTitle: 'Ordo 安全白皮书', page: 9, rawScore: 0.7123, permissionPassed: true },
-          { rank: 5, chunkId: 'ft_005', documentTitle: 'Ordo 常见问题 (FAQ)', page: 32, rawScore: 0.6548, permissionPassed: true }
-        ]
-      },
-      {
-        channelId: 'graph',
-        channelName: '图谱召回',
-        status: 'completed',
-        totalCount: 8,
-        durationMs: 88,
-        headerBadge: '8 条 / 88 ms',
-        items: [
-          { rank: 1, chunkId: 'g1a2b3c4', documentTitle: 'Ordo 支持的数据源类型', page: 22, rawScore: 0.9012, permissionPassed: true },
-          { rank: 2, chunkId: 'g2b3c4d5', documentTitle: 'Ordo 与第三方系统集成', page: 19, rawScore: 0.8235, permissionPassed: true },
-          { rank: 3, chunkId: 'g3c4d5e6', documentTitle: 'Ordo 权限模型说明', page: 26, rawScore: 0.7614, permissionPassed: true },
-          { rank: 4, chunkId: 'g4d5e6f7', documentTitle: 'Ordo 数据安全与合规', page: 11, rawScore: 0.7018, permissionPassed: true },
-          { rank: 5, chunkId: 'g5e6f7a8', documentTitle: 'Ordo 组织与角色管理', page: 24, rawScore: 0.6432, permissionPassed: true }
-        ]
-      },
-      {
-        channelId: 'structured',
-        channelName: '结构化查询',
-        status: 'skipped',
-        statusLabel: '已跳过',
-        headerBadge: '已跳过',
-        totalCount: 0,
-        durationMs: 0,
-        skippedReason: '未触发结构化查询条件',
-        skippedDetail: '路由策略未命中结构化查询规则',
-        items: []
-      }
-    ];
+    const channels = recallData?.channels || [];
+    const summary = recallData?.summaryMetrics || null;
 
-    const channels = recallData?.channels || defaultChannels;
-    const summary = recallData?.summaryMetrics || {
-      totalCandidatesBeforeDedup: 41,
-      duplicateCandidates: 9,
-      failedChannels: 0,
-      failedChannelsLabel: '全部成功',
-      durationDistribution: [
-        { channel: '向量召回', durationMs: 126 },
-        { channel: '全文召回', durationMs: 42 },
-        { channel: '图谱召回', durationMs: 88 },
-        { channel: '结构化查询', durationMs: 0 }
-      ]
-    };
-
-    const vectorCh = channels.find(c => c.channelId === 'vector') || defaultChannels[0];
-    const fulltextCh = channels.find(c => c.channelId === 'fulltext') || defaultChannels[1];
-    const graphCh = channels.find(c => c.channelId === 'graph') || defaultChannels[2];
-    const structCh = channels.find(c => c.channelId === 'structured') || defaultChannels[3];
+    const emptyCh = { headerBadge: '—', totalCount: 0, durationMs: 0, items: [] };
+    const vectorCh = channels.find(c => c.channelId === 'vector') || emptyCh;
+    const fulltextCh = channels.find(c => c.channelId === 'fulltext') || emptyCh;
+    const graphCh = channels.find(c => c.channelId === 'graph') || emptyCh;
+    const structCh = channels.find(c => c.channelId === 'structured') || emptyCh;
 
     // Helper to render channel candidate rows
     function renderChannelItems(items = [], maxDisplay = 5) {
@@ -4069,10 +3998,10 @@ function iconSearch(size = 14) {
     }
 
     // Dynamic SVG Bar Chart calculation
-    const dists = summary.durationDistribution || [
-      { channel: '向量召回', durationMs: vectorCh.durationMs || 126 },
-      { channel: '全文召回', durationMs: fulltextCh.durationMs || 42 },
-      { channel: '图谱召回', durationMs: graphCh.durationMs || 88 },
+    const dists = summary?.durationDistribution || [
+      { channel: '向量召回', durationMs: vectorCh.durationMs || 0 },
+      { channel: '全文召回', durationMs: fulltextCh.durationMs || 0 },
+      { channel: '图谱召回', durationMs: graphCh.durationMs || 0 },
       { channel: '结构化查询', durationMs: structCh.durationMs || 0 }
     ];
     const maxDur = Math.max(...dists.map(d => d.durationMs || 0), 100);
@@ -4143,7 +4072,7 @@ function iconSearch(size = 14) {
             ${renderChannelItems(vectorCh.items, 5)}
           </div>
           <div style="padding:8px;text-align:center;border-top:1px solid var(--line-soft);margin-top:auto;">
-            ${state.showVectorResults ? `<div style='padding:10px;background:var(--inset);border:1px dashed #cbd5e1;border-radius:4px;color:#64748b;font-size:12px;margin-bottom:8px;text-align:left;'>共 ${vectorCh.totalCount} 条候选，前 ${Math.min(vectorCh.items?.length || 0, 5)} 条已展示</div>` : ''}<a href="#" style="font-size:11.5px;color:var(--accent);" onclick="handleToggleExpandState(event, 'showVectorResults')">${state.showVectorResults ? '收起 ⌃' : '查看全部 ' + vectorCh.totalCount + ' 条 ⌄'}</a>
+            ${state.showVectorResults ? `<div style='padding:10px;background:var(--inset);border:1px dashed #cbd5e1;border-radius:4px;color:#64748b;font-size:12px;margin-bottom:8px;text-align:left;'>共 ${vectorCh.totalCount} 条候选，前 ${Math.min(vectorCh.items?.length || 0, 5)} 条已展示</div>` : ''}${vectorCh.totalCount > 0 ? `<a href="#" style="font-size:11.5px;color:var(--accent);" onclick="handleToggleExpandState(event, 'showVectorResults')">${state.showVectorResults ? '收起 ⌃' : '查看全部 ' + vectorCh.totalCount + ' 条 ⌄'}</a>` : '<span class="muted" style="font-size:11.5px;">暂无候选记录</span>'}
           </div>
         </div>
       </div>
@@ -4165,7 +4094,7 @@ function iconSearch(size = 14) {
             ${renderChannelItems(fulltextCh.items, 5)}
           </div>
           <div style="padding:8px;text-align:center;border-top:1px solid var(--line-soft);margin-top:auto;">
-            ${state.showBM25Results ? `<div style='padding:10px;background:var(--inset);border:1px dashed #cbd5e1;border-radius:4px;color:#64748b;font-size:12px;margin-bottom:8px;text-align:left;'>共 ${fulltextCh.totalCount} 条候选，前 ${Math.min(fulltextCh.items?.length || 0, 5)} 条已展示</div>` : ''}<a href="#" style="font-size:11.5px;color:var(--accent);" onclick="handleToggleExpandState(event, 'showBM25Results')">${state.showBM25Results ? '收起 ⌃' : '查看全部 ' + fulltextCh.totalCount + ' 条 ⌄'}</a>
+            ${state.showBM25Results ? `<div style='padding:10px;background:var(--inset);border:1px dashed #cbd5e1;border-radius:4px;color:#64748b;font-size:12px;margin-bottom:8px;text-align:left;'>共 ${fulltextCh.totalCount} 条候选，前 ${Math.min(fulltextCh.items?.length || 0, 5)} 条已展示</div>` : ''}${fulltextCh.totalCount > 0 ? `<a href="#" style="font-size:11.5px;color:var(--accent);" onclick="handleToggleExpandState(event, 'showBM25Results')">${state.showBM25Results ? '收起 ⌃' : '查看全部 ' + fulltextCh.totalCount + ' 条 ⌄'}</a>` : '<span class="muted" style="font-size:11.5px;">暂无候选记录</span>'}
           </div>
         </div>
       </div>
@@ -4193,7 +4122,7 @@ function iconSearch(size = 14) {
             `}
           </div>
           <div style="padding:8px;text-align:center;border-top:1px solid var(--line-soft);margin-top:auto;">
-            ${state.showGraphResults ? `<div style='padding:10px;background:var(--inset);border:1px dashed #cbd5e1;border-radius:4px;color:#64748b;font-size:12px;margin-bottom:8px;text-align:left;'>共 ${graphCh.totalCount} 条候选</div>` : ''}<a href="#" style="font-size:11.5px;color:var(--accent);" onclick="handleToggleExpandState(event, 'showGraphResults')">${state.showGraphResults ? '收起 ⌃' : '查看全部 ' + graphCh.totalCount + ' 条 ⌄'}</a>
+            ${state.showGraphResults ? `<div style='padding:10px;background:var(--inset);border:1px dashed #cbd5e1;border-radius:4px;color:#64748b;font-size:12px;margin-bottom:8px;text-align:left;'>共 ${graphCh.totalCount} 条候选</div>` : ''}${graphCh.totalCount > 0 ? `<a href="#" style="font-size:11.5px;color:var(--accent);" onclick="handleToggleExpandState(event, 'showGraphResults')">${state.showGraphResults ? '收起 ⌃' : '查看全部 ' + graphCh.totalCount + ' 条 ⌄'}</a>` : ''}
           </div>
         </div>
       </div>
@@ -4226,7 +4155,7 @@ function iconSearch(size = 14) {
         </div>
         <div>
           <div class="muted" style="font-size:12px;">候选总数 (去重前)</div>
-          <b style="font-size:24px;color:var(--ink-strong);line-height:1.1;">${summary.totalCandidatesBeforeDedup} <small style="font-size:13px;font-weight:normal;">条</small></b>
+          <b style="font-size:24px;color:var(--ink-strong);line-height:1.1;">${summary ? summary.totalCandidatesBeforeDedup : '—'} <small style="font-size:13px;font-weight:normal;">条</small></b>
         </div>
       </div>
 
@@ -4237,7 +4166,7 @@ function iconSearch(size = 14) {
         </div>
         <div>
           <div class="muted" style="font-size:12px;">重复候选数</div>
-          <b style="font-size:24px;color:var(--ink-strong);line-height:1.1;">${summary.duplicateCandidates} <small style="font-size:13px;font-weight:normal;">条</small></b>
+          <b style="font-size:24px;color:var(--ink-strong);line-height:1.1;">${summary ? summary.duplicateCandidates : '—'} <small style="font-size:13px;font-weight:normal;">条</small></b>
         </div>
       </div>
 
@@ -4249,8 +4178,8 @@ function iconSearch(size = 14) {
         <div>
           <div class="muted" style="font-size:12px;">通道失败数</div>
           <div style="display:flex;align-items:baseline;gap:6px;">
-            <b style="font-size:24px;color:var(--ink-strong);line-height:1.1;">${summary.failedChannels} <small style="font-size:13px;font-weight:normal;">个</small></b>
-            <span style="font-size:11px;color:${summary.failedChannels ? 'var(--danger)' : '#16a34a'};font-weight:600;">${esc(summary.failedChannelsLabel || (summary.failedChannels ? summary.failedChannels + ' 个通道异常' : '全部成功'))}</span>
+            <b style="font-size:24px;color:var(--ink-strong);line-height:1.1;">${summary ? summary.failedChannels : '—'} <small style="font-size:13px;font-weight:normal;">个</small></b>
+            <span style="font-size:11px;color:${summary?.failedChannels ? 'var(--danger)' : '#16a34a'};font-weight:600;">${esc(summary?.failedChannelsLabel || (summary?.failedChannels ? summary.failedChannels + ' 个通道异常' : (summary ? '全部成功' : '—')))}</span>
           </div>
         </div>
       </div>
@@ -4276,7 +4205,7 @@ function iconSearch(size = 14) {
     <!-- Bottom Actions Toolbar strictly matching 10-问答流程-多路召回.png -->
     <div style="display:flex;align-items:center;justify-content:flex-end;gap:12px;margin-top:20px;padding:16px 0 24px;border-top:1px solid var(--line);width:100%;">
       <button class="btn" style="background:var(--card-bg);border:1px solid var(--line);height:38px;padding:0 20px;border-radius:6px;font-size:13.5px;font-weight:500;color:var(--ink-strong);cursor:pointer;" onclick="showToast('已跳转查看原文快照','ok')">查看原文</button>
-      <button class="btn" style="background:var(--card-bg);border:1px solid var(--line);height:38px;padding:0 20px;border-radius:6px;font-size:13.5px;font-weight:500;color:var(--ink-strong);cursor:pointer;" onclick="navigator.clipboard.writeText(JSON.stringify(recallData || defaultChannels, null, 2));showToast('✓ 召回候选数据已复制到剪贴板','ok')">${iconDownload(13)} 导出候选</button>
+      <button class="btn" style="background:var(--card-bg);border:1px solid var(--line);height:38px;padding:0 20px;border-radius:6px;font-size:13.5px;font-weight:500;color:var(--ink-strong);cursor:pointer;" onclick="window.handleExportRecallCandidates()">${iconDownload(13)} 导出候选</button>
       <button class="btn" style="background:var(--card-bg);border:1px solid var(--line);height:38px;padding:0 20px;border-radius:6px;font-size:13.5px;font-weight:500;color:var(--ink-strong);cursor:pointer;" onclick="window.handleRetryRecallChannel('${esc(activeTrace?.id || '')}')">↻ 重试失败通道</button>
       <button class="btn primary" style="background:var(--accent);color:#ffffff;height:38px;padding:0 24px;border-radius:6px;font-size:13.5px;font-weight:500;cursor:pointer;" onclick="window.go('qaflow/fuse')">进入结果融合 &gt;</button>
     </div>`;
@@ -5063,9 +4992,9 @@ function iconSearch(size = 14) {
           <div>
             <div class="muted" style="font-size:11.5px;margin-bottom:4px;font-weight:600;">相关度分数</div>
             <div style="display:flex;align-items:center;justify-content:space-between;background:var(--inset);padding:8px 12px;border-radius:6px;border:1px solid var(--line);">
-              <span>重排前 <b class="mono" style="margin-left:4px;">${curChunk.beforeScore ?? '0.792'}</b></span>
+              <span>重排前 <b class="mono" style="margin-left:4px;">${curChunk.beforeScore ?? '—'}</b></span>
               <span style="color:#94a3b8;">→</span>
-              <span>重排后 <b class="mono" style="color:#16a34a;font-size:14px;margin-left:4px;">${curChunk.afterScore ?? '0.912'}</b></span>
+              <span>重排后 <b class="mono" style="color:#16a34a;font-size:14px;margin-left:4px;">${curChunk.afterScore ?? '—'}</b></span>
             </div>
           </div>
 
@@ -8941,6 +8870,24 @@ function iconSearch(size = 14) {
   };
 
   /* Complete Real Pipeline Handlers for QA Flow and Index */
+  window.handleExportRecallCandidates = async function() {
+    const { activeTrace } = await getActiveQATrace();
+    if (!(api && api.connected && activeTrace?.id)) {
+      showToast('未连接后端服务或当前无问答记录，无法导出召回候选', 'error');
+      return;
+    }
+    const data = await api.exportRecall(activeTrace.id, { format: 'json' });
+    if (!data) {
+      showToast(api.lastError?.message || '导出召回候选失败', 'error');
+      return;
+    }
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(JSON.stringify(data, null, 2)).then(() => showToast('✓ 召回候选数据已复制到剪贴板', 'ok'));
+    } else {
+      showToast('当前环境不支持剪贴板复制', 'warn');
+    }
+  };
+
   window.handleRetryRecallChannel = async function(traceId, channelId = 'vector') {
     const tId = traceId || state.activeTraceId;
     if (!tId) return showToast('未指定 Trace ID', 'error');
