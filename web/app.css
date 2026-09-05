@@ -60,28 +60,40 @@
   --shell: #111827;
   --card-bg: #1f2937;
   --panel: #1f2937;
-  --inset: #111827;
+  --inset: #151e2e;
   --ink: #e5e7eb;
   --ink-strong: #f9fafb;
   --ink-dim: #9ca3af;
   --ink-faint: #6b7280;
   --icon: #9ca3af;
   --line: #374151;
-  --line-soft: #1f2937;
-  --hover: #374151;
+  --line-soft: rgba(255, 255, 255, 0.08);
+  --hover: rgba(255, 255, 255, 0.06);
   --track-off: #4b5563;
   --accent: #10b981;
   --accent-hover: #059669;
   --accent-soft: rgba(16, 185, 129, 0.15);
   --accent-tint: rgba(16, 185, 129, 0.3);
-  --on-accent: #111827;
-  --danger-soft: rgba(220, 38, 38, 0.2);
-  --warn-soft: rgba(217, 119, 6, 0.2);
-  --blue-soft: rgba(37, 99, 235, 0.2);
-  --purple-soft: rgba(124, 58, 237, 0.2);
+  --on-accent: #ffffff;
+  --danger: #f87171;
+  --danger-soft: rgba(239, 68, 68, 0.2);
+  --warn: #f59e0b;
+  --warn-soft: rgba(245, 158, 11, 0.2);
+  --warn-ink: #fbbf24;
+  --ok: #10b981;
+  --ok-soft: rgba(16, 185, 129, 0.15);
+  --blue: #60a5fa;
+  --blue-soft: rgba(96, 165, 250, 0.2);
+  --purple: #c084fc;
+  --purple-soft: rgba(192, 132, 252, 0.2);
+  --trace-bg: #0b101b;
+  --trace-ink: #f9fafb;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
   --shadow-pop: 0 20px 25px -5px rgba(0, 0, 0, 0.6);
   --green: var(--accent);
+  --green-hover: var(--accent-hover);
+  --green-soft: var(--accent-soft);
+  --green-tint: var(--accent-tint);
 }
 
 [data-theme="limestone"] { --shell: #f2f1ec; --card-bg: #ffffff; }
@@ -353,11 +365,11 @@ a:hover { text-decoration: underline; }
   transition: all 150ms var(--ease);
   white-space: nowrap;
 }
-.btn:hover { background: var(--hover); border-color: #cbd5e1; }
-.btn.primary { background: var(--accent); color: #ffffff; border-color: var(--accent); font-weight: 600; }
+.btn:hover { background: var(--hover); border-color: var(--line); }
+.btn.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 600; }
 .btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
-.btn.danger { color: var(--danger); border-color: #fca5a5; background: #fff5f5; }
-.btn.danger:hover { background: var(--danger-soft); }
+.btn.danger { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
+.btn.danger:hover { opacity: 0.9; }
 .btn.sm { height: 30px; padding: 0 10px; font-size: 12.5px; }
 
 /* Badges & Pills */
@@ -369,8 +381,9 @@ a:hover { text-decoration: underline; }
   border-radius: 12px;
   font-size: 12px;
   font-weight: 500;
-  background: #f3f4f6;
+  background: var(--inset);
   color: var(--ink-dim);
+  border: 1px solid var(--line-soft);
 }
 .badge.ok, .badge.success { background: var(--ok-soft); color: var(--accent); font-weight: 600; }
 .badge.warn, .badge.warning { background: var(--warn-soft); color: var(--warn-ink); font-weight: 600; }
@@ -461,7 +474,7 @@ a:hover { text-decoration: underline; }
   flex: 1;
 }
 .home-sub-card:hover {
-  border-color: #cbd5e1;
+  border-color: var(--accent);
   background: var(--hover);
   transform: translateY(-1px);
   box-shadow: var(--shadow);
@@ -971,7 +984,7 @@ a:hover { text-decoration: underline; }
   transition: background 120ms var(--ease);
 }
 .tree-node:hover { background: var(--hover); }
-.tree-node.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; border: 1px solid #bbf7d0; }
+.tree-node.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; border: 1px solid var(--accent); }
 .tree-indent { margin-left: 18px; }
 
 /* Data Tables */
@@ -983,7 +996,7 @@ a:hover { text-decoration: underline; }
 .data-table tr.selected td { background: var(--accent-soft); }
 
 /* Progress bar */
-.progress-bar-wrap { width: 100%; height: 6px; background: #e5e7eb; border-radius: 3px; overflow: hidden; margin-top: 4px; }
+.progress-bar-wrap { width: 100%; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 4px; }
 .progress-bar-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width 300ms var(--ease); }
 .progress-bar-fill.warn { background: var(--warn); }
 .progress-bar-fill.danger { background: var(--danger); }
@@ -1062,7 +1075,7 @@ a:hover { text-decoration: underline; }
 }
 .diff-container { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .diff-box { background: var(--inset); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; padding: 10px; font-size: 12.5px; line-height: 1.6; height: 160px; overflow-y: auto; }
-.diff-highlight { background: #dcfce7; color: #166534; padding: 1px 4px; border-radius: 2px; font-weight: 500; }
+.diff-highlight { background: var(--ok-soft); color: var(--accent); border: 1px solid var(--accent); padding: 1px 4px; border-radius: 2px; font-weight: 500; }
 .parsing-pipeline-node {
   display: flex;
   align-items: center;
@@ -1166,9 +1179,9 @@ a:hover { text-decoration: underline; }
   max-width: 760px;
   aspect-ratio: 16 / 9;
   max-height: 430px;
-  background: #ffffff;
-  color: #1e293b;
-  border: 1px solid #e2e8f0;
+  background: var(--card-bg);
+  color: var(--ink);
+  border: 1px solid var(--line);
   border-radius: 6px;
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
   padding: 26px 34px;
@@ -1188,10 +1201,10 @@ a:hover { text-decoration: underline; }
   border-radius: 8px;
   padding: 14px 16px;
 }
-.parsing-feature-box.green { background: #f0fdf4; border: 1px solid #bbf7d0; }
-.parsing-feature-box.blue { background: #eff6ff; border: 1px solid #bfdbfe; }
-.parsing-feature-box.orange { background: #fff7ed; border: 1px solid #fed7aa; }
-.parsing-feature-box.purple { background: #faf5ff; border: 1px solid #e9d5ff; }
+.parsing-feature-box.green { background: var(--ok-soft); border: 1px solid var(--accent); }
+.parsing-feature-box.blue { background: var(--blue-soft); border: 1px solid var(--blue); }
+.parsing-feature-box.orange { background: var(--warn-soft); border: 1px solid var(--warn); }
+.parsing-feature-box.purple { background: var(--purple-soft); border: 1px solid var(--purple); }
 
 /* 06 知识库 > 构建知识索引 3-Column Equal Height Layout */
 .workspace-layout-indexing {

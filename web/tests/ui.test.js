@@ -65,7 +65,7 @@ test('visual system includes stable responsive, design tokens and layout primiti
 
 test('every page route executes without error and produces full non-empty HTML', async () => {
   for (const page of pageIds) {
-    global.window = { location: { hash: '#/' + page }, addEventListener: () => {} };
+    global.window = { OrdoApi: require('../api'), location: { hash: '#/' + page }, addEventListener: () => {} };
     let htmlOutput = '';
     global.document = {
       getElementById: (id) => ({
@@ -112,6 +112,11 @@ test('all P1, P2 and P3 wired endpoints, handlers and security contracts are ver
   assert.match(app, /searchDebounceTimer/);
   assert.match(app, /home-bottom-grid/);
   assert.match(app, /home-bottom-card/);
-});
 
+  // Stage 5 & 6 Fusion and Rerank Wiring
+  assert.match(app, /getTraceFusionStage/);
+  assert.match(app, /getTraceRerankStage/);
+  assert.match(app, /handleApplyRerankThreshold/);
+  assert.match(app, /openRerankCompareModal/);
+});
 

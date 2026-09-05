@@ -71,6 +71,32 @@ test('R1 product loop persists source, release, query trace, citation and backup
   const conversation = (await request('POST', '/api/v1/conversations', { knowledgeBaseId: kb.id, datasetId: dataset.id, modelConnectionId: model.id })).json().data;
   const answer = (await request('POST', `/api/v1/conversations/${conversation.id}/messages`, { question: '如何启动 Ordo？' })).json().data;
   assert.equal(answer.trace.stages.length, 8);
+  assert.ok(answer.trace.routingBasis);
+  const routeStageRes = (await request('GET', `/api/v1/traces/${answer.trace.id}/stages/route`)).json().data;
+  assert.equal(routeStageRes.traceId, answer.trace.id);
+  assert.equal(routeStageRes.routerDag.channels.length, 4);
+  assert.ok(routeStageRes.routingBasis.reasons.length >= 4);
+  assert.ok(routeStageRes.routingBasis.compositeConfidence > 0);
+  assert.equal(routeStageRes.routeConfig.permissionFilter.enabled, true);
+
+  const recallStageRes = (await request('GET', `/api/v1/traces/${answer.trace.id}/stages/recall`)).json().data;
+  assert.equal(recallStageRes.traceId, answer.trace.id);
+  assert.equal(recallStageRes.channels.length, 4);
+  assert.equal(recallStageRes.channels[0].channelId, 'vector');
+  assert.ok(recallStageRes.channels[0].headerBadge.includes('条'));
+  assert.ok(recallStageRes.channels[0].headerBadge.includes('ms'));
+  assert.equal(recallStageRes.channels[3].status, 'skipped');
+  assert.equal(recallStageRes.channels[3].headerBadge, '已跳过');
+  assert.ok(recallStageRes.summaryMetrics.totalCandidatesBeforeDedup > 0);
+
+  const retryRes = (await request('POST', `/api/v1/traces/${answer.trace.id}/stages/recall/retry-channel`, {})).json().data;
+  assert.equal(retryRes.retried, true);
+  assert.equal(retryRes.failedChannels, 0);
+
+  const chunkDetail = (await request('GET', `/api/v1/traces/${answer.trace.id}/stages/recall/chunks/c4f9a1b2`)).json().data;
+  assert.ok(chunkDetail.documentTitle);
+  assert.ok(chunkDetail.content);
+
   assert.equal(answer.assistantMessage.evidence_status, 'sufficient');
   assert.ok(answer.assistantMessage.citations.length > 0);
   const citation = (await request('GET', `/api/v1/citations/${answer.assistantMessage.citations[0].id}`)).json().data;
@@ -463,6 +489,95 @@ test('runtime schema version and list pagination metadata come from persisted da
   await assertPaginated('/api/v1/tasks');
   await assertPaginated('/api/v1/conversations');
   await assertPaginated('/api/v1/traces');
+  const tracesList = (await request('GET', '/api/v1/traces')).json().data;
+  if (tracesList.length > 0) {
+    const traceId = tracesList[0].id;
+    const fusionStage = (await request('GET', `/api/v1/traces/${traceId}/stages/fusion`)).json().data;
+    assert.equal(fusionStage.summaryMetrics.rawCandidateCount, 41);
+    assert.equal(fusionStage.summaryMetrics.dedupCandidateCount, 32);
+    assert.equal(fusionStage.summaryMetrics.fusedCandidateCount, 20);
+
+    const weightsRes = (await request('PUT', `/api/v1/traces/${traceId}/stages/fusion/weights`, { topKFinal: 20 })).json().data;
+    assert.equal(weightsRes.newFusedCount, 20);
+
+    const resetRes = (await request('POST', `/api/v1/traces/${traceId}/stages/fusion/reset-weights`)).json().data;
+    assert.equal(resetRes.topKFinal, 20);
+
+    const calcRes = (await request('GET', `/api/v1/traces/${traceId}/stages/fusion/calculation/cand_01`)).json().data;
+    assert.equal(calcRes.candidateId, 'cand_01');
+    assert.equal(calcRes.normalizedScore, 0.842);
+
+    const candsRes = (await request('GET', `/api/v1/traces/${traceId}/stages/fusion/candidates?pageSize=5`)).json();
+    assert.equal(candsRes.data.length, 5);
+    assert.equal(candsRes.meta.total, 20);
+
+    const chunkRes = (await request('GET', `/api/v1/traces/${traceId}/stages/fusion/chunks/cand_01`)).json().data;
+    assert.equal(chunkRes.candidateId, 'cand_01');
+    assert.equal(chunkRes.permissionStatus, 'passed');
+
+    const logsRes = (await request('GET', `/api/v1/traces/${traceId}/stages/fusion/logs`)).json().data;
+    assert.equal(logsRes.stage, 'fusion');
+    assert.equal(logsRes.logs.length, 5);
+
+    const exportRes = (await request('GET', `/api/v1/traces/${traceId}/stages/fusion/export`)).json().data;
+    assert.equal(exportRes.fusedCandidates.length, 20);
+
+    const rerunRes = (await request('POST', `/api/v1/traces/${traceId}/stages/fusion/rerun`, { topKFinal: 20 })).json().data;
+    assert.ok(rerunRes.derivedTraceId);
+
+    const rerankRes = (await request('GET', `/api/v1/traces/${traceId}/stages/rerank`)).json().data;
+    assert.equal(rerankRes.modelCard.modelName, 'bge-reranker-v2-m3');
+    assert.equal(rerankRes.afterCandidates.length, 8);
+    assert.equal(rerankRes.scoreCurve.dataPoints.length, 20);
+    assert.ok(typeof rerankRes.totalDuration === 'string' && rerankRes.totalDuration.endsWith(' s'));
+    assert.ok(typeof rerankRes.totalElapsedMs === 'number');
+
+    const pipelineRes = (await request('GET', `/api/v1/traces/${traceId}/pipeline`)).json().data;
+    assert.equal(pipelineRes.currentStage, 6);
+    assert.ok(typeof pipelineRes.totalDuration === 'string' && pipelineRes.totalDuration.endsWith(' s'));
+    assert.ok(typeof pipelineRes.totalElapsedMs === 'number');
+    assert.equal(pipelineRes.completedCount, 6);
+    assert.equal(pipelineRes.stages[6].status, 'pending');
+    assert.equal(pipelineRes.stages[6].durationMs, null);
+    assert.equal(pipelineRes.stages[7].status, 'pending');
+    assert.equal(pipelineRes.stages[7].durationMs, null);
+
+    const demoRerank = (await request('GET', '/api/v1/traces/QA-2025-0520-0086/stages/rerank')).json().data;
+    assert.equal(demoRerank.totalDuration, '1.32 s');
+    assert.equal(demoRerank.totalElapsedMs, 1321);
+
+    const demoPipeline = (await request('GET', '/api/v1/traces/QA-2025-0520-0086/pipeline')).json().data;
+    assert.equal(demoPipeline.currentStage, 6);
+    assert.equal(demoPipeline.totalDuration, '1.32 s');
+    assert.equal(demoPipeline.totalElapsedMs, 1321);
+    assert.equal(demoPipeline.completedCount, 6);
+    assert.equal(demoPipeline.stages[5].durationMs, 512);
+    assert.equal(demoPipeline.stages[6].status, 'pending');
+    assert.equal(demoPipeline.stages[6].durationMs, null);
+    assert.equal(demoPipeline.stages[7].status, 'pending');
+    assert.equal(demoPipeline.stages[7].durationMs, null);
+
+    const demoPipelineStage4 = (await request('GET', '/api/v1/traces/QA-2025-0520-0086/pipeline?stage=4')).json().data;
+    assert.equal(demoPipelineStage4.currentStage, 4);
+    assert.equal(demoPipelineStage4.totalDuration, '0.60 s');
+    assert.equal(demoPipelineStage4.totalElapsedMs, 599);
+    assert.equal(demoPipelineStage4.stages[4].status, 'pending');
+    assert.equal(demoPipelineStage4.stages[4].durationMs, null);
+
+    const rerankChunkRes = (await request('GET', `/api/v1/traces/${traceId}/stages/rerank/chunks/chunk_00321`)).json().data;
+    assert.equal(rerankChunkRes.chunkId, 'chunk_00321');
+    assert.equal(rerankChunkRes.afterScore, 0.912);
+
+    const rerankConfigRes = (await request('PUT', `/api/v1/traces/${traceId}/stages/rerank/config`, { scoreThreshold: 0.75, maxRetainedTopK: 8 })).json().data;
+    assert.equal(rerankConfigRes.retainedCount, 8);
+
+    const rerankCompareRes = (await request('POST', `/api/v1/traces/${traceId}/stages/rerank/compare`)).json().data;
+    assert.equal(rerankCompareRes.ndcgAt10.after, 0.892);
+
+    const rerankLogsRes = (await request('GET', `/api/v1/traces/${traceId}/stages/rerank/logs`)).json().data;
+    assert.equal(rerankLogsRes.stage, 'rerank');
+    assert.equal(rerankLogsRes.logs.length, 4);
+  }
   await assertPaginated('/api/v1/audit');
 
   const backupTask = (await request('POST', '/api/v1/backups', { label: 'schema-version-e2e' })).json().data;
