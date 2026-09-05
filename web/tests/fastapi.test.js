@@ -9,6 +9,7 @@ const net = require('node:net');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 const { createClient, operations } = require('../api');
+const { createWorkbench } = require('./helpers/workbench');
 
 test('unchanged browser client talks to the real Python/FastAPI HTTP service', { timeout: 60000 }, async () => {
   const root = path.resolve(__dirname, '../..');
@@ -38,7 +39,7 @@ test('unchanged browser client talks to the real Python/FastAPI HTTP service', {
     }
     assert.ok(ready, output);
     let cookie = '';
-    const client = createClient({ baseUrl: origin + '/api/v1', throwOnError: true, fetch: async (url, options = {}) => {
+    const client = createClient({ baseUrl: origin, throwOnError: true, fetch: async (url, options = {}) => {
       const headers = new Headers(options.headers);
       if (cookie && options.credentials !== 'omit') headers.set('cookie', cookie);
       const response = await fetch(url, { ...options, headers });
@@ -56,6 +57,12 @@ test('unchanged browser client talks to the real Python/FastAPI HTTP service', {
     }
     const kb = await client.createKnowledgeBase({ name: 'Browser HTTP integration' });
     const dataset = kb.default_dataset_id;
+    const workbench = await createWorkbench(client);
+    for (const route of ['knowledge/datasets', 'knowledge/registry', 'knowledge/parsing', 'apps/chat', 'apps/assistants', 'settings/models']) {
+      const html = await workbench.page(route);
+      assert.doesNotMatch(html, /页面加载出错|用户手册_产品A|ds-demo-|产品使用文档 \(演示\)/, route);
+      assert.ok(html.length > 500, route);
+    }
     const uploaded = await client.uploadDocument(dataset, new File(['# Guide\n\nOrdo runs on Python FastAPI.\n\n## Usage\n\nUpload documents and activate a knowledge release.'], 'guide.md', { type: 'text/markdown' }));
     assert.equal((await client.waitTask(uploaded.task.id, 30000)).status, 'succeeded');
     const build = await client.buildRelease(dataset, { activate: true });
@@ -67,6 +74,26 @@ test('unchanged browser client talks to the real Python/FastAPI HTTP service', {
     assert.ok(events.some(event => event.name === 'token'));
     assert.equal(events.filter(event => event.name === 'done').length, 1);
     await client.openCitation(answer.assistantMessage.citations[0].id);
+    workbench.context.ordoState.activeTraceId = answer.trace.id;
+    for (const route of ['knowledge/datasets', 'knowledge/registry', 'knowledge/parsing', 'knowledge/index', 'qaflow/parse', 'qaflow/embed', 'qaflow/route', 'qaflow/recall', 'qaflow/fuse', 'qaflow/rerank', 'qaflow/prompt', 'qaflow/answer']) {
+      const html = await workbench.page(route);
+      assert.doesNotMatch(html, /页面加载出错/, route + ': ' + workbench.errors.join('\n'));
+    }
+    await workbench.context.handleSwitchConversation(conversation.id);
+    assert.equal(workbench.context.ordoState.chatMessages.at(-1).citations[0].citationId, answer.assistantMessage.citations[0].id);
+    await workbench.page('knowledge/datasets');
+    await workbench.context.handleCreateDatasetFolder('真实目录');
+    const folder = (await client.getDatasetTree(dataset)).find(item => item.name === '真实目录');
+    assert.ok(folder);
+    await client.moveDatasetFile(dataset, uploaded.document.id, { folderId: folder.id });
+    await workbench.context.handleSelectDatasetFolder(folder.id);
+    const folderFiles = await client.getDatasetFiles(dataset, { folderId: folder.id });
+    assert.equal(folderFiles.length, 1, JSON.stringify(folderFiles));
+    assert.match(workbench.element('body').innerHTML, /guide\.md/, JSON.stringify({ dataset, folder, selected: workbench.context.ordoState.selectedDatasetId, selectedFolder: workbench.context.ordoState.selectedFolder, query: workbench.context.ordoState.datasetSearchQuery }));
+    assert.match(workbench.element('body').innerHTML, /共 1 条文档/);
+    await workbench.context.toggleAutoParsing(false);
+    assert.equal((await client.getParsingSettings()).autoParsingEnabled, false);
+    assert.deepEqual(workbench.errors, []);
     const sourceHtml = fs.readFileSync(path.join(root, 'web/index.html'), 'utf8');
     assert.equal(await (await fetch(origin + '/')).text(), sourceHtml);
     assert.equal(await (await fetch(origin + '/app.css')).text(), fs.readFileSync(path.join(root, 'web/app.css'), 'utf8'));
@@ -77,6 +104,6 @@ test('unchanged browser client talks to the real Python/FastAPI HTTP service', {
     const resolved = fs.realpathSync(temp);
     assert.equal(path.dirname(resolved).toLowerCase(), fs.realpathSync(os.tmpdir()).toLowerCase());
     assert.ok(path.basename(resolved).startsWith('ordo-fastapi-'));
-    fs.rmSync(resolved, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
+    await fs.promises.rm(resolved, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   }
 });

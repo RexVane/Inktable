@@ -83,7 +83,8 @@ test('every page route executes without error and produces full non-empty HTML',
 
     eval(app);
     await new Promise(r => setTimeout(r, 10));
-    assert.ok(htmlOutput.length > 500, `Page ${page} failed to render or returned empty content (${htmlOutput.length} chars)`);
+    assert.match(htmlOutput, /正在连接 Ordo|无法连接 Ordo 服务/, `Page ${page} must show connection state without a backend`);
+    assert.doesNotMatch(htmlOutput, /页面加载出错|演示模式|用户手册_产品A/);
   }
 });
 
@@ -119,4 +120,3 @@ test('all P1, P2 and P3 wired endpoints, handlers and security contracts are ver
   assert.match(app, /handleApplyRerankThreshold/);
   assert.match(app, /openRerankCompareModal/);
 });
-
