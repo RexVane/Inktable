@@ -5,21 +5,23 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 // Execute the actual page and inline handlers with a small DOM surface and a real API client.
-async function createWorkbench(client) {
+async function createWorkbench(client, { origin = 'http://127.0.0.1:8790' } = {}) {
   const elements = new Map();
   const errors = [];
+  const clipboard = [];
   const listeners = new Map();
   const element = id => {
     if (!elements.has(id)) elements.set(id, {
       innerHTML: '', textContent: '', value: '', style: {}, dataset: {},
       classList: { add() {}, remove() {}, toggle() {} },
-      appendChild() {}, remove() {}, focus() {}, setAttribute() {}, addEventListener() {}
+      appendChild() {}, remove() {}, focus() {}, setAttribute() {}, addEventListener() {},
+      querySelectorAll: () => [], querySelector: () => null
     });
     return elements.get(id);
   };
   const context = vm.createContext({
     OrdoApi: { createClient: () => client },
-    location: { hash: '#/home', origin: 'http://127.0.0.1:8790' },
+    location: { hash: '#/home', origin },
     addEventListener: (name, fn) => listeners.set(name, fn),
     document: {
       getElementById: element, querySelectorAll: () => [], querySelector: () => null,
@@ -28,7 +30,7 @@ async function createWorkbench(client) {
       body: { appendChild() {}, classList: { add() {}, remove() {} } }
     },
     localStorage: { getItem: () => null, setItem() {} },
-    navigator: { clipboard: { writeText: async () => {} } },
+    navigator: { clipboard: { writeText: async value => { clipboard.push(value); } } },
     console: { ...console, error: (...args) => errors.push(args.map(String).join(' ')) },
     confirm: () => true, prompt: () => null, alert() {},
     setTimeout: (fn, ms) => { const timer = setTimeout(fn, ms); timer.unref(); return timer; },
@@ -39,7 +41,7 @@ async function createWorkbench(client) {
   for (let i = 0; i < 500 && context.ordoState.bootstrapping; i++) await new Promise(resolve => setTimeout(resolve, 10));
   if (context.ordoState.bootstrapping || !context.ordoApi.connected) throw new Error('Workbench bootstrap failed: ' + context.ordoState.connectionError);
   return {
-    context, element, errors,
+    context, element, errors, clipboard,
     async page(route) { context.location.hash = '#/' + route; await context.render(); return element('body').innerHTML; },
     async inline(code) { return vm.runInContext(code, context); }
   };

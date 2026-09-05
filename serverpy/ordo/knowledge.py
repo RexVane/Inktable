@@ -195,18 +195,27 @@ class KnowledgeService(KnowledgeWorkbench):
 
     def update_dataset(self, dataset_id, input, workspace_id, request_id=None):
         current = self.ensure_dataset(dataset_id, workspace_id)
-        values = (input.get('name', current['name']), input.get('description', current['description']), input.get('language', current['language']), json.dumps(input.get('labels', current.get('labels', [])), ensure_ascii=False), input.get('status', current['status']))
+        if 'name' in input and not isinstance(input['name'], str):
+            raise AppError(400, 'VALIDATION_ERROR', 'name 必须为非空字符串', {'field': 'name'})
+        name = required(input['name'], 'name') if 'name' in input else current['name']
+        values = (name, input.get('description', current['description']), input.get('language', current['language']), json.dumps(input.get('labels', current.get('labels', [])), ensure_ascii=False), input.get('status', current['status']))
         if values[4] not in ('active', 'archived'): raise AppError(400, 'VALIDATION_ERROR', '数据集状态无效')
-        self.db.run('UPDATE datasets SET name=?,description=?,language=?,labels_json=?,status=?,updated_at=? WHERE id=? AND workspace_id=?', *values, now(), dataset_id, workspace_id)
+        try:
+            self.db.run('UPDATE datasets SET name=?,description=?,language=?,labels_json=?,status=?,updated_at=? WHERE id=? AND workspace_id=?', *values, now(), dataset_id, workspace_id)
+        except Exception as error:
+            if 'UNIQUE constraint failed' in str(error):
+                raise AppError(409, 'NAME_CONFLICT', '同名数据集已存在')
+            raise
         self.audit.append(workspace_id=workspace_id, action='dataset.update', object_type='dataset', object_id=dataset_id, request_id=request_id, details={'changed': list(input)})
         return self.get_dataset(dataset_id, workspace_id)
 
     def delete_dataset(self, dataset_id, workspace_id, request_id=None):
-        current = self.ensure_dataset(dataset_id, workspace_id)
-        dependencies = self.db.one('SELECT (SELECT COUNT(*) FROM assistants WHERE dataset_id=? AND workspace_id=?) assistants, (SELECT COUNT(*) FROM conversations WHERE dataset_id=? AND workspace_id=? AND deleted_at IS NULL) conversations, (SELECT COUNT(*) FROM knowledge_releases WHERE dataset_id=? AND workspace_id=?) releases', dataset_id, workspace_id, dataset_id, workspace_id, dataset_id, workspace_id)
+        self.ensure_dataset(dataset_id, workspace_id)
+        dependencies = self.db.one("SELECT (SELECT COUNT(*) FROM assistants WHERE dataset_id=? AND workspace_id=? AND status!='deleted') assistants, (SELECT COUNT(*) FROM conversations WHERE dataset_id=? AND workspace_id=? AND deleted_at IS NULL) conversations, (SELECT COUNT(*) FROM knowledge_releases WHERE dataset_id=? AND workspace_id=?) releases", dataset_id, workspace_id, dataset_id, workspace_id, dataset_id, workspace_id)
         if dependencies['assistants'] or dependencies['conversations']: raise AppError(409, 'DEPENDENCY_CONFLICT', '数据集仍被助手或会话引用，不能删除', dependencies)
         timestamp = now()
         self.db.transaction(lambda: (self.db.run("UPDATE datasets SET status='deleted',deleted_at=?,updated_at=? WHERE id=? AND workspace_id=?", timestamp, timestamp, dataset_id, workspace_id), self.db.run("UPDATE sources SET deleted_at=?,updated_at=? WHERE dataset_id=? AND workspace_id=? AND deleted_at IS NULL", timestamp, timestamp, dataset_id, workspace_id)))
+        self.audit.append(workspace_id=workspace_id, action='dataset.delete', object_type='dataset', object_id=dataset_id, request_id=request_id, details=dependencies)
         return {'deleted': True, 'datasetId': dataset_id, 'dependencies': dependencies}
 
     def list_sources(self, dataset_id, workspace_id):

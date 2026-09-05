@@ -364,7 +364,24 @@ class ModelService:
         else:
             body = {'model': record['model_id'], 'stream': is_stream, 'temperature': temperature, 'messages': messages}
             endpoint = f"{record['base_url']}/chat/completions"
-        content, completed = '', False
+        content, completed, usage, finish_reason = '', False, None, None
+
+        def record_metadata(payload):
+            nonlocal usage, finish_reason
+            if record['provider'] == 'ollama':
+                prompt_tokens, completion_tokens = payload.get('prompt_eval_count'), payload.get('eval_count')
+                if prompt_tokens is not None or completion_tokens is not None:
+                    usage = {'prompt_tokens': prompt_tokens, 'completion_tokens': completion_tokens,
+                             'total_tokens': prompt_tokens + completion_tokens if prompt_tokens is not None and completion_tokens is not None else None}
+                if payload.get('done_reason') is not None:
+                    finish_reason = payload['done_reason']
+            else:
+                if isinstance(payload.get('usage'), dict):
+                    usage = payload['usage']
+                choice = (payload.get('choices') or [{}])[0]
+                if choice.get('finish_reason') is not None:
+                    finish_reason = choice['finish_reason']
+
         def receive_line(line):
             nonlocal content, completed
             trimmed = line.strip()
@@ -383,6 +400,7 @@ class ModelService:
                 raise AppError(502, 'MODEL_RESPONSE_INVALID', '模型事件流包含无效 JSON') from error
             if event.get('error'):
                 raise AppError(502, 'MODEL_GENERATION_FAILED', '模型事件流返回错误')
+            record_metadata(event)
             if record['provider'] == 'ollama':
                 delta = (event.get('message') or {}).get('content') or ''
                 completed = completed or bool(event.get('done'))
@@ -402,6 +420,7 @@ class ModelService:
             raise AppError(502, 'MODEL_STREAM_INCOMPLETE', '模型事件流未正常结束')
         if not is_stream:
             payload = response.json()
+            record_metadata(payload)
             content = (payload.get('message') or {}).get('content') if record['provider'] == 'ollama' else (((payload.get('choices') or [{}])[0]).get('message') or {}).get('content')
         if not content:
             raise AppError(502, 'MODEL_RESPONSE_INVALID', '模型响应缺少回答内容')
@@ -409,7 +428,7 @@ class ModelService:
         if any(index < 1 or index > len(evidence) for index in cited):
             raise AppError(502, 'CITATION_INVALID', '模型返回了无效引用编号')
         return {'content': str(content), 'citationOrdinals': sorted(set(cited)), 'provider': record['provider'],
-                'modelId': record['model_id'], 'usage': None}
+                'modelId': record['model_id'], 'usage': usage, 'finishReason': finish_reason}
 
 
 def build_prompt(question, evidence, strict_evidence=True, history=None, config=None):

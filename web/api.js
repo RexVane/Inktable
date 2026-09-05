@@ -95,6 +95,7 @@
     getConversations: ['GET', '/conversations'],
     createConversation: ['POST', '/conversations'],
     getConversation: ['GET', '/conversations/:conversationId'],
+    updateConversation: ['PATCH', '/conversations/:conversationId'],
     deleteConversation: ['DELETE', '/conversations/:conversationId'],
     sendMessage: ['POST', '/conversations/:conversationId/messages'],
     sendFeedback: ['POST', '/messages/:messageId/feedback'],

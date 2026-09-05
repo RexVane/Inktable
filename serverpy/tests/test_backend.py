@@ -25,7 +25,7 @@ async def test_contract_and_auth(api):
     for name, operation in catalog.items():
         route = re.sub(r':(\w+)', r'{\1}', operation['path'])
         assert spec['paths'][route][operation['method'].lower()]['operationId'] == name
-    assert len(catalog) == 224
+    assert len(catalog) == 225
     response = await client.post('/api/v1/knowledge-bases', json={'name': 'x'}, headers={'x-ordo-csrf': 'wrong'})
     assert response.status_code == 403 and response.json()['error']['code'] == 'CSRF_INVALID'
     response = await client.post('/api/v1/knowledge-bases', json=[])

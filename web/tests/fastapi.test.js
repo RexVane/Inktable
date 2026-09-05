@@ -11,6 +11,14 @@ const { once } = require('node:events');
 const { createClient, operations } = require('../api');
 const { createWorkbench } = require('./helpers/workbench');
 
+const pageIds = [
+  'home', 'knowledge/config', 'knowledge/datasets', 'knowledge/registry', 'knowledge/parsing', 'knowledge/index',
+  'qaflow/parse', 'qaflow/embed', 'qaflow/route', 'qaflow/recall', 'qaflow/fuse', 'qaflow/rerank', 'qaflow/prompt', 'qaflow/answer',
+  'apps/chat', 'apps/assistants', 'settings/general', 'settings/models', 'settings/storage', 'settings/version'
+];
+const sampleContent = /用户手册_产品A|ds-demo-|产品使用文档 \(演示\)|如何为企业网站安装产品问答助手|获取安装代码|产品问答助手_安装指南/;
+const escapeHtml = value => String(value).replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
+
 test('unchanged browser client talks to the real Python/FastAPI HTTP service', { timeout: 60000 }, async () => {
   const root = path.resolve(__dirname, '../..');
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ordo-fastapi-'));
@@ -39,7 +47,13 @@ test('unchanged browser client talks to the real Python/FastAPI HTTP service', {
     }
     assert.ok(ready, output);
     let cookie = '';
+    let unavailablePath = null;
     const client = createClient({ baseUrl: origin, throwOnError: true, fetch: async (url, options = {}) => {
+      if (new URL(url).pathname === unavailablePath) {
+        return new Response(JSON.stringify({ error: { code: 'STAGE_TEST_UNAVAILABLE', message: 'Stage record temporarily unavailable' } }), {
+          status: 503, headers: { 'Content-Type': 'application/json' }
+        });
+      }
       const headers = new Headers(options.headers);
       if (cookie && options.credentials !== 'omit') headers.set('cookie', cookie);
       const response = await fetch(url, { ...options, headers });
@@ -57,27 +71,34 @@ test('unchanged browser client talks to the real Python/FastAPI HTTP service', {
     }
     const kb = await client.createKnowledgeBase({ name: 'Browser HTTP integration' });
     const dataset = kb.default_dataset_id;
-    const workbench = await createWorkbench(client);
-    for (const route of ['knowledge/datasets', 'knowledge/registry', 'knowledge/parsing', 'apps/chat', 'apps/assistants', 'settings/models']) {
+    const workbench = await createWorkbench(client, { origin });
+    for (const route of pageIds) {
       const html = await workbench.page(route);
-      assert.doesNotMatch(html, /页面加载出错|用户手册_产品A|ds-demo-|产品使用文档 \(演示\)/, route);
+      assert.doesNotMatch(html, /页面加载出错/, route + ': ' + workbench.errors.join('\n'));
+      assert.doesNotMatch(html, sampleContent, route);
       assert.ok(html.length > 500, route);
     }
-    const uploaded = await client.uploadDocument(dataset, new File(['# Guide\n\nOrdo runs on Python FastAPI.\n\n## Usage\n\nUpload documents and activate a knowledge release.'], 'guide.md', { type: 'text/markdown' }));
+    const documentName = 'boreal-calibration.md';
+    const documentText = '# Boreal-17 calibration record\n\nBoreal-17 calibration interval is 47 hours. Calibration code is CAL-9472.\n\n## Quarantine threshold\n\nThe Boreal-17 sensor tolerance is 0.42 kelvin. A reading beyond that tolerance requires quarantine review under ticket QA-284.';
+    const firstQuestion = 'What is the Boreal-17 calibration interval?';
+    const secondQuestion = 'Which Boreal-17 sensor tolerance requires quarantine?';
+    const uploaded = await client.uploadDocument(dataset, new File([documentText], documentName, { type: 'text/markdown' }));
     assert.equal((await client.waitTask(uploaded.task.id, 30000)).status, 'succeeded');
     const build = await client.buildRelease(dataset, { activate: true });
     assert.equal((await client.waitTask(build.id, 30000)).status, 'succeeded');
     const conversation = await client.createConversation('Browser test', kb.id, dataset);
     const events = [];
-    const answer = await client.sendMessageStream(conversation.id, 'What runs Ordo?', (name, value) => events.push({ name, value }));
+    const answer = await client.sendMessageStream(conversation.id, firstQuestion, (name, value) => events.push({ name, value }));
     assert.ok(answer.assistantMessage.citations.length);
     assert.ok(events.some(event => event.name === 'token'));
     assert.equal(events.filter(event => event.name === 'done').length, 1);
     await client.openCitation(answer.assistantMessage.citations[0].id);
     workbench.context.ordoState.activeTraceId = answer.trace.id;
-    for (const route of ['knowledge/datasets', 'knowledge/registry', 'knowledge/parsing', 'knowledge/index', 'qaflow/parse', 'qaflow/embed', 'qaflow/route', 'qaflow/recall', 'qaflow/fuse', 'qaflow/rerank', 'qaflow/prompt', 'qaflow/answer']) {
+    for (const route of pageIds) {
       const html = await workbench.page(route);
       assert.doesNotMatch(html, /页面加载出错/, route + ': ' + workbench.errors.join('\n'));
+      assert.doesNotMatch(html, sampleContent, route);
+      assert.ok(html.length > 500, route);
     }
     await workbench.context.handleSwitchConversation(conversation.id);
     assert.equal(workbench.context.ordoState.chatMessages.at(-1).citations[0].citationId, answer.assistantMessage.citations[0].id);
@@ -89,7 +110,7 @@ test('unchanged browser client talks to the real Python/FastAPI HTTP service', {
     await workbench.context.handleSelectDatasetFolder(folder.id);
     const folderFiles = await client.getDatasetFiles(dataset, { folderId: folder.id });
     assert.equal(folderFiles.length, 1, JSON.stringify(folderFiles));
-    assert.match(workbench.element('body').innerHTML, /guide\.md/, JSON.stringify({ dataset, folder, selected: workbench.context.ordoState.selectedDatasetId, selectedFolder: workbench.context.ordoState.selectedFolder, query: workbench.context.ordoState.datasetSearchQuery }));
+    assert.ok(workbench.element('body').innerHTML.includes(documentName), JSON.stringify({ dataset, folder, selected: workbench.context.ordoState.selectedDatasetId, selectedFolder: workbench.context.ordoState.selectedFolder, query: workbench.context.ordoState.datasetSearchQuery }));
     assert.match(workbench.element('body').innerHTML, /共 1 条文档/);
     await workbench.context.toggleAutoParsing(false);
     assert.equal((await client.getParsingSettings()).autoParsingEnabled, false);

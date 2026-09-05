@@ -52,6 +52,7 @@ def bindings():
     bind('graph', {'createGraphEntity': 'create_entity', 'createGraphRelation': 'create_relation'}, ['datasetId', 'body', 'ws', 'rid'])
     bind('query', {'getConversation': 'get_conversation'}, ['conversationId', 'ws'])
     bind('query', {'createConversation': 'create_conversation'}, ['body', 'ws', 'rid'])
+    bind('query', {'updateConversation': 'update_conversation'}, ['conversationId', 'body', 'ws', 'rid'])
     bind('query', {'deleteConversation': 'delete_conversation'}, ['conversationId', 'ws', 'rid'])
     bind('query', {'sendFeedback': 'feedback'}, ['messageId', 'body', 'ws', 'rid'])
     bind('query', {'openCitation': 'open_citation'}, ['citationId', 'ws'])

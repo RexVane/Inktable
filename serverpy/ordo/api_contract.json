@@ -339,6 +339,10 @@
     "method": "GET",
     "path": "/api/v1/conversations/:conversationId"
   },
+  "updateConversation": {
+    "method": "PATCH",
+    "path": "/api/v1/conversations/:conversationId"
+  },
   "deleteConversation": {
     "method": "DELETE",
     "path": "/api/v1/conversations/:conversationId"

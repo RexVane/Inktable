@@ -1,8 +1,9 @@
 import asyncio
+import math
 import re
 import time
 
-from .core import AppError, gen_id, hash_bytes, now, parse_json, required, stable_json
+from .core import AppError, bounded_int, gen_id, hash_bytes, now, parse_json, required, stable_json
 from .models import format_locator, local_evidence_answer, build_prompt
 from .knowledge import local_embedding
 
@@ -109,6 +110,20 @@ class QueryService:
         conversation['messages'] = messages
         return conversation
 
+    def update_conversation(self, conversation_id, input, workspace_id=None, request_id=None):
+        workspace_id = workspace_id or self.config['localWorkspaceId']
+        self.get_conversation(conversation_id, workspace_id)
+        if set(input) - {'title'}:
+            raise AppError(400, 'VALIDATION_ERROR', '会话重命名只允许修改 title')
+        if not isinstance(input.get('title'), str):
+            raise AppError(400, 'VALIDATION_ERROR', 'title 必须为非空字符串', {'field': 'title'})
+        title = required(input['title'], 'title')
+        self.db.run('UPDATE conversations SET title=?,updated_at=? WHERE id=? AND workspace_id=? AND deleted_at IS NULL',
+                    title, now(), conversation_id, workspace_id)
+        self.audit.append(workspace_id=workspace_id, action='conversation.update', object_type='conversation',
+                          object_id=conversation_id, request_id=request_id, details={'changed': ['title']})
+        return self.get_conversation(conversation_id, workspace_id)
+
     def delete_conversation(self, conversation_id, workspace_id=None, request_id=None):
         workspace_id = workspace_id or self.config['localWorkspaceId']
         self.get_conversation(conversation_id, workspace_id)
@@ -134,7 +149,18 @@ class QueryService:
             conversation['model_connection_id'] = metadata_config['modelConnectionId']
         if metadata_config.get('strictEvidence') is not None:
             conversation['strict_evidence'] = 1 if metadata_config['strictEvidence'] else 0
+        permission_scope = {'workspaceId': workspace_id, 'conversationId': conversation_id,
+                            'datasetId': conversation['dataset_id'], 'releaseId': conversation['release_id']}
+        for key, expected in permission_scope.items():
+            recorded_scope = (trace_metadata.get('permissionSnapshot') or {}).get(key)
+            if recorded_scope is not None and recorded_scope != expected:
+                raise AppError(400, 'SCOPE_MISMATCH', '重放会话与原 Trace 的权限范围不一致')
+        parse_config = stage_overrides.get('parse') or {}
+        for key, value in (parse_config.get('filters') or {}).items():
+            if key in permission_scope and value != permission_scope[key]:
+                raise AppError(400, 'SCOPE_MISMATCH', '解析配置不能扩大 Trace 的权限范围')
         question = required(input.get('question') if input.get('question') is not None else input.get('query'), 'question')
+        history = trace_metadata.get('history', [{'role': m['role'], 'content': m['content']} for m in (conversation.get('messages') or []) if m['role'] in ('user', 'assistant')][-6:])
         user_message_id = gen_id('msg')
         trace_id = gen_id('trace')
         started = time.monotonic()
@@ -148,17 +174,26 @@ class QueryService:
 
         stage_start = time.monotonic()
         query_plan = parse_question(question, conversation)
-        query_plan.update(stage_overrides.get('parse') or {})
+        filters = {**query_plan['filters'], **(parse_config.get('filters') or {})}
+        query_plan.update(parse_config)
+        query_plan.update(original=question, filters=filters, inputHistory=history,
+                          contextMessages=[*history, {'role': 'user', 'content': question}], contextSource='recorded')
         stage('问题解析', stage_start, 'succeeded', query_plan)
 
         stage_start = time.monotonic()
-        embedding_summary = {'provider': 'local-hash-v1', 'model': 'ordo-hash-embedding-v1', 'dimensions': 128,
-                             'inputHash': hash_bytes(question.encode('utf-8')), 'degraded': False, 'vector': local_embedding(question)}
+        query_vector = local_embedding(question)
+        embedding_summary = {'provider': 'local-hash-v1', 'model': 'ordo-hash-embedding-v1', 'dimensions': len(query_vector),
+                             'inputHash': hash_bytes(question.encode('utf-8')), 'degraded': False, 'vector': query_vector,
+                             'norm': math.sqrt(sum(item * item for item in query_vector)),
+                             'cacheHit': False, 'cacheStatus': 'disabled'}
         stage('问题向量化', stage_start, 'succeeded', embedding_summary)
 
         stage_start = time.monotonic()
         route = route_query(question)
         route.update(stage_overrides.get('route') or {})
+        enabled_routes = [item['name'] for item in route['routes'] if item.get('enabled')]
+        route.update(permissionScope=permission_scope,
+                     retrievalStrategy='hybrid' if len(enabled_routes) > 1 else enabled_routes[0] if enabled_routes else 'none')
         stage('检索路由', stage_start, 'succeeded', route)
 
         stage_start = time.monotonic()
@@ -169,16 +204,18 @@ class QueryService:
             return {'chunkRevisionId': item['chunkRevisionId'], 'documentId': item['documentId'],
                     'documentRevisionId': item['documentRevisionId'], 'title': item['title'], 'content': item['content'],
                     'locator': item.get('locator'), 'rank': item.get('rank'), 'score': item.get('fusionScore'),
+                    'fusionScore': item.get('fusionScore'), 'releaseId': conversation['release_id'],
                     'vectorRank': item.get('vectorRank'), 'vectorScore': item.get('vectorScore'),
                     'fullTextRank': item.get('fullTextRank'), 'fullTextScore': item.get('fullTextScore'),
                     'rerankScore': item.get('rerankScore')}
 
         retrieval_output = {
             'routes': retrieval['routes'], 'candidateCount': len(candidates),
+            'candidateScope': 'returned_results', 'recallCoverage': 'returned_results_only',
             'vector': [dict(candidate_summary(item), rank=item['vectorRank'], score=item['vectorScore'])
-                       for item in candidates if item.get('vectorRank') is not None],
+                       for item in sorted(candidates, key=lambda item: item.get('vectorRank') or float('inf')) if item.get('vectorRank') is not None],
             'fullText': [dict(candidate_summary(item), rank=item['fullTextRank'], score=item['fullTextScore'])
-                         for item in candidates if item.get('fullTextRank') is not None],
+                         for item in sorted(candidates, key=lambda item: item.get('fullTextRank') or float('inf')) if item.get('fullTextRank') is not None],
             'fusion': [candidate_summary(item) for item in candidates],
         }
         stage('多路召回', stage_start, 'succeeded', retrieval_output)
@@ -188,8 +225,8 @@ class QueryService:
             'method': (retrieval.get('routes') or {}).get('fusion', {}).get('method', 'rrf'),
             'k': (retrieval.get('routes') or {}).get('fusion', {}).get('k', 60),
             'weights': (retrieval.get('routes') or {}).get('fusion', {}).get('weights', {'denseWeight': 1, 'sparseWeight': 1}),
-            'candidateCount': len(candidates), 'rawCandidateCount': len(retrieval_output['vector']) + len(retrieval_output['fullText']),
-            'deduplicatedCount': len(candidates), 'permissionFilteredCount': len(candidates),
+            'candidateCount': len(candidates), 'rawCandidateCount': None,
+            'deduplicatedCount': len(candidates), 'permissionFilteredCount': None, 'candidateScope': 'returned_results',
             'vector': retrieval_output['vector'], 'fullText': retrieval_output['fullText'], 'candidates': retrieval_output['fusion'],
         })
 
@@ -205,17 +242,24 @@ class QueryService:
         selected_ids = {item['chunkRevisionId'] for item in selected}
         stage('重排', stage_start, 'succeeded', {
             'provider': 'local-lexical-v1', 'threshold': rerank_config.get('threshold', 0.35), 'inputCount': len(candidates), 'selectedCount': len(selected),
+            'selectionPolicy': {'method': 'rerank_threshold', 'threshold': threshold,
+                                'topK': int(rerank_config.get('topK', rerank_config.get('topN', 6)))} if rerank_config else {
+                                    'method': 'evidence_signal', 'topK': 6, 'operator': 'or',
+                                    'thresholds': {'rerankScore': 0, 'fullTextScore': 0, 'vectorScore': 0.35}},
             'selected': [dict(candidate_summary(item), rank=item['rank'], score=item['rerankScore']) for item in selected],
             'rejected': [dict(candidate_summary(item), reason='未达到保留阈值') for item in candidates if item['chunkRevisionId'] not in selected_ids],
         })
 
         evidence_status = 'sufficient' if selected else 'insufficient'
         stage_start = time.monotonic()
+        prompt_config = stage_overrides.get('prompt') or {}
+        recorded_evidence = [dict(candidate_summary(item), ordinal=index) for index, item in enumerate(selected, 1)]
         prompt_summary = {'templateVersion': 'strict-evidence-v1', 'strictEvidence': bool(conversation['strict_evidence']),
-                          'evidenceCount': len(selected), 'maxEvidenceChars': 12000,
+                          'evidenceCount': len(selected), 'evidence': recorded_evidence,
+                          'historyCount': sum(turn.get('role') in ('user', 'assistant') for turn in (history or [])[-6:]),
+                          'maxEvidenceChars': max(100, min(100000, int(prompt_config.get('maxEvidenceChars') or 12000))),
                           'security': {'evidenceTreatedAsUntrusted': True, 'hiddenReasoningStored': False, 'secretsIncluded': False}}
-        history = trace_metadata.get('history', [{'role': m['role'], 'content': m['content']} for m in (conversation.get('messages') or []) if m['role'] in ('user', 'assistant')][-6:])
-        prompt_summary['messages'] = build_prompt(question, selected, bool(conversation['strict_evidence']), history, stage_overrides.get('prompt'))
+        prompt_summary['messages'] = build_prompt(question, selected, bool(conversation['strict_evidence']), history, prompt_config)
         stage('构建提示词', stage_start, 'succeeded', prompt_summary)
 
         stage_start = time.monotonic()
@@ -258,7 +302,12 @@ class QueryService:
         stage('回答生成', stage_start, 'degraded' if degraded else 'succeeded', {
             'provider': generated.get('provider'), 'modelId': generated.get('modelId'), 'evidenceStatus': evidence_status,
             'citationCount': len(valid_ordinals), 'degraded': degraded,
-            'degradationReason': generated.get('degradationReason'), 'usage': generated.get('usage')})
+            'degradationReason': generated.get('degradationReason'), 'usage': generated.get('usage'),
+            'usageStatus': 'recorded' if generated.get('usage') is not None else 'not_applicable' if generated.get('provider') == 'local-extractive' else 'unrecorded',
+            'messages': prompt_summary['messages'], 'evidence': recorded_evidence,
+            'answer': generated['content'], 'citationOrdinals': valid_ordinals,
+            'finishReason': generated.get('finishReason'),
+            'promptUsedByProvider': generated.get('provider') != 'local-extractive'})
 
         assistant_message_id = gen_id('msg')
         finished = now()
@@ -361,7 +410,29 @@ class QueryService:
         unknown = [key for key in overrides if key not in allowed]
         if unknown:
             raise AppError(400, 'VALIDATION_ERROR', 'replay overrides 包含不支持的字段', {'fields': unknown})
-        replay_input = {'question': overrides.get('question', overrides.get('query', source['query']))}
+        requested_stages = overrides.get('stageOverrides') or {}
+        if not isinstance(requested_stages, dict) or any(not isinstance(value, dict) for value in requested_stages.values()):
+            raise AppError(400, 'VALIDATION_ERROR', 'stageOverrides 必须包含阶段配置对象')
+        stage_overrides = dict((source['config_snapshot'] or {}).get('stageOverrides') or {})
+        for key, config in requested_stages.items():
+            stage_overrides[key] = {**(stage_overrides.get(key) or {}), **config}
+        parse_config = stage_overrides.get('parse') or {}
+        if not isinstance(parse_config.get('filters') or {}, dict):
+            raise AppError(400, 'VALIDATION_ERROR', 'filters 必须是对象')
+        for channel in (stage_overrides.get('route') or {}).get('routes', []):
+            if channel.get('enabled') and channel.get('name') not in ('vector', 'full_text', 'fullText'):
+                raise AppError(422, 'RETRIEVAL_PROVIDER_UNAVAILABLE', '该通道未配置问答检索 Provider')
+        rerank = stage_overrides.get('rerank') or {}
+        if rerank.get('provider', rerank.get('model', 'local-lexical-v1')) not in ('local-lexical-v1', 'ordo-local-lexical-v1'):
+            raise AppError(422, 'RERANK_PROVIDER_UNAVAILABLE', '当前仅配置本地词项重排 Provider')
+        for key in ('topK', 'topN'):
+            if key in rerank:
+                rerank[key] = bounded_int(rerank[key], 6, 1, 50, key)
+        if 'threshold' in rerank and (not isinstance(rerank['threshold'], (int, float)) or not 0 <= rerank['threshold'] <= 1):
+            raise AppError(400, 'VALIDATION_ERROR', '重排阈值必须在 0 到 1 之间')
+        replay_question = (parse_config.get('rewrittenQuery') or parse_config.get('rewritten') or parse_config.get('normalizedQuery')
+                           or parse_config.get('normalized') or parse_config.get('query') or source['query'])
+        replay_input = {'question': overrides.get('question', overrides.get('query', replay_question))}
         if 'topK' in overrides:
             replay_input['topK'] = overrides['topK']
         if 'modelConnectionId' in overrides:
@@ -381,7 +452,7 @@ class QueryService:
                         'assistantMessage': self.db.one('SELECT * FROM messages WHERE id=? AND workspace_id=?', existing_trace['message_id'], workspace_id) if existing_trace.get('message_id') else None,
                         'replayed': False, 'idempotent': True}
         config_snapshot = {
-            'stageOverrides': overrides.get('stageOverrides') or (source['config_snapshot'] or {}).get('stageOverrides') or {},
+            'stageOverrides': stage_overrides,
             'modelConnectionId': overrides.get('modelConnectionId') if 'modelConnectionId' in overrides else (source['config_snapshot'] or {}).get('modelConnectionId'),
             'strictEvidence': bool(overrides['strictEvidence']) if 'strictEvidence' in overrides else (source['config_snapshot'] or {}).get('strictEvidence', True),
             'topK': overrides.get('topK') if 'topK' in overrides else (source['config_snapshot'] or {}).get('topK', 8),
