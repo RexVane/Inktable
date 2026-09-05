@@ -299,6 +299,7 @@
 
   // Mount core navigation, modals, and toast utilities on window for inline HTML onclick handlers
   window.go = function(page, params = {}) {
+    if (state.chatAbort) { try { state.chatAbort.abort(); } catch (e) {} state.chatAbort = null; }
     const qs = new URLSearchParams(params).toString();
     window.location.hash = '#/' + page + (qs ? '?' + qs : '');
   };
@@ -328,7 +329,7 @@
   }
   window.closeOverlay = function() {
     const overlay = document.getElementById('overlay');
-    if (overlay) overlay.hidden = true;
+    if (overlay) { overlay.hidden = true; overlay.innerHTML = ''; }
   };
   function closeOverlay() {
     window.closeOverlay();
@@ -338,11 +339,6 @@
   };
   function hideOverlay() {
     window.closeOverlay();
-  }
-
-  function go(page, params = {}) {
-    const qs = new URLSearchParams(params).toString();
-    window.location.hash = `#/${page}${qs ? `?${qs}` : ''}`;
   }
 
   window.addEventListener('hashchange', () => {
@@ -358,28 +354,6 @@
     }
     render();
   });
-
-  function showToast(msg, tone = '') {
-    const toast = document.getElementById('toast');
-    if (!toast) return;
-    toast.textContent = msg;
-    toast.className = `toast show ${tone}`;
-    setTimeout(() => { toast.className = 'toast'; }, 3000);
-  }
-
-  function showOverlay(html) {
-    const overlay = document.getElementById('overlay');
-    if (!overlay) return null;
-    overlay.innerHTML = html;
-    overlay.hidden = false;
-    overlay.querySelectorAll('[data-close]').forEach(b => b.onclick = closeOverlay);
-    return overlay;
-  }
-
-  function closeOverlay() {
-    const overlay = document.getElementById('overlay');
-    if (overlay) overlay.hidden = true;
-  }
 
   function getSvgIcon(name) {
     const icons = {
@@ -3004,6 +2978,8 @@ function iconSearch(size = 14) {
   }
 
   
+  // Trace 一经记录即不可变（编辑产生草稿与派生 Trace），详情按 id 缓存避免每次渲染重复拉全量。
+  const qaDetailCache = new Map();
   async function getActiveQATrace() {
     if (!api.connected) {
       state.activeTraceDetail = null;
@@ -3016,7 +2992,12 @@ function iconSearch(size = 14) {
       return { traces, activeTrace: null };
     }
     const id = state.activeTraceId || traces[0].id;
-    const activeTrace = await api.getTrace(id, {}, { throwOnError: true });
+    let activeTrace = qaDetailCache.get(id);
+    if (!activeTrace) {
+      activeTrace = await api.getTrace(id, {}, { throwOnError: true });
+      if (qaDetailCache.size >= 12) qaDetailCache.delete(qaDetailCache.keys().next().value);
+      qaDetailCache.set(id, activeTrace);
+    }
     state.activeTraceId = activeTrace.id;
     state.activeTraceDetail = activeTrace;
     return { traces, activeTrace };
@@ -5225,6 +5206,7 @@ function iconSearch(size = 14) {
     const pendingAnswer = { role: 'assistant', text: '', time: '刚刚', pending: true, citations: [] };
     state.chatMessages.push(pendingUser, pendingAnswer);
     input.value = '';
+    state.chatAbort = new AbortController();
     await render();
     try {
       let conversationId = state.activeConversationId;
@@ -5242,21 +5224,33 @@ function iconSearch(size = 14) {
       const result = await api.sendMessageStream(conversationId, question, (event, data) => {
         if (event === 'token') {
           pendingAnswer.text += data.delta || '';
-          if (state.page === 'apps/chat' && Date.now() - lastRender > 100) {
+          if (state.page === 'apps/chat') {
+            // 流式期间只更新流式气泡文本，不整页重建，保持输入框焦点。
+            const streamText = document.getElementById('chatStreamText');
+            if (streamText) {
+              streamText.innerHTML = esc(pendingAnswer.text).replace(/\n/g, '<br>');
+              const pane = document.getElementById('chatMessagesPane');
+              if (pane) pane.scrollTop = pane.scrollHeight;
+              return;
+            }
+          }
+          if (Date.now() - lastRender > 100) {
             lastRender = Date.now();
             render();
           }
         }
-      }, { throwOnError: true });
+      }, { throwOnError: true, signal: state.chatAbort.signal });
       Object.assign(pendingAnswer, mapChatMessage(result.assistantMessage), { pending: false });
       if (result.userMessage) Object.assign(pendingUser, mapChatMessage(result.userMessage), { pending: false });
       if (result.trace) { state.lastTrace = result.trace; state.activeTraceId = result.trace.id; }
     } catch (error) {
+      if (error?.code === 'REQUEST_ABORTED') return;
       state.chatMessages = state.chatMessages.filter(m => m !== pendingUser && m !== pendingAnswer);
       state.chatInput = question;
       showToast(error.message || '回答生成失败', 'error');
     } finally {
       state.chatLoading = false;
+      state.chatAbort = null;
       await render();
     }
   };
@@ -5427,7 +5421,7 @@ function iconSearch(size = 14) {
 
       <!-- Center: 聊天核心主面板 -->
       <div class="card" style="display:flex;flex-direction:column;height:100%;">
-        <div class="chat-messages-pane" style="flex:1;overflow-y:auto;padding:16px;">
+        <div class="chat-messages-pane" id="chatMessagesPane" style="flex:1;overflow-y:auto;padding:16px;">
           ${state.chatMessages.map((msg, idx) => {
             if (msg.role === 'user') {
               return `
@@ -5450,7 +5444,7 @@ function iconSearch(size = 14) {
                 <div class="chat-msg" style="display:flex;gap:12px;margin-bottom:16px;">
                   <div class="stat-icon" style="width:36px;height:36px;border-radius:50%;background:var(--accent-soft);color:#16a34a;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;">${iconBot(16)}</div>
                   <div class="chat-bubble" style="background:var(--inset);border:1px solid var(--line);padding:12px 16px;border-radius:12px 12px 12px 2px;max-width:85%;font-size:13px;line-height:1.6;color:var(--ink-strong);">
-                    <div>${formattedText}</div>
+                    <div${msg.pending ? ' id="chatStreamText"' : ''}>${formattedText}</div>
                     <div style="font-size:11.5px;color:var(--ink-dim);margin-top:10px;border-top:1px solid var(--line-soft);padding-top:8px;">
                       ${esc(msg.time)} · ${esc(state.selectedChatKb)} ${state.chatReleaseVersion ? 'v' + state.chatReleaseVersion : ''}
                     </div>
