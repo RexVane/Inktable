@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   tests:
-    name: Node 24 · npm test · ${{ matrix.os }}
+    name: Python 3.11 / FastAPI · ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -32,8 +32,13 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Install server dependencies
-        run: npm --prefix server install
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: python -m pip install -r serverpy/requirements.txt
 
       - name: Syntax check
         run: npm run check

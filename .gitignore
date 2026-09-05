@@ -8,6 +8,7 @@ node_modules/
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # 前端构建产物（prestart 会重新生成）
 web/dist/

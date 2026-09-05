@@ -78,7 +78,10 @@ def validate_index_config(config):
     return config
 
 
-class KnowledgeService:
+from .knowledge_workbench import KnowledgeWorkbench
+
+
+class KnowledgeService(KnowledgeWorkbench):
     def __init__(self, db, blob_store, artifact_store, tasks, audit, config):
         self.db, self.blob_store, self.artifact_store = db, blob_store, artifact_store
         self.tasks, self.audit, self.config = tasks, audit, config
@@ -267,7 +270,7 @@ class KnowledgeService:
         self.db.run("UPDATE documents SET status='parsing',updated_at=? WHERE id=?", now(), revision['document_id'])
         await checkpoint(25, '执行格式预检与解析路由')
         try:
-            parsed = parse_document(blob['buffer'], revision['title'])
+            parsed = await self._parse_isolated(blob['buffer'], revision['title'])
         except AppError as error:
             state = 'needs_password' if error.code == 'NEEDS_PASSWORD' else 'unsupported' if error.code == 'UNSUPPORTED_FORMAT' else 'quarantined' if error.code == 'MIME_MISMATCH' else 'failed'
             warning = json.dumps([{'code': error.code or 'PARSE_FAILED', 'message': error.message}], ensure_ascii=False, separators=(',', ':'))
@@ -399,25 +402,6 @@ class KnowledgeService:
         if (self.db.one('SELECT COUNT(*) count FROM knowledge_bases WHERE default_index_profile_id=? AND workspace_id=?', profile_id, workspace_id) or {}).get('count', 0): raise AppError(409, 'INDEX_PROFILE_DEFAULT', '默认索引配置不能删除，请先切换默认配置')
         self.db.run('DELETE FROM index_profiles WHERE id=? AND workspace_id=?', profile_id, workspace_id); return {'deleted': True}
 
-    def get_indexing_stats(self, dataset_id, workspace_id):
-        self.ensure_dataset(dataset_id, workspace_id)
-        total = (self.db.one("SELECT COUNT(*) count FROM chunk_revisions cr JOIN documents d ON d.id=cr.document_id WHERE cr.dataset_id=? AND cr.workspace_id=? AND d.status!='deleted' AND cr.id=(SELECT cr2.id FROM chunk_revisions cr2 WHERE cr2.chunk_logical_id=cr.chunk_logical_id ORDER BY revision_number DESC LIMIT 1)", dataset_id, workspace_id) or {}).get('count', 0)
-        pending = (self.db.one("SELECT COUNT(*) count FROM chunk_revisions cr JOIN documents d ON d.id=cr.document_id WHERE cr.dataset_id=? AND cr.workspace_id=? AND d.status!='deleted' AND cr.warnings_json!='[]' AND cr.id=(SELECT cr2.id FROM chunk_revisions cr2 WHERE cr2.chunk_logical_id=cr.chunk_logical_id ORDER BY revision_number DESC LIMIT 1)", dataset_id, workspace_id) or {}).get('count', 0)
-        active = self.db.one("SELECT id,version,status,created_at FROM knowledge_releases WHERE dataset_id=? AND workspace_id=? AND status='active' ORDER BY version DESC LIMIT 1", dataset_id, workspace_id) or {'id': None, 'version': 0, 'status': 'none', 'created_at': None}
-        return {'totalChunks': total, 'vectorizedChunks': max(0, total - pending), 'pendingChunks': pending, 'disabledChunks': 0, 'activeRelease': {'id': active['id'], 'version': 'v' + str(active['version']), 'status': active['status'], 'createdAt': active['created_at']}}
-
-    def get_indexing_pipeline(self, dataset_id, workspace_id):
-        stats = self.get_indexing_stats(dataset_id, workspace_id); total = stats['totalChunks'] or 1
-        return {'currentStep': 1, 'steps': [{'step': 1, 'name': '切块治理', 'status': 'completed', 'progress': 100, 'completedCount': stats['totalChunks'], 'totalCount': stats['totalChunks']}, {'step': 2, 'name': '向量化计算', 'status': 'processing' if stats['pendingChunks'] else 'completed', 'progress': round(stats['vectorizedChunks'] / total * 100, 1), 'completedCount': stats['vectorizedChunks'], 'totalCount': stats['totalChunks']}, {'step': 3, 'name': '向量索引 (HNSW)', 'status': 'ready', 'progress': 100, 'algorithm': 'HNSW'}, {'step': 4, 'name': '全文索引 (BM25)', 'status': 'ready', 'progress': 100, 'rrfK': 60, 'denseWeight': 0.7, 'sparseWeight': 0.3}]}
-
-    def get_chapters(self, dataset_id, workspace_id):
-        self.ensure_dataset(dataset_id, workspace_id)
-        return [{'documentId': row['id'], 'title': row['title'], 'chapters': []} for row in self.db.all("SELECT id,title FROM documents WHERE dataset_id=? AND workspace_id=? AND status!='deleted' ORDER BY title LIMIT 20", dataset_id, workspace_id)]
-
-    def get_chunk_lineage(self, chunk_id, workspace_id):
-        chunk = self.get_chunk(chunk_id, workspace_id); stats = self.get_indexing_stats(chunk['dataset_id'], workspace_id)
-        return {'node1_chunk': {'id': chunk['id'], 'logicalId': chunk['chunk_logical_id'], 'documentTitle': chunk['document_title'], 'status': 'synced', 'label': '数据块'}, 'node2_vector': {'id': chunk['id'] + '_vec', 'tokenCount': chunk.get('token_count', 0), 'dimensions': 128, 'status': 'synced', 'statusText': '128 维 (已同步)', 'label': '向量记录'}, 'node3_collection': {'name': 'ordo_' + str(stats['activeRelease']['version']), 'vectorCount': stats['vectorizedChunks'], 'status': 'active', 'label': '集合 (Collection)'}, 'node4_index': {'name': 'ordo_hnsw', 'type': 'HNSW', 'status': 'ready', 'label': '向量索引 (HNSW)'}}
-
     def list_releases(self, dataset_id, workspace_id):
         return self.db.all('SELECT * FROM knowledge_releases WHERE dataset_id=? AND workspace_id=? ORDER BY version DESC', dataset_id, workspace_id)
 
@@ -547,11 +531,15 @@ class KnowledgeService:
         count = lambda sql: (self.db.one(sql, release_id, workspace_id) or {}).get('count', 0)
         return {'releaseId': release_id, 'datasetId': release['dataset_id'], 'version': release['version'], 'status': release['status'], 'conversations': count('SELECT COUNT(*) count FROM conversations WHERE release_id=? AND workspace_id=? AND deleted_at IS NULL'), 'traces': count('SELECT COUNT(*) count FROM query_traces WHERE release_id=? AND workspace_id=?'), 'citations': count('SELECT COUNT(*) count FROM citations WHERE release_id=? AND workspace_id=?'), 'assistantReleases': count('SELECT COUNT(*) count FROM assistant_releases WHERE knowledge_release_id=? AND workspace_id=?'), 'active': release['status'] == 'active'}
 
-    def search_release(self, release_id, query, workspace_id, limit=10):
+    def search_release(self, release_id, query, workspace_id, limit=10, overrides=None):
         query = required(query, 'query')
         release = self.get_release(release_id, workspace_id)
         profile = self.get_index_profile(release['index_profile_id'], workspace_id)
-        fusion = profile['config'].get('fusion', {})
+        overrides = overrides or {}
+        fusion = {**profile['config'].get('fusion', {}), **(overrides.get('fusion') or {})}
+        weights = self._projection(release['dataset_id'], 'hybrid', workspace_id) or {'denseWeight': 1, 'sparseWeight': 1}
+        weights = {'denseWeight': fusion.get('denseWeight', fusion.get('vectorWeight', weights['denseWeight'])), 'sparseWeight': fusion.get('sparseWeight', fusion.get('fullTextWeight', weights['sparseWeight']))}
+        channels = {item['name']: item.get('enabled', False) for item in (overrides.get('route') or {}).get('routes', [])}
         fusion_k = max(1, min(1000, int(fusion.get('k', 60))))
         limit = max(1, min(50, int(limit or 10)))
         vector_limit = max(limit * 2, int(fusion.get('vectorTopK', 20)))
@@ -559,18 +547,20 @@ class KnowledgeService:
         rows = self.db.all('SELECT cr.*,d.title document_title FROM release_chunks rc JOIN chunk_revisions cr ON cr.id=rc.chunk_revision_id JOIN documents d ON d.id=cr.document_id WHERE rc.release_id=? AND cr.workspace_id=? ORDER BY rc.ordinal', release_id, workspace_id)
         query_vector = local_embedding(query)
         vector = sorted(({'chunk': row, 'score': cosine(query_vector, parse_json(row.get('embedding_json'), []) or local_embedding(row['content_text']))} for row in rows), key=lambda item: item['score'], reverse=True)[:vector_limit]
+        if not channels.get('vector', True):
+            vector = []
         terms = [term.replace('"', '""') for term in str(query).strip().split() if term]
         full_text = []
-        if terms:
+        if terms and channels.get('full_text', channels.get('fullText', True)):
             try:
                 full_text = self.db.all('''SELECT f.chunk_revision_id,bm25(chunks_fts,2.0,1.5,1.0) rank
                   FROM chunks_fts f JOIN release_chunks rc ON rc.chunk_revision_id=f.chunk_revision_id
-                  WHERE chunks_fts MATCH ? AND rc.release_id=? AND f.workspace_id=? LIMIT ?''', ' OR '.join(f'"{term}"' for term in terms), release_id, workspace_id, full_text_limit)
+                  WHERE chunks_fts MATCH ? AND rc.release_id=? AND f.workspace_id=? ORDER BY rank LIMIT ?''', ' OR '.join(f'"{term}"' for term in terms), release_id, workspace_id, full_text_limit)
             except Exception:
                 full_text = []
         scores = {}
         for rank, item in enumerate(vector, 1):
-            scores[item['chunk']['id']] = {'chunk': item['chunk'], 'vectorScore': item['score'], 'vectorRank': rank, 'fullTextScore': None, 'fullTextRank': None, 'rrf': 1 / (fusion_k + rank)}
+            scores[item['chunk']['id']] = {'chunk': item['chunk'], 'vectorScore': item['score'], 'vectorRank': rank, 'fullTextScore': None, 'fullTextRank': None, 'rrf': weights['denseWeight'] / (fusion_k + rank)}
         by_id = {row['id']: row for row in rows}
         for rank, item in enumerate(full_text, 1):
             chunk = by_id.get(item['chunk_revision_id'])
@@ -578,16 +568,7 @@ class KnowledgeService:
                 continue
             current = scores.setdefault(chunk['id'], {'chunk': chunk, 'vectorScore': None, 'vectorRank': None, 'fullTextScore': None, 'fullTextRank': None, 'rrf': 0})
             current['fullTextRank'], current['fullTextScore'] = rank, round(-float(item['rank']), 6)
-            current['rrf'] += 1 / (fusion_k + rank)
+            current['rrf'] += weights['sparseWeight'] / (fusion_k + rank)
         ranked = sorted(scores.values(), key=lambda item: item['rrf'] + lexical_score(query, item['chunk']['content_text']) * .01, reverse=True)[:limit]
         results = [{'rank': index, 'chunkRevisionId': item['chunk']['id'], 'documentId': item['chunk']['document_id'], 'documentRevisionId': item['chunk']['document_revision_id'], 'title': item['chunk']['document_title'], 'content': item['chunk']['content_text'], 'locator': item['chunk'].get('source_locator'), 'vectorScore': None if item['vectorScore'] is None else round(item['vectorScore'], 6), 'vectorRank': item['vectorRank'], 'fullTextScore': item['fullTextScore'], 'fullTextRank': item['fullTextRank'], 'fusionScore': round(item['rrf'], 8), 'rerankScore': lexical_score(query, item['chunk']['content_text'])} for index, item in enumerate(ranked, 1)]
-        return {'release': release, 'query': query, 'routes': {'vector': True, 'fullText': True, 'fusion': {'method': 'rrf', 'k': fusion_k, 'vectorTopK': vector_limit, 'fullTextTopK': full_text_limit}, 'rerank': 'local-lexical-v1'}, 'results': results}
-
-    def batch_vectorize_pending(self, dataset_id, workspace_id, request_id=None):
-        self.ensure_dataset(dataset_id, workspace_id); self.db.run("UPDATE chunk_revisions SET warnings_json='[]' WHERE dataset_id=? AND workspace_id=?", dataset_id, workspace_id); return {'status': 'success', 'vectorizedCount': 0, 'progress': 100, 'message': '待更新知识块已完成向量计算'}
-
-    def rebuild_hnsw_index(self, dataset_id, workspace_id, request_id=None): self.ensure_dataset(dataset_id, workspace_id); return {'status': 'success', 'latencyMs': 0, 'totalNodes': 0, 'recallRate': 1, 'message': 'HNSW 层次图索引已完成全量重建！'}
-    def optimize_vector_index(self, dataset_id, workspace_id, request_id=None): self.ensure_dataset(dataset_id, workspace_id); return {'status': 'success', 'freedBytes': 0, 'freedMb': 0, 'message': '向量索引碎片已压缩整理完毕！'}
-    def rebuild_bm25_index(self, dataset_id, workspace_id, request_id=None): self.ensure_dataset(dataset_id, workspace_id); return {'status': 'success', 'vocabularyCount': 0, 'indexedChunks': 0, 'message': 'BM25 全文检索索引库已重建完毕！'}
-    def set_hybrid_weights(self, dataset_id, weights, workspace_id, request_id=None):
-        self.ensure_dataset(dataset_id, workspace_id); dense = float(weights.get('denseWeight', 0.7)); sparse = float(weights.get('sparseWeight', 1 - dense)); return {'status': 'success', 'denseWeight': dense, 'sparseWeight': sparse, 'message': f'混合检索融合权重已更新：向量语义 {dense * 100:.0f}% : 关键词精准 {sparse * 100:.0f}%'}
+        return {'release': release, 'query': query, 'routes': {'vector': channels.get('vector', True), 'fullText': channels.get('full_text', channels.get('fullText', True)), 'fusion': {'method': 'rrf', 'k': fusion_k, 'weights': weights, 'vectorTopK': vector_limit, 'fullTextTopK': full_text_limit}, 'rerank': 'local-lexical-v1'}, 'results': results}

@@ -591,6 +591,35 @@ CREATE INDEX idx_query_traces_root ON query_traces(workspace_id,root,created_at)
 ]
 
 
+MIGRATIONS.append({
+    'version': 5, 'name': 'python_workbench_state', 'sql': '''
+CREATE TABLE registered_files (
+ id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+ blob_id TEXT NOT NULL REFERENCES blobs(id), name TEXT NOT NULL, media_type TEXT NOT NULL,
+ status TEXT NOT NULL DEFAULT 'unassigned', source_id TEXT REFERENCES sources(id),
+ document_id TEXT REFERENCES documents(id), created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+) STRICT;
+CREATE TABLE dataset_folders (
+ id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+ dataset_id TEXT NOT NULL REFERENCES datasets(id), parent_id TEXT REFERENCES dataset_folders(id),
+ name TEXT NOT NULL, path TEXT NOT NULL, created_at TEXT NOT NULL,
+ UNIQUE(dataset_id,path)
+) STRICT;
+ALTER TABLE documents ADD COLUMN folder_id TEXT REFERENCES dataset_folders(id);
+CREATE TABLE trace_stage_drafts (
+ id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+ trace_id TEXT NOT NULL REFERENCES query_traces(id), stage TEXT NOT NULL,
+ version INTEGER NOT NULL, config_json TEXT NOT NULL, created_at TEXT NOT NULL,
+ UNIQUE(trace_id,stage,version)
+) STRICT;
+CREATE TABLE index_projections (
+ workspace_id TEXT NOT NULL REFERENCES workspaces(id), dataset_id TEXT NOT NULL REFERENCES datasets(id),
+ kind TEXT NOT NULL, content_json TEXT NOT NULL, updated_at TEXT NOT NULL,
+ PRIMARY KEY(dataset_id,kind)
+) STRICT;
+'''})
+
+
 def assert_fts5_available(connection):
     try:
         connection.execute("CREATE VIRTUAL TABLE temp.__fts5_probe USING fts5(x)")

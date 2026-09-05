@@ -13,15 +13,22 @@ class TaskService:
         self.config = config
         self.handlers = {}
         self.running = set()
+        self._scheduled = {}
+        self._closing = False
+        self.parsing_manual = set()
         self.db.run("UPDATE tasks SET status='queued',progress=0,started_at=NULL,finished_at=NULL,cancel_requested=0,pause_requested=0,error_code=NULL,error_message=NULL,updated_at=? WHERE status='running'", now())
 
     def register(self, task_type, handler):
         self.handlers[task_type] = handler
 
     def _schedule(self, task_id):
+        if self._closing or task_id in self._scheduled:
+            return
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(self.execute(task_id))
+            future = loop.create_task(self.execute(task_id))
+            self._scheduled[task_id] = future
+            future.add_done_callback(lambda _: self._scheduled.pop(task_id, None))
         except RuntimeError:
             # 允许在无事件循环的上下文（如脚本）中排队，下次 resume_queued 兜底
             pass
@@ -65,6 +72,19 @@ class TaskService:
         queued = self.db.one("SELECT * FROM tasks WHERE id=? AND status='queued'", task_id)
         if not queued:
             return
+        if queued['type'] == 'document.parse':
+            while not self._closing:
+                setting = self.db.one("SELECT value_json FROM settings WHERE workspace_id=? AND key='ingestion'", queued['workspace_id'])
+                settings = (setting or {}).get('value') or {}
+                if not settings.get('autoParsingEnabled', True) and queued['workspace_id'] not in self.parsing_manual:
+                    return
+                limit = settings.get('concurrency', 4)
+                active = self.db.one("SELECT COUNT(*) n FROM tasks WHERE workspace_id=? AND type='document.parse' AND status='running'", queued['workspace_id'])['n']
+                if active < limit:
+                    break
+                await asyncio.sleep(0.05)
+            if self._closing:
+                return
         handler = self.handlers.get(queued['type'])
         if not handler:
             return
@@ -143,6 +163,12 @@ class TaskService:
         for task in self.db.all("SELECT id FROM tasks WHERE status='queued' ORDER BY created_at"):
             self._schedule(task['id'])
 
+    async def shutdown(self):
+        self._closing = True
+        # Let isolated parser processes reach their bounded timeout and commit before closing SQLite.
+        if self._scheduled:
+            await asyncio.gather(*list(self._scheduled.values()), return_exceptions=True)
+
     def get(self, task_id, workspace_id=None):
         workspace_id = workspace_id or self.config['localWorkspaceId']
         task = self.db.one('SELECT * FROM tasks WHERE id=? AND workspace_id=?', task_id, workspace_id)
@@ -182,6 +208,10 @@ class TaskService:
 
     def pause(self, task_id, workspace_id):
         task = self.get(task_id, workspace_id)
+        if task['status'] == 'queued':
+            self.db.run("UPDATE tasks SET status='paused',pause_requested=0,updated_at=? WHERE id=? AND workspace_id=? AND status='queued'", now(), task_id, workspace_id)
+            self.event(task_id, workspace_id, 'info', 'paused', '排队中的任务已暂停')
+            return self.get(task_id, workspace_id)
         if task['status'] != 'running':
             raise AppError(409, 'INVALID_STATE', '只有运行中的任务可以暂停')
         result = self.db.run("UPDATE tasks SET pause_requested=1,cancel_requested=0,updated_at=? WHERE id=? AND workspace_id=? AND status='running'", now(), task_id, workspace_id)

@@ -2,10 +2,11 @@ import re
 import time
 
 from .core import AppError, gen_id, hash_bytes, now, parse_json, required, stable_json
-from .models import format_locator, local_evidence_answer
+from .models import format_locator, local_evidence_answer, build_prompt
+from .knowledge import local_embedding
 
 _EVIDENCE_REFUSAL_RE = re.compile(r'(无法回答|不能回答|未找到|没有找到|证据不足|无法确认|无法确定|不知道)')
-_REPLAY_SUPPORTED = {'问题解析', 'question_parse', 'parse', 'start', 'all'}
+_REPLAY_SUPPORTED = {'问题解析', 'question_parse', 'parse', 'start', 'all', 'embed', 'route', 'recall', 'fusion', 'rerank', 'prompt', 'generation', '问题向量化', '检索路由', '多路召回', '结果融合', '重排', '构建提示词', '回答生成'}
 
 
 def parse_question(question, conversation):
@@ -125,6 +126,7 @@ class QueryService:
         if conversation['status'] != 'active':
             raise AppError(409, 'INVALID_STATE', '当前会话不可继续问答')
         metadata_config = trace_metadata.get('configSnapshot') or {}
+        stage_overrides = metadata_config.get('stageOverrides') or {}
         if metadata_config.get('modelConnectionId') is not None:
             self.models.get(metadata_config['modelConnectionId'], workspace_id)
             conversation['model_connection_id'] = metadata_config['modelConnectionId']
@@ -144,19 +146,21 @@ class QueryService:
 
         stage_start = time.monotonic()
         query_plan = parse_question(question, conversation)
+        query_plan.update(stage_overrides.get('parse') or {})
         stage('问题解析', stage_start, 'succeeded', query_plan)
 
         stage_start = time.monotonic()
         embedding_summary = {'provider': 'local-hash-v1', 'model': 'ordo-hash-embedding-v1', 'dimensions': 128,
-                             'inputHash': hash_bytes(question.encode('utf-8')), 'degraded': False}
+                             'inputHash': hash_bytes(question.encode('utf-8')), 'degraded': False, 'vector': local_embedding(question)}
         stage('问题向量化', stage_start, 'succeeded', embedding_summary)
 
         stage_start = time.monotonic()
         route = route_query(question)
+        route.update(stage_overrides.get('route') or {})
         stage('检索路由', stage_start, 'succeeded', route)
 
         stage_start = time.monotonic()
-        retrieval = self.knowledge.search_release(conversation['release_id'], question, workspace_id, input.get('topK') or 8)
+        retrieval = self.knowledge.search_release(conversation['release_id'], question, workspace_id, input.get('topK') or metadata_config.get('topK') or 8, {**stage_overrides, 'route': route})
         candidates = retrieval['results']
 
         def candidate_summary(item):
@@ -181,19 +185,24 @@ class QueryService:
         stage('结果融合', stage_start, 'succeeded', {
             'method': (retrieval.get('routes') or {}).get('fusion', {}).get('method', 'rrf'),
             'k': (retrieval.get('routes') or {}).get('fusion', {}).get('k', 60),
+            'weights': (retrieval.get('routes') or {}).get('fusion', {}).get('weights', {'denseWeight': 1, 'sparseWeight': 1}),
             'candidateCount': len(candidates), 'rawCandidateCount': len(retrieval_output['vector']) + len(retrieval_output['fullText']),
             'deduplicatedCount': len(candidates), 'permissionFilteredCount': len(candidates),
             'vector': retrieval_output['vector'], 'fullText': retrieval_output['fullText'], 'candidates': retrieval_output['fusion'],
         })
 
         stage_start = time.monotonic()
+        rerank_config = stage_overrides.get('rerank') or {}
         selected = [item for item in candidates
                     if (item.get('rerankScore') is not None and item['rerankScore'] > 0)
                     or (item.get('fullTextScore') is not None and item['fullTextScore'] > 0)
                     or (item.get('vectorScore') is not None and item['vectorScore'] > 0.35)][:6]
+        if rerank_config:
+            threshold = float(rerank_config.get('threshold', 0))
+            selected = [item for item in candidates if (item.get('rerankScore') or 0) >= threshold][:int(rerank_config.get('topK', rerank_config.get('topN', 6)))]
         selected_ids = {item['chunkRevisionId'] for item in selected}
         stage('重排', stage_start, 'succeeded', {
-            'provider': 'local-lexical-v1', 'threshold': 0.35, 'inputCount': len(candidates), 'selectedCount': len(selected),
+            'provider': 'local-lexical-v1', 'threshold': rerank_config.get('threshold', 0.35), 'inputCount': len(candidates), 'selectedCount': len(selected),
             'selected': [dict(candidate_summary(item), rank=item['rank'], score=item['rerankScore']) for item in selected],
             'rejected': [dict(candidate_summary(item), reason='未达到保留阈值') for item in candidates if item['chunkRevisionId'] not in selected_ids],
         })
@@ -203,6 +212,8 @@ class QueryService:
         prompt_summary = {'templateVersion': 'strict-evidence-v1', 'strictEvidence': bool(conversation['strict_evidence']),
                           'evidenceCount': len(selected), 'maxEvidenceChars': 12000,
                           'security': {'evidenceTreatedAsUntrusted': True, 'hiddenReasoningStored': False, 'secretsIncluded': False}}
+        history = [{'role': m['role'], 'content': m['content']} for m in (conversation.get('messages') or []) if m['role'] in ('user', 'assistant')][-6:]
+        prompt_summary['messages'] = build_prompt(question, selected, bool(conversation['strict_evidence']), history, stage_overrides.get('prompt'))
         stage('构建提示词', stage_start, 'succeeded', prompt_summary)
 
         stage_start = time.monotonic()
@@ -228,8 +239,11 @@ class QueryService:
                 generated = await self.models.generate(connection_id=conversation.get('model_connection_id'),
                                                        workspace_id=workspace_id, question=question, evidence=selected,
                                                        strict_evidence=strict_evidence, history=history,
+                                                       prompt_config=stage_overrides.get('prompt'),
                                                        on_token=on_model_token if on_event else None)
             except AppError as error:
+                if tokens_streamed:
+                    raise
                 if not selected and getattr(error, 'code', None) != 'FEATURE_DISABLED':
                     raise
                 generated = dict(local_evidence_answer(question, selected))
@@ -326,7 +340,7 @@ class QueryService:
         items = self.db.all(f'SELECT * FROM query_traces WHERE {" AND ".join(clauses)} ORDER BY created_at DESC LIMIT ? OFFSET ?', *params, limit, offset)
         return {'items': items, 'total': total, 'limit': limit, 'offset': offset}
 
-    async def replay_trace(self, trace_id, input=None, workspace_id=None, request_id=None, idempotency_key=None):
+    async def replay_trace(self, trace_id, input=None, workspace_id=None, request_id=None, idempotency_key=None, on_event=None):
         workspace_id = workspace_id or self.config['localWorkspaceId']
         source = self.get_trace(trace_id, workspace_id)
         body = input if isinstance(input, dict) else {}
@@ -335,7 +349,7 @@ class QueryService:
             raise AppError(422, 'REPLAY_UNSUPPORTED', f'不支持从阶段“{from_stage}”重放：当前仅支持从问题解析阶段重新执行完整问答流水线',
                            {'fromStage': from_stage, 'supportedFromStages': sorted(_REPLAY_SUPPORTED)})
         overrides = body.get('overrides') if isinstance(body.get('overrides'), dict) else {}
-        allowed = ('question', 'query', 'topK', 'modelConnectionId', 'strictEvidence')
+        allowed = ('question', 'query', 'topK', 'modelConnectionId', 'strictEvidence', 'stageOverrides')
         unknown = [key for key in overrides if key not in allowed]
         if unknown:
             raise AppError(400, 'VALIDATION_ERROR', 'replay overrides 包含不支持的字段', {'fields': unknown})
@@ -346,7 +360,7 @@ class QueryService:
             replay_input['modelConnectionId'] = overrides['modelConnectionId']
         if 'strictEvidence' in overrides:
             replay_input['strictEvidence'] = overrides['strictEvidence']
-        request_fingerprint = stable_json({'sourceTraceId': trace_id, 'fromStage': from_stage, 'overrides': replay_input})
+        request_fingerprint = stable_json({'sourceTraceId': trace_id, 'fromStage': from_stage, 'overrides': overrides})
         if idempotency_key:
             existing = self.db.one("SELECT * FROM query_traces WHERE workspace_id=? AND trace_type='replay' AND json_extract(input_snapshot,'$.idempotencyKey')=? ORDER BY created_at LIMIT 1",
                                    workspace_id, str(idempotency_key))
@@ -359,11 +373,12 @@ class QueryService:
                         'assistantMessage': self.db.one('SELECT * FROM messages WHERE id=? AND workspace_id=?', existing_trace['message_id'], workspace_id) if existing_trace.get('message_id') else None,
                         'replayed': False, 'idempotent': True}
         config_snapshot = {
+            'stageOverrides': overrides.get('stageOverrides') or (source['config_snapshot'] or {}).get('stageOverrides') or {},
             'modelConnectionId': overrides.get('modelConnectionId') if 'modelConnectionId' in overrides else (source['config_snapshot'] or {}).get('modelConnectionId'),
             'strictEvidence': bool(overrides['strictEvidence']) if 'strictEvidence' in overrides else (source['config_snapshot'] or {}).get('strictEvidence', True),
             'topK': overrides.get('topK') if 'topK' in overrides else (source['config_snapshot'] or {}).get('topK', 8),
         }
-        result = await self.ask(source['conversation_id'], replay_input, workspace_id, request_id, {
+        result = await self.ask_stream(source['conversation_id'], replay_input, workspace_id, request_id, on_event, {
             'parentTraceId': trace_id, 'rootTraceId': source.get('root') or source['id'], 'traceType': 'replay',
             'replayFromStage': from_stage or '问题解析', 'configSnapshot': config_snapshot,
             'inputSnapshot': {'sourceTraceId': trace_id, 'fromStage': from_stage or '问题解析', 'overrides': replay_input,

@@ -17,7 +17,7 @@ def normalize_origin(value):
         raise
     except Exception:
         raise AppError(400, 'ORIGIN_INVALID', '来源 URL 无效')
-    if parsed.scheme not in ('http', 'https') or parsed.username or parsed.password or parsed.path != '/' or parsed.query or parsed.fragment:
+    if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password or parsed.path not in ('', '/') or parsed.query or parsed.fragment:
         raise AppError(400, 'ORIGIN_INVALID', '来源必须是纯 HTTP/HTTPS Origin')
     port = parsed.port
     if (parsed.scheme == 'http' and port == 80) or (parsed.scheme == 'https' and port == 443):
@@ -175,6 +175,7 @@ class WidgetService:
             raise AppError(503, 'ASSISTANT_UNAVAILABLE', '网站助手发布版本不可用')
         expires_at = int(time.time() * 1000) + 15 * 60 * 1000
         payload = {'version': 1, 'assistantId': assistant['id'], 'assistantReleaseId': release['id'],
+                   'clientId': client['client_id'], 'clientVersion': client.get('rotated_at'),
                    'workspaceId': client['workspace_id'], 'origin': client['normalizedOrigin'],
                    'exp': expires_at, 'nonce': _b64url(os.urandom(12))}
         encoded = _b64url(json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
@@ -202,6 +203,10 @@ class WidgetService:
             raise AppError(401, 'WIDGET_TOKEN_EXPIRED', '访客令牌已过期')
         if normalize_origin(origin) != payload['origin']:
             raise AppError(403, 'WIDGET_ORIGIN_REJECTED', '访客令牌与请求来源不匹配')
+        if payload.get('clientId'):
+            client = self.db.one("SELECT * FROM widget_clients WHERE client_id=? AND workspace_id=? AND status='active'", payload['clientId'], payload['workspaceId'])
+            if not client or client.get('rotated_at') != payload.get('clientVersion'):
+                raise AppError(401, 'WIDGET_CLIENT_INVALID', '网站客户端已撤销或密钥已轮换')
         return payload
 
     def create_visitor_session(self, token, origin):
@@ -230,6 +235,9 @@ class WidgetService:
 
     def get_visitor(self, visitor_session_id, origin, token):
         payload = self.verify_token(token, origin)
+        assistant = self.product.get_assistant(payload['assistantId'], payload['workspaceId'])
+        if assistant['status'] != 'published':
+            raise AppError(503, 'ASSISTANT_UNAVAILABLE', '网站助手当前不可用')
         visitor = self.db.one("SELECT * FROM visitor_sessions WHERE id=? AND status='active' AND deleted_at IS NULL", visitor_session_id)
         if (not visitor or visitor['expires_at'] < now() or payload['assistantId'] != visitor['assistant_id']
                 or payload['assistantReleaseId'] != visitor['assistant_release_id'] or normalize_origin(origin) != visitor['origin']):

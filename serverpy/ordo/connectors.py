@@ -170,11 +170,13 @@ class ConnectorService:
         if record['type'] == 'sqlite':
             import sqlite3
             try:
-                connection = sqlite3.connect(f"file:{config['path']}?mode=ro", uri=True, timeout=timeout_ms / 1000)
+                connection = sqlite3.connect(Path(config['path']).as_uri() + '?mode=ro', uri=True, timeout=timeout_ms / 1000)
                 connection.row_factory = sqlite3.Row
                 connection.execute('PRAGMA query_only=ON')
                 connection.execute('PRAGMA trusted_schema=OFF')
                 connection.execute(f'PRAGMA busy_timeout={timeout_ms}')
+                deadline = time.monotonic() + timeout_ms / 1000
+                connection.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 1000)
             except Exception:
                 raise AppError(502, 'CONNECTOR_UNREACHABLE', '无法以只读方式打开 SQLite 数据库')
             try:
@@ -183,17 +185,18 @@ class ConnectorService:
                 connection.close()
         # postgresql
         import psycopg
-        credentials = json.loads(self.secret_store.resolve(record['secret_ref'], workspace_id))
+        credentials = record.get('_credentials') or json.loads(self.secret_store.resolve(record['secret_ref'], workspace_id))
         resolved = await resolve_database_host(config.get('host'), self.config['allowLocalDatabaseHosts'])
         try:
             connection = await psycopg.AsyncConnection.connect(
                 host=resolved['address'], port=config.get('port'), dbname=config.get('database'),
                 user=credentials['username'], password=credentials['password'],
                 sslmode='require' if config.get('ssl') else 'disable',
-                connect_timeout=timeout_ms)
+                connect_timeout=max(1, timeout_ms // 1000))
         except Exception as error:
             raise AppError(502, 'CONNECTOR_QUERY_FAILED', '数据库连接或只读查询失败',
                            {'reason': redact(str(error))[:180]})
+
         try:
             await connection.execute('BEGIN READ ONLY')
             await connection.execute(f'SET LOCAL statement_timeout = {timeout_ms}')
@@ -208,6 +211,32 @@ class ConnectorService:
             await connection.close()
             raise AppError(502, 'CONNECTOR_QUERY_FAILED', '数据库连接或只读查询失败',
                            {'reason': redact(str(error))[:180]})
+        finally:
+            await connection.close()
+
+    async def test_config(self, input, workspace_id):
+        connector_type = input.get('type')
+        if connector_type not in ('sqlite', 'postgresql'):
+            raise AppError(400, 'CONNECTOR_TYPE_INVALID', '仅支持 SQLite 或 PostgreSQL')
+        config = dict(input.get('config') or input)
+        if connector_type == 'sqlite':
+            file = Path(required(config.get('path'), 'path')).resolve()
+            if not file.is_file():
+                raise AppError(400, 'SQLITE_FILE_INVALID', 'SQLite 文件不存在')
+            config['path'] = str(file)
+        else:
+            config['host'] = await validate_database_host(config.get('host'), self.config['allowLocalDatabaseHosts'])
+            config['database'] = required(config.get('database'), 'database')
+            config['port'] = int(config.get('port') or 5432)
+        record = {'type': connector_type, 'config': config, '_credentials': {'username': input.get('username'), 'password': input.get('password')}}
+        async def probe(connection):
+            if connector_type == 'sqlite':
+                return connection['raw'].execute('SELECT sqlite_version()').fetchone()[0]
+            await connection['raw'].execute('SELECT version()')
+            return (await connection['raw'].fetchone())[0]
+        started = time.monotonic()
+        version = await self._with_connection(record, workspace_id, probe)
+        return {'available': True, 'type': connector_type, 'version': version, 'latencyMs': round((time.monotonic()-started)*1000), 'persisted': False}
 
     async def test(self, connector_id, workspace_id=None, request_id=None):
         workspace_id = workspace_id or self.config['localWorkspaceId']
@@ -352,7 +381,8 @@ class ConnectorService:
         keys = self.artifact_store.write_document(workspace_id, artifact_id, {
             'snapshot.json': {'schemaVersion': 1, 'templateId': template_id,
                               'connectorId': template['connector_id'], 'fields': columns, 'rows': rows_dict, 'createdAt': now()}})
-        registered = await self.knowledge.register_upload(dataset['id'], source['id'], f'{name}.csv', csv_text.encode('utf-8'), 'text/csv', workspace_id, request_id)
+        registered = self.knowledge.register_upload(dataset['id'], source['id'], f'{name}.csv', csv_text.encode('utf-8'), 'text/csv', workspace_id, request_id)
+
         snapshot_id = gen_id('dbsnap')
         schema_hash = hash_bytes(json.dumps(columns, ensure_ascii=False, separators=(',', ':')))
         self.db.run('INSERT INTO database_snapshots(id,workspace_id,connector_id,template_id,dataset_id,source_id,row_count,schema_hash,watermark,artifact_key,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',

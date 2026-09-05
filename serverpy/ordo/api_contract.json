@@ -1,0 +1,898 @@
+{
+  "bootstrapSession": {
+    "method": "GET",
+    "path": "/api/v1/session/bootstrap"
+  },
+  "getDashboard": {
+    "method": "GET",
+    "path": "/api/v1/dashboard"
+  },
+  "getHealth": {
+    "method": "GET",
+    "path": "/api/v1/health"
+  },
+  "getVersion": {
+    "method": "GET",
+    "path": "/api/v1/version"
+  },
+  "getDiagnostics": {
+    "method": "GET",
+    "path": "/api/v1/diagnostics"
+  },
+  "getOpenApi": {
+    "method": "GET",
+    "path": "/api/v1/openapi.json"
+  },
+  "search": {
+    "method": "GET",
+    "path": "/api/v1/search"
+  },
+  "getKnowledgeBases": {
+    "method": "GET",
+    "path": "/api/v1/knowledge-bases"
+  },
+  "createKnowledgeBase": {
+    "method": "POST",
+    "path": "/api/v1/knowledge-bases"
+  },
+  "getKnowledgeBase": {
+    "method": "GET",
+    "path": "/api/v1/knowledge-bases/:kbId"
+  },
+  "updateKnowledgeBase": {
+    "method": "PATCH",
+    "path": "/api/v1/knowledge-bases/:kbId"
+  },
+  "deleteKnowledgeBase": {
+    "method": "DELETE",
+    "path": "/api/v1/knowledge-bases/:kbId"
+  },
+  "getKnowledgeBaseImpact": {
+    "method": "GET",
+    "path": "/api/v1/knowledge-bases/:kbId/impact"
+  },
+  "getIndexProfiles": {
+    "method": "GET",
+    "path": "/api/v1/knowledge-bases/:kbId/index-profiles"
+  },
+  "createIndexProfile": {
+    "method": "POST",
+    "path": "/api/v1/knowledge-bases/:kbId/index-profiles"
+  },
+  "getIndexProfile": {
+    "method": "GET",
+    "path": "/api/v1/index-profiles/:profileId"
+  },
+  "updateIndexProfile": {
+    "method": "PATCH",
+    "path": "/api/v1/index-profiles/:profileId"
+  },
+  "deleteIndexProfile": {
+    "method": "DELETE",
+    "path": "/api/v1/index-profiles/:profileId"
+  },
+  "setDefaultIndexProfile": {
+    "method": "POST",
+    "path": "/api/v1/index-profiles/:profileId/default"
+  },
+  "getDatasets": {
+    "method": "GET",
+    "path": "/api/v1/knowledge-bases/:kbId/datasets"
+  },
+  "createDataset": {
+    "method": "POST",
+    "path": "/api/v1/knowledge-bases/:kbId/datasets"
+  },
+  "getDataset": {
+    "method": "GET",
+    "path": "/api/v1/datasets/:datasetId"
+  },
+  "updateDataset": {
+    "method": "PATCH",
+    "path": "/api/v1/datasets/:datasetId"
+  },
+  "deleteDataset": {
+    "method": "DELETE",
+    "path": "/api/v1/datasets/:datasetId"
+  },
+  "getSources": {
+    "method": "GET",
+    "path": "/api/v1/datasets/:datasetId/sources"
+  },
+  "createSource": {
+    "method": "POST",
+    "path": "/api/v1/datasets/:datasetId/sources"
+  },
+  "uploadDocument": {
+    "method": "POST",
+    "path": "/api/v1/datasets/:datasetId/files"
+  },
+  "uploadArchive": {
+    "method": "POST",
+    "path": "/api/v1/datasets/:datasetId/archives"
+  },
+  "directoryPreview": {
+    "method": "POST",
+    "path": "/api/v1/datasets/:datasetId/directory/preview"
+  },
+  "directoryImport": {
+    "method": "POST",
+    "path": "/api/v1/datasets/:datasetId/directory/import"
+  },
+  "getDocuments": {
+    "method": "GET",
+    "path": "/api/v1/datasets/:datasetId/documents"
+  },
+  "getDocument": {
+    "method": "GET",
+    "path": "/api/v1/documents/:documentId"
+  },
+  "deleteDocument": {
+    "method": "DELETE",
+    "path": "/api/v1/documents/:documentId"
+  },
+  "getArtifact": {
+    "method": "GET",
+    "path": "/api/v1/artifacts/:artifactId/:kind"
+  },
+  "getChunks": {
+    "method": "GET",
+    "path": "/api/v1/datasets/:datasetId/chunks"
+  },
+  "getIndexingStats": {
+    "method": "GET",
+    "path": "/api/v1/datasets/:datasetId/indexing/stats"
+  },
+  "getIndexingPipeline": {
+    "method": "GET",
+    "path": "/api/v1/datasets/:datasetId/indexing/pipeline"
+  },
+  "getChapters": {
+    "method": "GET",
+    "path": "/api/v1/datasets/:datasetId/chapters"
+  },
+  "getChunk": {
+    "method": "GET",
+    "path": "/api/v1/chunks/:chunkId"
+  },
+  "getChunkLineage": {
+    "method": "GET",
+    "path": "/api/v1/chunks/:chunkId/lineage"
+  },
+  "editChunk": {
+    "method": "POST",
+    "path": "/api/v1/chunks/:chunkId/revisions"
+  },
+  "vectorizeChunk": {
+    "method": "POST",
+    "path": "/api/v1/chunks/:chunkId/vectorize"
+  },
+  "toggleChunkDisabled": {
+    "method": "POST",
+    "path": "/api/v1/chunks/:chunkId/toggle-disable"
+  },
+  "restoreChunk": {
+    "method": "POST",
+    "path": "/api/v1/chunks/:chunkId/restore"
+  },
+  "getChunkDiff": {
+    "method": "GET",
+    "path": "/api/v1/chunks/:chunkId/diff"
+  },
+  "splitChunk": {
+    "method": "POST",
+    "path": "/api/v1/chunks/:chunkId/split"
+  },
+  "mergeChunks": {
+    "method": "POST",
+    "path": "/api/v1/chunks/merge"
+  },
+  "vectorizePending": {
+    "method": "POST",
+    "path": "/api/v1/datasets/:datasetId/indexing/vectorize-pending"
+  },
+  "rebuildHnswIndex": {
+    "method": "POST",
+    "path": "/api/v1/datasets/:datasetId/indexing/rebuild-hnsw"
+  },
+  "optimizeVectorIndex": {
+    "method": "POST",
+    "path": "/api/v1/datasets/:datasetId/indexing/optimize-index"
+  },
+  "rebuildBm25Index": {
+    "method": "POST",
+    "path": "/api/v1/datasets/:datasetId/indexing/rebuild-bm25"
+  },
+  "setHybridWeights": {
+    "method": "PUT",
+    "path": "/api/v1/datasets/:datasetId/indexing/hybrid-weights"
+  },
+  "getReleases": {
+    "method": "GET",
+    "path": "/api/v1/datasets/:datasetId/releases"
+  },
+  "buildRelease": {
+    "method": "POST",
+    "path": "/api/v1/datasets/:datasetId/releases"
+  },
+  "getRelease": {
+    "method": "GET",
+    "path": "/api/v1/releases/:releaseId"
+  },
+  "activateRelease": {
+    "method": "POST",
+    "path": "/api/v1/releases/:releaseId/activate"
+  },
+  "rollbackRelease": {
+    "method": "POST",
+    "path": "/api/v1/releases/:releaseId/rollback"
+  },
+  "getReleaseImpact": {
+    "method": "GET",
+    "path": "/api/v1/releases/:releaseId/impact"
+  },
+  "searchRelease": {
+    "method": "POST",
+    "path": "/api/v1/releases/:releaseId/search"
+  },
+  "getTasks": {
+    "method": "GET",
+    "path": "/api/v1/tasks"
+  },
+  "getTask": {
+    "method": "GET",
+    "path": "/api/v1/tasks/:taskId"
+  },
+  "cancelTask": {
+    "method": "POST",
+    "path": "/api/v1/tasks/:taskId/cancel"
+  },
+  "pauseTask": {
+    "method": "POST",
+    "path": "/api/v1/tasks/:taskId/pause"
+  },
+  "resumeTask": {
+    "method": "POST",
+    "path": "/api/v1/tasks/:taskId/resume"
+  },
+  "retryTask": {
+    "method": "POST",
+    "path": "/api/v1/tasks/:taskId/retry"
+  },
+  "waitTask": {
+    "method": "GET",
+    "path": "/api/v1/tasks/:taskId/wait"
+  },
+  "getConnectors": {
+    "method": "GET",
+    "path": "/api/v1/connectors"
+  },
+  "createConnector": {
+    "method": "POST",
+    "path": "/api/v1/connectors"
+  },
+  "getConnector": {
+    "method": "GET",
+    "path": "/api/v1/connectors/:connectorId"
+  },
+  "testConnector": {
+    "method": "POST",
+    "path": "/api/v1/connectors/:connectorId/test"
+  },
+  "getConnectorSchema": {
+    "method": "GET",
+    "path": "/api/v1/connectors/:connectorId/schema"
+  },
+  "getQueryTemplates": {
+    "method": "GET",
+    "path": "/api/v1/connectors/:connectorId/templates"
+  },
+  "createQueryTemplate": {
+    "method": "POST",
+    "path": "/api/v1/connectors/:connectorId/templates"
+  },
+  "executeQueryTemplate": {
+    "method": "POST",
+    "path": "/api/v1/query-templates/:templateId/execute"
+  },
+  "snapshotQueryTemplate": {
+    "method": "POST",
+    "path": "/api/v1/query-templates/:templateId/snapshot"
+  },
+  "getOntologies": {
+    "method": "GET",
+    "path": "/api/v1/knowledge-bases/:kbId/ontologies"
+  },
+  "createOntology": {
+    "method": "POST",
+    "path": "/api/v1/knowledge-bases/:kbId/ontologies"
+  },
+  "publishOntology": {
+    "method": "POST",
+    "path": "/api/v1/ontologies/:ontologyId/publish"
+  },
+  "getGraph": {
+    "method": "GET",
+    "path": "/api/v1/datasets/:datasetId/graph"
+  },
+  "getGraphEntities": {
+    "method": "GET",
+    "path": "/api/v1/datasets/:datasetId/graph/entities"
+  },
+  "createGraphEntity": {
+    "method": "POST",
+    "path": "/api/v1/datasets/:datasetId/graph/entities"
+  },
+  "createGraphRelation": {
+    "method": "POST",
+    "path": "/api/v1/datasets/:datasetId/graph/relations"
+  },
+  "getConversations": {
+    "method": "GET",
+    "path": "/api/v1/conversations"
+  },
+  "createConversation": {
+    "method": "POST",
+    "path": "/api/v1/conversations"
+  },
+  "getConversation": {
+    "method": "GET",
+    "path": "/api/v1/conversations/:conversationId"
+  },
+  "deleteConversation": {
+    "method": "DELETE",
+    "path": "/api/v1/conversations/:conversationId"
+  },
+  "sendMessage": {
+    "method": "POST",
+    "path": "/api/v1/conversations/:conversationId/messages"
+  },
+  "sendFeedback": {
+    "method": "POST",
+    "path": "/api/v1/messages/:messageId/feedback"
+  },
+  "openCitation": {
+    "method": "GET",
+    "path": "/api/v1/citations/:citationId"
+  },
+  "getTraces": {
+    "method": "GET",
+    "path": "/api/v1/traces"
+  },
+  "getTrace": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId"
+  },
+  "getTracePipeline": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/pipeline"
+  },
+  "replayTrace": {
+    "method": "POST",
+    "path": "/api/v1/traces/:traceId/replay"
+  },
+  "compareTraces": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/compare/:otherId"
+  },
+  "getTraceRouteStage": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/stages/route"
+  },
+  "getTraceRecallStage": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/stages/recall"
+  },
+  "filterRecall": {
+    "method": "POST",
+    "path": "/api/v1/traces/:traceId/stages/recall/filter"
+  },
+  "retryRecallChannel": {
+    "method": "POST",
+    "path": "/api/v1/traces/:traceId/stages/recall/retry-channel"
+  },
+  "getRecallChunk": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/stages/recall/chunks/:chunkId"
+  },
+  "exportRecall": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/stages/recall/export"
+  },
+  "getTraceFusionStage": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/stages/fusion"
+  },
+  "updateFusionWeights": {
+    "method": "PUT",
+    "path": "/api/v1/traces/:traceId/stages/fusion/weights"
+  },
+  "resetFusionWeights": {
+    "method": "POST",
+    "path": "/api/v1/traces/:traceId/stages/fusion/reset-weights"
+  },
+  "getFusionCalculation": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/stages/fusion/calculation/:candidateId"
+  },
+  "getFusionCandidates": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/stages/fusion/candidates"
+  },
+  "getFusionChunk": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/stages/fusion/chunks/:candidateId"
+  },
+  "getFusionLogs": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/stages/fusion/logs"
+  },
+  "exportFusion": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/stages/fusion/export"
+  },
+  "rerunFusionStage": {
+    "method": "POST",
+    "path": "/api/v1/traces/:traceId/stages/fusion/rerun"
+  },
+  "getTraceRerankStage": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/stages/rerank"
+  },
+  "getRerankChunk": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/stages/rerank/chunks/:chunkId"
+  },
+  "updateRerankConfig": {
+    "method": "PUT",
+    "path": "/api/v1/traces/:traceId/stages/rerank/config"
+  },
+  "compareRerank": {
+    "method": "POST",
+    "path": "/api/v1/traces/:traceId/stages/rerank/compare"
+  },
+  "getRerankLogs": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/stages/rerank/logs"
+  },
+  "getModels": {
+    "method": "GET",
+    "path": "/api/v1/models"
+  },
+  "createModel": {
+    "method": "POST",
+    "path": "/api/v1/models"
+  },
+  "getModel": {
+    "method": "GET",
+    "path": "/api/v1/models/:modelId"
+  },
+  "patchModel": {
+    "method": "PATCH",
+    "path": "/api/v1/models/:modelId"
+  },
+  "deleteModel": {
+    "method": "DELETE",
+    "path": "/api/v1/models/:modelId"
+  },
+  "testModel": {
+    "method": "POST",
+    "path": "/api/v1/models/:modelId/test"
+  },
+  "getSettings": {
+    "method": "GET",
+    "path": "/api/v1/settings"
+  },
+  "updateSetting": {
+    "method": "PUT",
+    "path": "/api/v1/settings/:key"
+  },
+  "getFeatureFlags": {
+    "method": "GET",
+    "path": "/api/v1/feature-flags"
+  },
+  "putFeatureFlag": {
+    "method": "PUT",
+    "path": "/api/v1/feature-flags/:key"
+  },
+  "getWikiPages": {
+    "method": "GET",
+    "path": "/api/v1/wiki"
+  },
+  "createWikiPage": {
+    "method": "POST",
+    "path": "/api/v1/wiki"
+  },
+  "getWikiPage": {
+    "method": "GET",
+    "path": "/api/v1/wiki/:pageId"
+  },
+  "reviseWikiPage": {
+    "method": "POST",
+    "path": "/api/v1/wiki/:pageId"
+  },
+  "wikiFromMessage": {
+    "method": "POST",
+    "path": "/api/v1/wiki/from-message/:messageId"
+  },
+  "getAssistants": {
+    "method": "GET",
+    "path": "/api/v1/assistants"
+  },
+  "createAssistant": {
+    "method": "POST",
+    "path": "/api/v1/assistants"
+  },
+  "getAssistant": {
+    "method": "GET",
+    "path": "/api/v1/assistants/:assistantId"
+  },
+  "updateAssistant": {
+    "method": "PATCH",
+    "path": "/api/v1/assistants/:assistantId"
+  },
+  "publishAssistant": {
+    "method": "POST",
+    "path": "/api/v1/assistants/:assistantId/publish"
+  },
+  "pauseAssistant": {
+    "method": "POST",
+    "path": "/api/v1/assistants/:assistantId/pause"
+  },
+  "getAssistantClients": {
+    "method": "GET",
+    "path": "/api/v1/assistants/:assistantId/clients"
+  },
+  "createAssistantClient": {
+    "method": "POST",
+    "path": "/api/v1/assistants/:assistantId/clients"
+  },
+  "rotateWidgetClient": {
+    "method": "POST",
+    "path": "/api/v1/widget-clients/:clientId/rotate"
+  },
+  "revokeWidgetClient": {
+    "method": "DELETE",
+    "path": "/api/v1/widget-clients/:clientId"
+  },
+  "issueWidgetToken": {
+    "method": "POST",
+    "path": "/api/v1/public/widget/token"
+  },
+  "createWidgetSession": {
+    "method": "POST",
+    "path": "/api/v1/public/widget/sessions"
+  },
+  "sendWidgetMessage": {
+    "method": "POST",
+    "path": "/api/v1/public/widget/sessions/:sessionId/messages"
+  },
+  "requestWidgetHandoff": {
+    "method": "POST",
+    "path": "/api/v1/public/widget/sessions/:sessionId/handoff"
+  },
+  "deleteWidgetSession": {
+    "method": "DELETE",
+    "path": "/api/v1/public/widget/sessions/:sessionId"
+  },
+  "getHandoffs": {
+    "method": "GET",
+    "path": "/api/v1/handoffs"
+  },
+  "updateHandoff": {
+    "method": "PATCH",
+    "path": "/api/v1/handoffs/:handoffId"
+  },
+  "getBackups": {
+    "method": "GET",
+    "path": "/api/v1/backups"
+  },
+  "createBackup": {
+    "method": "POST",
+    "path": "/api/v1/backups"
+  },
+  "restoreBackup": {
+    "method": "POST",
+    "path": "/api/v1/backups/:backupId/restore"
+  },
+  "getAudit": {
+    "method": "GET",
+    "path": "/api/v1/audit"
+  },
+  "verifyAudit": {
+    "method": "GET",
+    "path": "/api/v1/audit/verify"
+  },
+  "getAllDatasets": {
+    "method": "GET",
+    "path": "/api/v1/datasets"
+  },
+  "createUnscopedDataset": {
+    "method": "POST",
+    "path": "/api/v1/datasets"
+  },
+  "getRegisteredSources": {
+    "method": "GET",
+    "path": "/api/v1/sources"
+  },
+  "getSourceTree": {
+    "method": "GET",
+    "path": "/api/v1/sources/tree"
+  },
+  "uploadFile": {
+    "method": "POST",
+    "path": "/api/v1/files"
+  },
+  "assignSourceDataset": {
+    "method": "PATCH",
+    "path": "/api/v1/sources/:sourceId/dataset"
+  },
+  "getRecentSources": {
+    "method": "GET",
+    "path": "/api/v1/sources/recent"
+  },
+  "getSourceActivities": {
+    "method": "GET",
+    "path": "/api/v1/sources/recent-activities"
+  },
+  "getSourceAttentionItems": {
+    "method": "GET",
+    "path": "/api/v1/sources/attention-items"
+  },
+  "testConnectorConfig": {
+    "method": "POST",
+    "path": "/api/v1/connectors/test"
+  },
+  "deleteSource": {
+    "method": "DELETE",
+    "path": "/api/v1/sources/:sourceId"
+  },
+  "getDatasetTree": {
+    "method": "GET",
+    "path": "/api/v1/datasets/:datasetId/tree"
+  },
+  "getDatasetFiles": {
+    "method": "GET",
+    "path": "/api/v1/datasets/:datasetId/files"
+  },
+  "inspectFile": {
+    "method": "GET",
+    "path": "/api/v1/files/:fileId/inspect"
+  },
+  "createDatasetFolder": {
+    "method": "POST",
+    "path": "/api/v1/datasets/:datasetId/folders"
+  },
+  "deleteDatasetFile": {
+    "method": "DELETE",
+    "path": "/api/v1/datasets/:datasetId/files/:fileId"
+  },
+  "batchDeleteDatasetFiles": {
+    "method": "POST",
+    "path": "/api/v1/datasets/:datasetId/files/batch-delete"
+  },
+  "moveDatasetFile": {
+    "method": "PATCH",
+    "path": "/api/v1/datasets/:datasetId/files/:fileId/move"
+  },
+  "batchMoveDatasetFiles": {
+    "method": "POST",
+    "path": "/api/v1/datasets/:datasetId/files/batch-move"
+  },
+  "getParsingProfiles": {
+    "method": "GET",
+    "path": "/api/v1/parsing/profiles"
+  },
+  "startParsing": {
+    "method": "POST",
+    "path": "/api/v1/parsing/start"
+  },
+  "pauseParsing": {
+    "method": "POST",
+    "path": "/api/v1/parsing/pause"
+  },
+  "resumeParsing": {
+    "method": "POST",
+    "path": "/api/v1/parsing/resume"
+  },
+  "retryFailedParsing": {
+    "method": "POST",
+    "path": "/api/v1/parsing/retry-failed"
+  },
+  "getParsingPipelineStats": {
+    "method": "GET",
+    "path": "/api/v1/parsing/pipeline-stats"
+  },
+  "getParsingTasks": {
+    "method": "GET",
+    "path": "/api/v1/parsing/tasks"
+  },
+  "clearPendingParsingTasks": {
+    "method": "POST",
+    "path": "/api/v1/parsing/tasks/clear-pending"
+  },
+  "getParsingSettings": {
+    "method": "GET",
+    "path": "/api/v1/parsing/settings"
+  },
+  "updateParsingSettings": {
+    "method": "PATCH",
+    "path": "/api/v1/parsing/settings"
+  },
+  "exportParsingLogs": {
+    "method": "GET",
+    "path": "/api/v1/parsing/logs/export"
+  },
+  "getDocumentPreviewPages": {
+    "method": "GET",
+    "path": "/api/v1/documents/:documentId/preview/pages"
+  },
+  "getDocumentPage": {
+    "method": "GET",
+    "path": "/api/v1/documents/:documentId/pages/:pageNum"
+  },
+  "getDocumentPageInspect": {
+    "method": "GET",
+    "path": "/api/v1/documents/:documentId/pages/:pageNum/inspect"
+  },
+  "getDocumentPageDiff": {
+    "method": "GET",
+    "path": "/api/v1/documents/:documentId/pages/:pageNum/diff"
+  },
+  "getSystemResources": {
+    "method": "GET",
+    "path": "/api/v1/system/resources"
+  },
+  "getTraceParseStage": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/stages/parse"
+  },
+  "quickParse": {
+    "method": "POST",
+    "path": "/api/v1/traces/quick-parse"
+  },
+  "getConversationContext": {
+    "method": "GET",
+    "path": "/api/v1/conversations/:conversationId/context"
+  },
+  "reparseTrace": {
+    "method": "POST",
+    "path": "/api/v1/traces/:traceId/stages/parse/reparse"
+  },
+  "updateTraceParse": {
+    "method": "PUT",
+    "path": "/api/v1/traces/:traceId/stages/parse"
+  },
+  "getTraceParseLogs": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/stages/parse/logs"
+  },
+  "classifyTraceIntent": {
+    "method": "POST",
+    "path": "/api/v1/traces/:traceId/stages/parse/classify-intent"
+  },
+  "extractTraceEntities": {
+    "method": "POST",
+    "path": "/api/v1/traces/:traceId/stages/parse/extract-entities"
+  },
+  "updateTraceKeywords": {
+    "method": "PATCH",
+    "path": "/api/v1/traces/:traceId/stages/parse/keywords"
+  },
+  "updateNormalizedQuery": {
+    "method": "PATCH",
+    "path": "/api/v1/traces/:traceId/stages/parse/normalized-query"
+  },
+  "rewriteTraceQuery": {
+    "method": "POST",
+    "path": "/api/v1/traces/:traceId/stages/parse/rewrite-query"
+  },
+  "updateRewrittenQuery": {
+    "method": "PATCH",
+    "path": "/api/v1/traces/:traceId/stages/parse/rewritten-query"
+  },
+  "updateTraceFilters": {
+    "method": "PATCH",
+    "path": "/api/v1/traces/:traceId/stages/parse/filters"
+  },
+  "updateTraceRawJson": {
+    "method": "PUT",
+    "path": "/api/v1/traces/:traceId/stages/parse/raw-json"
+  },
+  "getTraceEmbedStage": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/stages/embed"
+  },
+  "recomputeEmbedding": {
+    "method": "POST",
+    "path": "/api/v1/traces/:traceId/stages/embed/recompute"
+  },
+  "getEmbeddingScatter": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/stages/embed/scatter"
+  },
+  "compareEmbeddingModels": {
+    "method": "POST",
+    "path": "/api/v1/traces/:traceId/stages/embed/compare-models"
+  },
+  "getEmbeddingVector": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/stages/embed/vector"
+  },
+  "getEmbeddingLogs": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/stages/embed/logs"
+  },
+  "updateTraceRoute": {
+    "method": "PUT",
+    "path": "/api/v1/traces/:traceId/stages/route"
+  },
+  "simulateTraceRoute": {
+    "method": "POST",
+    "path": "/api/v1/traces/:traceId/stages/route/simulate"
+  },
+  "getTraceRouteIndexes": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/stages/route/indexes"
+  },
+  "getTraceRouteIntent": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/stages/route/intent"
+  },
+  "getTraceRouteLogs": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/stages/route/logs"
+  },
+  "getRecallChannel": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/stages/recall/channels/:channelId"
+  },
+  "getTracePromptStage": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/stages/prompt"
+  },
+  "updateTracePrompt": {
+    "method": "PUT",
+    "path": "/api/v1/traces/:traceId/stages/prompt"
+  },
+  "getPromptVersions": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/stages/prompt/versions"
+  },
+  "maskPrompt": {
+    "method": "POST",
+    "path": "/api/v1/traces/:traceId/stages/prompt/mask"
+  },
+  "scanPromptSensitiveData": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/stages/prompt/sensitive-scan"
+  },
+  "getTraceGenerationStage": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/stages/generation"
+  },
+  "regenerateAnswer": {
+    "method": "POST",
+    "path": "/api/v1/traces/:traceId/stages/generation/regenerate"
+  },
+  "sendTraceFeedback": {
+    "method": "POST",
+    "path": "/api/v1/traces/:traceId/feedback"
+  },
+  "saveTraceQa": {
+    "method": "POST",
+    "path": "/api/v1/traces/:traceId/save-qa"
+  },
+  "getTraceWaterfall": {
+    "method": "GET",
+    "path": "/api/v1/traces/:traceId/waterfall"
+  },
+  "replayAll": {
+    "method": "POST",
+    "path": "/api/v1/traces/:traceId/replay-all"
+  },
+  "deleteAssistant": {
+    "method": "DELETE",
+    "path": "/api/v1/assistants/:assistantId"
+  }
+}

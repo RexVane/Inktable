@@ -14,6 +14,7 @@ class AppError(Exception):
         self.name = 'AppError'
         self.status_code = status_code
         self.code = code
+        self.message = message
         self.details = details
 
 

@@ -245,7 +245,7 @@ class IngestService:
                 manifest.append({'path': file['name'], 'sizeBytes': len(file['buffer']), 'status': 'unsupported'})
             else:
                 try:
-                    registered = await self.knowledge.register_upload(input['datasetId'], input['sourceId'], file['name'],
+                    registered = self.knowledge.register_upload(input['datasetId'], input['sourceId'], file['name'],
                                                                       file['buffer'], None, workspace_id)
                     manifest.append({'path': file['name'], 'sizeBytes': len(file['buffer']),
                                      'status': 'duplicate' if registered['duplicate'] else 'queued',
@@ -276,7 +276,7 @@ class IngestService:
                 try:
                     path = Path(input['root']) / item['relativePath']
                     buffer = path.read_bytes()
-                    registered = await self.knowledge.register_upload(input['datasetId'], input['sourceId'], item['relativePath'],
+                    registered = self.knowledge.register_upload(input['datasetId'], input['sourceId'], item['relativePath'],
                                                                       buffer, None, workspace_id)
                     manifest.append({'path': item['relativePath'], 'status': 'duplicate' if registered['duplicate'] else 'queued',
                                      'documentId': registered['document']['id'], 'taskId': (registered.get('task') or {}).get('id')})

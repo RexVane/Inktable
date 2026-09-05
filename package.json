@@ -4,9 +4,9 @@
   "private": true,
   "description": "Ordo local-first knowledge product",
   "scripts": {
-    "start": "npm --prefix server start",
-    "seed": "npm --prefix server run seed",
-    "test": "npm --prefix server test && npm --prefix web test",
-    "check": "npm --prefix server run check && node --check web/app.js"
+    "start": "python ordo.py serve",
+    "seed": "python ordo.py seed",
+    "test": "python ordo.py test -q && npm --prefix web test",
+    "check": "python ordo.py check && node --check web/api.js && node --check web/app.js"
   }
 }

@@ -38,6 +38,6 @@ def resolve_config(overrides=None):
         'localWorkspaceId': 'ws_local',
         'deploymentProfile': 'web-single-node',
         'appVersion': '1.0.0',
-        'schemaVersion': 4,
+        'schemaVersion': 5,
         'platform': f'{platform.system().lower()}-{platform.machine().lower()}',
     }
